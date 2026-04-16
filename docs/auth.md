@@ -8,16 +8,27 @@ moha supports two authentication methods for the Claude API: **OAuth** (Claude.a
 moha login          # Interactive login (OAuth or API key)
 moha status         # Show current auth status
 moha logout         # Remove saved credentials
-moha -k sk-ant-... "hello"  # One-off API key override
+moha -k sk-ant-...  # One-off API-key override for this session
 ```
+
+CLI flags:
+
+| Flag | Effect |
+|---|---|
+| `-k`, `--key KEY` | API-key override for this session |
+| `-m`, `--model ID` | Model id (e.g. `claude-opus-4-5`) |
+| `-h`, `--help` | Print usage |
+
+Subcommand dispatch lives in `src/main.cpp:1400-1435`.
 
 ## Authentication Methods
 
 ### OAuth (Claude.ai Login)
 
-Uses OAuth 2.0 Authorization Code with PKCE. The token is sent as `Authorization: Bearer <token>` and enables Pro/Max subscription billing.
+Uses OAuth 2.0 Authorization Code with PKCE (S256). The token is sent as
+`Authorization: Bearer <token>` and enables Pro/Max subscription billing.
 
-**OAuth client config** (`src/core/auth.hpp:20-28`):
+**OAuth client config** (`include/moha/auth.hpp:26-34`, `OAuthConfig`):
 
 | Field | Value |
 |---|---|
@@ -27,7 +38,8 @@ Uses OAuth 2.0 Authorization Code with PKCE. The token is sent as `Authorization
 | Callback URL | `https://platform.claude.com/oauth/code/callback` |
 | Scopes | `user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload` |
 
-This is the same OAuth client as Claude Code, which enables token reuse via the `CLAUDE_CODE_OAUTH_TOKEN` environment variable.
+This is the same OAuth client as Claude Code, which enables token reuse via the
+`CLAUDE_CODE_OAUTH_TOKEN` environment variable.
 
 ### API Key
 
@@ -35,18 +47,24 @@ Standard Anthropic API keys (`sk-ant-...`). Sent as `x-api-key` header. Uses API
 
 ## Credential Resolution
 
-On startup, credentials are resolved in this priority order (`src/main.cpp:193-217`):
+On startup, `auth::resolve(cli_api_key)` (`src/auth.cpp:337-378`) walks this
+priority order:
 
-1. **CLI flag** `-k` / `--key` — API key override for a single session
+1. **`-k` / `--key`** — CLI flag, API key for a single session
 2. **`ANTHROPIC_API_KEY`** env var — API key
 3. **`CLAUDE_CODE_OAUTH_TOKEN`** env var — OAuth token (reuse Claude Code's auth)
-4. **Credentials file** — `~/.config/moha/credentials.json` (or `$XDG_CONFIG_HOME/moha/credentials.json`)
+4. **Credentials file** — `~/.config/moha/credentials.json`
+   (or `$XDG_CONFIG_HOME/moha/credentials.json`)
 
-If an OAuth token is expired and a refresh token is available, moha automatically refreshes before starting.
+If a stored OAuth token is expired and a refresh token is present, `resolve()`
+refreshes inline before returning. If the refresh fails (or there is no refresh
+token), it returns an empty `Credentials` and `main()` aborts with a "not
+authenticated" message.
 
 ## Credentials File
 
-**Path:** `~/.config/moha/credentials.json` (permissions: `0600`)
+**Path:** `~/.config/moha/credentials.json` (mode `0600`, set via
+`restrict_perms()` → `chmod` on POSIX; best-effort on Windows).
 
 ```json
 {
@@ -57,19 +75,41 @@ If an OAuth token is expired and a refresh token is available, moha automaticall
 }
 ```
 
-The `method` field is `"oauth"` for OAuth tokens or `"api_key"` for API keys. `expires_at` is Unix milliseconds; `0` means no expiration info. API keys never expire.
+- `method` — `"oauth"` or `"api_key"`
+- `expires_at` — Unix milliseconds; `0` means no expiration info (API keys never expire)
+
+`config_dir()` honours `XDG_CONFIG_HOME`, then falls back to `$HOME/.config`,
+then `$USERPROFILE/.config` on Windows. The directory is created on first read
+(`src/auth.cpp:57-73`).
+
+## TLS / Certificate Trust
+
+`auth::apply_tls_options(curl)` is called on every libcurl handle moha creates
+(`src/auth.cpp:75-88`). It honours:
+
+| Env var | Effect |
+|---|---|
+| `CURL_CA_BUNDLE` | `CURLOPT_CAINFO = $CURL_CA_BUNDLE` |
+| `SSL_CERT_FILE` | Same, used only if `CURL_CA_BUNDLE` is unset |
+| `MOHA_INSECURE=1` | Disables `SSL_VERIFYPEER` and `SSL_VERIFYHOST` (debug only) |
+
+Both `CURL_CA_BUNDLE` and `SSL_CERT_FILE` are commonly set by Nix, certain
+corporate VPN proxies, and tools like `mitmproxy`. `MOHA_INSECURE` should never
+be set against a real Anthropic endpoint.
 
 ## OAuth PKCE Flow
 
-The interactive login (`moha login` → option 1) implements Authorization Code with PKCE (`src/core/auth.cpp:364-441`):
+The interactive login (`moha login` → option 1) implements Authorization Code
+with PKCE (`src/auth.cpp:409-478`, `cmd_login()`):
 
 ```
 ┌─ moha ────────────────────────────────────────────────────┐
 │                                                           │
-│  1. Generate 128-char code_verifier (random charset)      │
-│  2. code_challenge = base64url(SHA-256(code_verifier))    │
-│  3. Build authorize URL with PKCE params                  │
-│  4. Open browser (xdg-open / open) or print URL           │
+│  1. verifier  = random_urlsafe(128)                       │
+│  2. challenge = base64url_no_pad(SHA-256(verifier))       │
+│  3. state     = random_urlsafe(32)                        │
+│  4. Build authorize URL with PKCE params + code=true      │
+│  5. Open browser (open / xdg-open / ShellExecuteA)        │
 │                                                           │
 └───────────────────────────┬───────────────────────────────┘
                             │
@@ -78,30 +118,41 @@ The interactive login (`moha login` → option 1) implements Authorization Code 
 │                                                           │
 │  User logs in at claude.ai/oauth/authorize                │
 │  Redirected to platform.claude.com/oauth/code/callback    │
-│  Page displays authorization code                         │
+│  Page displays "<code>#<state>" for the user to copy      │
 │                                                           │
 └───────────────────────────┬───────────────────────────────┘
-                            │ user pastes code
+                            │ user pastes "<code>#<state>"
                             ▼
 ┌─ moha ────────────────────────────────────────────────────┐
 │                                                           │
-│  5. POST to platform.claude.com/v1/oauth/token:           │
-│     { grant_type: "authorization_code",                   │
-│       code: "<pasted_code>",                              │
-│       client_id: "9d1c250a-...",                          │
-│       code_verifier: "<128-char verifier>",               │
-│       redirect_uri: "https://platform.claude.com/...",    │
-│       state: "<32-char random>" }                         │
+│  6. exchange_code() splits on '#', keeps the code half    │
+│     (src/auth.cpp:299-319)                                │
 │                                                           │
-│  6. Receive: { access_token, refresh_token, expires_in }  │
-│  7. Save to ~/.config/moha/credentials.json (0600)        │
+│  7. POST application/x-www-form-urlencoded to             │
+│     platform.claude.com/v1/oauth/token:                   │
+│       grant_type    = "authorization_code"                │
+│       code          = "<pasted code>"                     │
+│       client_id     = "9d1c250a-..."                      │
+│       redirect_uri  = "https://platform.claude.com/..."   │
+│       code_verifier = "<128-char verifier>"               │
+│       state         = "<32-char random>"                  │
+│                                                           │
+│  8. Receive: { access_token, refresh_token, expires_in }  │
+│  9. expires_at_ms = now_ms() + expires_in * 1000          │
+│ 10. save_credentials() → ~/.config/moha/credentials.json  │
 │                                                           │
 └───────────────────────────────────────────────────────────┘
 ```
 
+The authorize URL is built with `&code=true`, which is what Claude's OAuth
+endpoint uses to render the code on a copy-paste page rather than redirecting
+the browser to localhost.
+
 ## Token Refresh
 
-OAuth tokens expire (typically after 1 hour). moha checks expiration on startup and refreshes automatically if a refresh token is available (`src/core/auth.cpp:321-349`):
+OAuth tokens expire (typically after 1 hour). `auth::resolve()` checks
+`is_expired()` on startup and calls `refresh_access_token()` if a refresh token
+is available (`src/auth.cpp:321-331`):
 
 ```
 POST https://platform.claude.com/v1/oauth/token
@@ -112,128 +163,186 @@ grant_type=refresh_token
 &refresh_token=<saved_refresh_token>
 ```
 
-The response provides a new `access_token` (and optionally a new `refresh_token`), which is saved to disk.
+The response provides a new `access_token` and `expires_in`, and optionally a
+new `refresh_token`. moha persists the refreshed values to disk and continues.
+
+There is no in-flight refresh during a streaming request — if the token expires
+mid-conversation, the server returns 401 and the user must restart moha (which
+will refresh on the next startup).
 
 ## How Auth Headers Are Attached
 
-In `agent_loop::stream_response()` (`src/core/agent_loop.cpp:126-146`):
+The `anthropic::Request` struct carries the resolved auth header
+(`include/moha/anthropic.hpp:21-31`):
 
 ```cpp
-if (config_.auth == auth_style::bearer) {
-    // OAuth: Authorization header
-    headers.emplace_back("Authorization", config_.api_key);
-    // Bearer auth enables the oauth beta
-    headers.emplace_back("anthropic-beta",
-        "oauth-2025-04-20,prompt-caching-2024-07-31,"
+struct Request {
+    std::string model;
+    std::string system_prompt;
+    std::vector<Message> messages;
+    std::vector<ToolSpec> tools;
+    int max_tokens = 8192;
+
+    // Filled by caller from auth::resolve().
+    std::string auth_header;             // "Bearer <t>" or raw API key
+    auth::Style auth_style = auth::Style::ApiKey;
+};
+```
+
+`main.cpp:142-143` populates these from the resolved credentials:
+
+```cpp
+req.auth_header = g_creds.header_value();   // "Bearer <t>" for OAuth, raw key otherwise
+req.auth_style  = g_creds.style();          // Style::Bearer or Style::ApiKey
+```
+
+`anthropic::run_stream_sync()` then chooses the header name and beta flags
+(`src/anthropic.cpp:203, 240-253`):
+
+```cpp
+const bool is_oauth = (req.auth_style == auth::Style::Bearer);
+
+std::string auth_hdr = is_oauth
+    ? (std::string("Authorization: ") + req.auth_header)
+    : (std::string("x-api-key: ") + req.auth_header);
+headers = curl_slist_append(headers, auth_hdr.c_str());
+headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
+if (is_oauth) {
+    headers = curl_slist_append(headers,
+        "anthropic-beta: oauth-2025-04-20,prompt-caching-2024-07-31,"
         "context-management-2025-06-27,compact-2026-01-12");
 } else {
-    // API key: x-api-key header
-    headers.emplace_back("x-api-key", config_.api_key);
-    headers.emplace_back("anthropic-beta",
-        "prompt-caching-2024-07-31,"
+    headers = curl_slist_append(headers,
+        "anthropic-beta: prompt-caching-2024-07-31,"
         "context-management-2025-06-27,compact-2026-01-12");
 }
 ```
 
-Note: `config_.api_key` already contains `"Bearer <token>"` for OAuth (set by `credentials::header_value()` → `main.cpp:257`), or the raw key for API key auth.
+The OAuth path adds `oauth-2025-04-20` to the `anthropic-beta` list — the API
+key path omits it.
 
 ### OAuth System Prompt Billing Header
 
-When using OAuth, the system prompt includes a billing tracking block (`agent_loop.cpp:23-37`):
+When `is_oauth`, `run_stream_sync()` rewrites `body["system"]` from a plain
+string into a two-element text-block array, prepending a billing-tracking block
+(`src/anthropic.cpp:210-227`):
 
 ```json
 [
-  { "type": "text", "text": "x-anthropic-billing-header: cc_version=0.1.0; cc_entrypoint=cli; cch=00000;" },
-  { "type": "text", "text": "<actual system prompt>", "cache_control": { "type": "ephemeral" } }
+  { "type": "text",
+    "text": "x-anthropic-billing-header: cc_version=0.1.0; cc_entrypoint=cli; cch=00000;" },
+  { "type": "text",
+    "text": "<actual system prompt>",
+    "cache_control": { "type": "ephemeral" } }
 ]
 ```
 
-This enables Pro/Max subscription billing for the request.
+This is **not** an HTTP header — it's a content block in the request body.
+Despite the `x-anthropic-billing-header:` prefix, the API recognises the block
+itself and routes the request to Pro/Max subscription billing.
+
+API-key requests skip this entirely: `body["system"] = req.system_prompt;` (a plain string).
 
 ## Error Handling
 
-Authentication failures (HTTP 401/403) are **not retried**. The user must re-login (`agent_loop.cpp:253-256`):
+Authentication failures (HTTP 401/403) bubble up as a `StreamError` from
+`run_stream_sync()` and surface in the TUI. The user must run `moha login`
+again (or fix the env var). They are **not** automatically retried — there's no
+recovery moha can do for a bad/revoked token mid-stream.
 
-```
-Authentication failed (HTTP 401). Run 'moha login' to re-authenticate, or check your API key.
-```
-
-Rate limits (429) and overload (529) are retried with exponential backoff (1s, 2s, 4s, 8s, max 30s, up to 4 retries).
+Network errors and overload (5xx) within a single request are surfaced as
+`StreamError` events to the UI loop, which is responsible for any retry policy.
 
 ## Data Structures
 
-### `credentials` (`src/core/auth.hpp:32-41`)
+### `Credentials` (`include/moha/auth.hpp:13-23`)
 
 ```cpp
-struct credentials {
-    auth_method method = auth_method::none;  // none | api_key | oauth_token
+enum class Method { None, ApiKey, OAuth };
+enum class Style  { ApiKey, Bearer };
+
+struct Credentials {
+    Method method = Method::None;
     std::string access_token;
     std::string refresh_token;
-    int64_t expires_at = 0;  // unix milliseconds
+    int64_t expires_at_ms = 0;          // 0 = no expiration info (api_key)
 
-    bool is_valid() const;    // access_token not empty
-    bool is_expired() const;  // only for oauth; checks now_ms() >= expires_at
-    std::string header_value() const;  // "Bearer <token>" or raw key
+    bool is_valid() const;              // access_token not empty
+    bool is_expired() const;            // OAuth-only; checks now_ms() >= expires_at_ms
+    std::string header_value() const;   // "Bearer <t>" for OAuth, raw key otherwise
+    Style style() const;                // OAuth → Bearer, ApiKey → ApiKey
 };
 ```
 
-### `agent_config` (`src/core/agent_loop.hpp:32-41`)
+JSON disk format uses `"expires_at"` as the key for the `expires_at_ms` field
+(historical naming — value is still milliseconds).
+
+### `OAuthConfig` (`include/moha/auth.hpp:26-34`)
+
+A `struct` of `static constexpr const char*` constants for the OAuth client.
+Not instantiated — accessed as `OAuthConfig::client_id`, etc.
+
+### `TokenResponse` (`include/moha/auth.hpp:56-62`)
+
+Result of `exchange_code()` and `refresh_access_token()`:
 
 ```cpp
-struct agent_config {
-    std::string api_key;       // raw key or "Bearer <token>"
-    auth_style auth = auth_style::api_key;  // api_key | bearer
-    std::string api_url = "https://api.anthropic.com/v1/messages";
-    std::string model = "claude-sonnet-4-20250514";
-    std::string system_prompt;
-    int max_tokens = 16384;
-    profile prof = profile::write;
+struct TokenResponse {
+    bool ok = false;
+    std::string error;
+    std::string access_token;
+    std::string refresh_token;
+    int64_t expires_in_s = 0;
 };
 ```
 
 ## Full Flow: Startup to Authenticated API Call
 
 ```
-main()
-  ├─ parse_args()             — extract --key, --model, subcommand
+main()                                                    (src/main.cpp:1400)
+  ├─ parse args                                           — -k, -m, subcommand
   ├─ subcommand?
-  │   ├─ "login"  → cmd_login()  → login_interactive()
-  │   ├─ "logout" → cmd_logout() → clear_credentials()
-  │   └─ "status" → cmd_status() → display token info
+  │   ├─ "login"   → auth::cmd_login()                   (src/auth.cpp:409)
+  │   ├─ "logout"  → auth::cmd_logout()                  (src/auth.cpp:480)
+  │   ├─ "status"  → auth::cmd_status()                  (src/auth.cpp:493)
+  │   └─ "help"    → print_usage()
   │
-  ├─ resolve_credentials()
-  │   ├─ --key flag?              → use as API key
-  │   ├─ ANTHROPIC_API_KEY?       → use as API key
-  │   ├─ CLAUDE_CODE_OAUTH_TOKEN? → use as OAuth token
-  │   ├─ credentials.json?        → load from disk
-  │   │   └─ expired + has refresh_token? → refresh_access_token()
-  │   └─ nothing found            → error, prompt "moha login"
+  ├─ g_creds = auth::resolve(cli_key)                    (src/auth.cpp:337)
+  │   ├─ -k flag?                  → ApiKey
+  │   ├─ ANTHROPIC_API_KEY?        → ApiKey
+  │   ├─ CLAUDE_CODE_OAUTH_TOKEN?  → OAuth (no refresh token)
+  │   ├─ credentials.json?         → load_credentials()
+  │   │   └─ OAuth + expired + refresh_token
+  │   │       → refresh_access_token() + save_credentials()
+  │   └─ none / refresh failed     → Credentials{} (invalid)
   │
-  ├─ Build agent_config
-  │   ├─ OAuth:   config.api_key = "Bearer <token>", auth = bearer
-  │   └─ API key: config.api_key = "<key>",          auth = api_key
+  ├─ if !g_creds.is_valid() → print "not authenticated" + exit 1
   │
-  ├─ SharedState { agent_loop(config, tools), ... }
+  ├─ persistence::load_settings(), apply --model override
   │
-  └─ maya::run<App>()  — TUI event loop
-       │
-       └─ user submits message → run_agent_cmd()
-            │
-            └─ agent.run_turn(message)
-                 │
-                 └─ stream_response()
-                      ├─ Build headers based on auth style
-                      ├─ http_.post_streaming("api.anthropic.com/v1/messages", ...)
-                      └─ Stream SSE events back to UI
+  └─ maya::run<MohaApp>()                                 — TUI event loop
+        │
+        └─ user submits message
+              │
+              └─ build anthropic::Request:
+                  req.auth_header = g_creds.header_value()
+                  req.auth_style  = g_creds.style()
+                    │
+                    └─ anthropic::run_stream_sync(req, sink)
+                          ├─ is_oauth = (auth_style == Style::Bearer)
+                          ├─ if is_oauth: prepend billing-header text block
+                          ├─ Authorization: Bearer ...   (or)  x-api-key: ...
+                          ├─ anthropic-beta: + oauth-2025-04-20 if OAuth
+                          ├─ POST https://api.anthropic.com/v1/messages
+                          └─ stream SSE events back through sink
 ```
 
 ## File Index
 
 | File | Purpose |
 |---|---|
-| `src/core/auth.hpp` | Types: `auth_method`, `credentials`, `oauth_config` |
-| `src/core/auth.cpp` | All auth logic: load/save/clear creds, PKCE, token exchange, refresh, login flows, subcommands |
-| `src/core/agent_loop.hpp` | `auth_style` enum, `agent_config` struct |
-| `src/core/agent_loop.cpp` | Attaches auth headers, builds system prompt with billing header |
-| `src/main.cpp` | CLI arg parsing, credential resolution, wiring config to agent |
-| `src/net/http_client.cpp` | Raw HTTP/TLS client used for API calls and token exchange |
+| `include/moha/auth.hpp` | Public types: `Method`, `Style`, `Credentials`, `OAuthConfig`, `TokenResponse`; function declarations |
+| `src/auth.cpp` | All auth logic: paths, TLS opts, load/save/clear, PKCE helpers, token exchange/refresh, `resolve()`, login/logout/status subcommands |
+| `include/moha/anthropic.hpp` | `Request` struct (carries `auth_header` + `auth_style`), `run_stream_sync()` |
+| `src/anthropic.cpp` | Attaches auth headers, rewrites system prompt with billing block for OAuth |
+| `src/main.cpp` | CLI arg parsing, subcommand dispatch, calls `auth::resolve()`, wires `Credentials` into each `Request` |
