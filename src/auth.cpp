@@ -224,29 +224,6 @@ static std::string form_urlencode(const std::vector<std::pair<std::string,std::s
     return out;
 }
 
-HttpResult http_post_json(const std::string& url, const json& body_json) {
-    HttpResult r;
-    CURL* curl = curl_easy_init();
-    if (!curl) { r.rc = CURLE_FAILED_INIT; return r; }
-    std::string body = body_json.dump();
-    curl_slist* hdr = nullptr;
-    hdr = curl_slist_append(hdr, "content-type: application/json");
-    hdr = curl_slist_append(hdr, "accept: application/json");
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body.size());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_collect_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r.body);
-    apply_tls_options(curl);
-    r.rc = curl_easy_perform(curl);
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.http);
-    curl_slist_free_all(hdr);
-    curl_easy_cleanup(curl);
-    return r;
-}
-
 HttpResult http_post_form(const std::string& url,
     const std::vector<std::pair<std::string,std::string>>& fields) {
     HttpResult r;
