@@ -285,6 +285,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             return {std::move(m), cmd::fetch_models()};
         },
         [&](ModelsLoaded& e) -> Step {
+            if (e.models.empty()) return done(std::move(m));
             auto settings = deps().load_settings();
             m.available_models.clear();
             for (auto& mi : e.models) {

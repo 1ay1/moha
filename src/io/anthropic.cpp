@@ -319,6 +319,8 @@ std::vector<ModelInfo> list_models(const std::string& auth_header,
         : (std::string("x-api-key: ") + auth_header);
     headers = curl_slist_append(headers, auth_hdr.c_str());
     headers = curl_slist_append(headers, "anthropic-version: 2023-06-01");
+    if (is_oauth)
+        headers = curl_slist_append(headers, "anthropic-beta: oauth-2025-04-20");
     headers = curl_slist_append(headers, "content-type: application/json");
 
     std::string response;
