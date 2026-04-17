@@ -180,6 +180,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 tc.id   = e.id;
                 tc.name = e.name;
                 tc.status = ToolUse::Status::Pending;
+                tc.args = json::object();
                 m.current.messages.back().tool_calls.push_back(std::move(tc));
             }
             return done(std::move(m));

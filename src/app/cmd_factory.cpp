@@ -30,9 +30,17 @@ Cmd<Msg> launch_stream(const Model& m) {
     req.auth_style  = deps().auth_style;
 
     return Cmd<Msg>::task([req = std::move(req)](std::function<void(Msg)> dispatch) mutable {
-        deps().stream(std::move(req), [dispatch = std::move(dispatch)](Msg m) {
-            dispatch(std::move(m));
-        });
+        try {
+            deps().stream(std::move(req), [dispatch](Msg m) {
+                dispatch(std::move(m));
+            });
+        } catch (const std::exception& e) {
+            // The stream backend threw before producing a terminal event —
+            // surface it as StreamError so the UI doesn't hang on the spinner.
+            dispatch(StreamError{std::string{"stream backend: "} + e.what()});
+        } catch (...) {
+            dispatch(StreamError{"stream backend: unknown exception"});
+        }
     });
 }
 
@@ -42,11 +50,20 @@ Cmd<Msg> run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args) {
          name = std::move(tool_name),
          args = std::move(args)]
         (std::function<void(Msg)> dispatch) {
-            auto result = tool::DynamicDispatch::execute(name.value, args);
-            if (result) {
-                dispatch(ToolExecOutput{id, std::move(result->text), false});
-            } else {
-                dispatch(ToolExecOutput{id, std::move(result.error().message), true});
+            try {
+                auto result = tool::DynamicDispatch::execute(name.value, args);
+                if (result) {
+                    dispatch(ToolExecOutput{id, std::move(result->text), false});
+                } else {
+                    dispatch(ToolExecOutput{id, std::move(result.error().message), true});
+                }
+            } catch (const std::exception& e) {
+                // DynamicDispatch already catches tool exceptions, but guard
+                // against anything in the dispatch infrastructure itself so
+                // the tool never gets stuck in Running with no terminal Msg.
+                dispatch(ToolExecOutput{id, std::string{"dispatch error: "} + e.what(), true});
+            } catch (...) {
+                dispatch(ToolExecOutput{id, "dispatch error: unknown exception", true});
             }
         });
 }

@@ -31,16 +31,33 @@ std::string read_file(const fs::path& p) {
 }
 
 void write_file(const fs::path& p, const std::string& content) {
-    fs::create_directories(p.parent_path());
+    // parent_path() is empty for a bare filename ("foo.py"); calling
+    // create_directories("") throws filesystem_error on POSIX, which the
+    // tool dispatcher then surfaces as a Failed write to the model.
+    auto parent = p.parent_path();
+    if (!parent.empty()) fs::create_directories(parent);
     std::ofstream ofs(p, std::ios::binary);
     ofs.write(content.data(), (std::streamsize)content.size());
 }
 
-std::string run_command(const std::string& cmd, int max_chars = 30000) {
-    std::string wrapped = cmd + " 2>&1";
+std::string run_command(const std::string& cmd, int max_chars = 30000,
+                        int timeout_secs = 120) {
+    // Enforce a wall-clock timeout via GNU coreutils `timeout`. Without this,
+    // a hung command (network wait, infinite loop, REPL with no stdin close)
+    // blocks the worker thread forever and the UI hangs on the spinner.
 #ifdef _WIN32
+    // Windows lacks a portable equivalent — fall through with no timeout.
+    std::string wrapped = cmd + " 2>&1";
     FILE* pipe = _popen(wrapped.c_str(), "r");
+    (void)timeout_secs;
 #else
+    std::string wrapped = "timeout --kill-after=2s " + std::to_string(timeout_secs)
+                        + "s sh -c " + [&]{
+        std::string q = "'";
+        for (char c : cmd) { if (c == '\'') q += "'\\''"; else q += c; }
+        q += "'";
+        return q;
+    }() + " 2>&1";
     FILE* pipe = popen(wrapped.c_str(), "r");
 #endif
     if (!pipe) return "[popen failed]";
@@ -58,7 +75,11 @@ std::string run_command(const std::string& cmd, int max_chars = 30000) {
     int rc = pclose(pipe);
 #endif
     std::string output = out.str();
-    if (rc != 0) output += "\n[exit code " + std::to_string(rc) + "]";
+    // GNU `timeout` exits 124 on timeout, 137 on KILL after grace.
+    if (rc == 124 * 256 || rc == 137 * 256)
+        output += "\n[timed out after " + std::to_string(timeout_secs) + "s]";
+    else if (rc != 0)
+        output += "\n[exit code " + std::to_string(rc) + "]";
     return output;
 }
 
@@ -200,7 +221,9 @@ ToolDef tool_bash() {
     ToolDef t;
     t.name = ToolName{std::string{"bash"}};
     t.description = "Run a shell command and return its output. "
-                    "Output is truncated at 30k chars. Use for builds, tests, git, etc.";
+                    "Output is truncated at 30k chars. Use for builds, tests, git, etc. "
+                    "Do NOT use for file IO — use the write/edit/read tools instead "
+                    "(no cat/echo/sed/heredoc to create or modify files).";
     t.input_schema = json{
         {"type","object"},
         {"required", {"command"}},
@@ -214,7 +237,9 @@ ToolDef tool_bash() {
         std::string cmd = args.value("command", "");
         if (cmd.empty())
             return std::unexpected(ToolError{"command required"});
-        auto output = run_command(cmd);
+        int timeout = args.value("timeout", 120);
+        if (timeout <= 0 || timeout > 600) timeout = 120;
+        auto output = run_command(cmd, 30000, timeout);
         return ToolOutput{std::move(output), std::nullopt};
     };
     return t;

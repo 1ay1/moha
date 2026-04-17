@@ -32,6 +32,8 @@ struct StreamCtx {
     std::string current_tool_id;
     std::string current_tool_name;
     bool in_tool_use = false;
+    // Terminal-event tracking — exactly one of finished/errored must fire.
+    bool terminated = false;
 };
 
 void dispatch_event(StreamCtx& ctx, const std::string& name, const std::string& data) {
@@ -75,9 +77,11 @@ void dispatch_event(StreamCtx& ctx, const std::string& name, const std::string& 
         }
     } else if (name == "message_stop") {
         ctx.sink(StreamFinished{});
+        ctx.terminated = true;
     } else if (name == "error") {
         auto err = j.value("error", json::object());
         ctx.sink(StreamError{err.value("message", "unknown error")});
+        ctx.terminated = true;
     }
 }
 
@@ -135,11 +139,15 @@ json build_messages(const Thread& t) {
         }
         for (const auto& tc : m.tool_calls) {
             if (m.role == Role::Assistant) {
+                // Anthropic requires tool_use.input to be an object — coerce
+                // null/array/scalar (e.g. from a tool with no args, where no
+                // input_json_delta arrived) into an empty object.
+                json input = tc.args.is_object() ? tc.args : json::object();
                 content.push_back({
                     {"type", "tool_use"},
                     {"id", tc.id.value},
                     {"name", tc.name.value},
-                    {"input", tc.args},
+                    {"input", std::move(input)},
                 });
             }
         }
@@ -178,6 +186,8 @@ std::string default_system_prompt() {
         << "You work in the user's current directory. "
         << "Use the provided tools to read, edit, and run shell commands when needed. "
         << "Be concise. When proposing file edits, prefer the edit tool over write. "
+        << "Use the write tool to create files and edit to modify them — never shell out "
+        << "(cat/echo/sed/heredoc) for file IO; one tool call per file change. "
         << "Before running destructive shell commands, explain what you're doing.\n";
     return oss.str();
 }
@@ -199,6 +209,14 @@ void run_stream_sync(Request req, EventSink sink) {
     }
     CURL* curl = curl_easy_init();
     if (!curl) { sink(StreamError{"curl_easy_init failed"}); return; }
+
+    // Emit StreamFinished as a fallback if the SSE stream never produced one
+    // (e.g. proxy buffering, server cutoff). UI must not be left spinning.
+    auto emit_terminal = [&](StreamCtx& ctx, std::optional<std::string> err) {
+        if (ctx.terminated) return;
+        if (err) sink(StreamError{*err}); else sink(StreamFinished{});
+        ctx.terminated = true;
+    };
 
     const bool is_oauth = (req.auth_style == auth::Style::Bearer);
 
@@ -234,7 +252,7 @@ void run_stream_sync(Request req, EventSink sink) {
     }
     std::string body_str = body.dump();
 
-    StreamCtx ctx{sink, nullptr, {}, {}, {}, false};
+    StreamCtx ctx{sink, nullptr, {}, {}, {}, false, false};
 
     struct curl_slist* headers = nullptr;
     std::string auth_hdr = is_oauth
@@ -273,7 +291,7 @@ void run_stream_sync(Request req, EventSink sink) {
     long http = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http);
     if (rc != CURLE_OK && rc != CURLE_WRITE_ERROR) {
-        sink(StreamError{std::string("http: ") + curl_easy_strerror(rc)});
+        emit_terminal(ctx, std::string("http: ") + curl_easy_strerror(rc));
     } else if (http >= 400) {
         std::string body_err = ctx.sse.buf;
         std::string msg = std::string("HTTP ") + std::to_string(http);
@@ -290,7 +308,11 @@ void run_stream_sync(Request req, EventSink sink) {
         }
         if (http == 401 || http == 403)
             msg += "  (run 'moha login' to re-authenticate)";
-        sink(StreamError{msg});
+        emit_terminal(ctx, std::move(msg));
+    } else {
+        // 2xx and the SSE parser may or may not have produced message_stop.
+        // Guarantee one terminal event so the UI can finalize the turn.
+        emit_terminal(ctx, std::nullopt);
     }
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);

@@ -42,6 +42,9 @@ if(NOT TARGET maya::maya)
     add_library(maya::maya ALIAS maya)
 endif()
 
+# Treat maya's headers as system so its warnings don't surface in moha builds.
+set_target_properties(maya PROPERTIES SYSTEM TRUE)
+
 find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -93,4 +96,10 @@ if(MSVC)
     target_compile_options(moha PRIVATE /W4 /utf-8)
 else()
     target_compile_options(moha PRIVATE -Wall -Wextra -Wpedantic -Wno-deprecated-declarations)
+    # GCC -Wmaybe-uninitialized produces false positives on std::variant moves
+    # of designated-initialized aggregates (maya's Element{TextElement{...}} pattern).
+    # The warnings escape -isystem because they fire during late optimization.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(moha PRIVATE -Wno-maybe-uninitialized)
+    endif()
 endif()
