@@ -110,11 +110,12 @@ S-Tab      cycle profile          ^C     quit
 
 ```
                  ┌──────────────┐
-   keystrokes ──▶│   maya       │── ANSI ──▶ terminal
+  keystrokes ──> │   maya       │── ANSI ──▶ terminal
                  │   (TUI)      │
                  └──────┬───────┘
                         │ Element tree
-                 ┌──────▼───────┐
+                        ▼  
+                 ┌──────────────┐
                  │   moha       │── view(Model)
                  │   view/      │
                  ├──────────────┤
@@ -123,7 +124,8 @@ S-Tab      cycle profile          ^C     quit
                  │   io/        │── HTTP, SSE, filesystem
                  └──────┬───────┘
                         │ JSON over HTTPS
-                 ┌──────▼───────┐
+                        ▼  
+                 ┌──────────────┐
                  │  Anthropic   │
                  └──────────────┘
 ```
