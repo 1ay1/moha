@@ -478,8 +478,19 @@ Element render_message(const Message& msg, int turn_num, const Model& m) {
 
 Element thread_panel(const Model& m) {
     std::vector<Element> rows;
+    // Virtualize: older messages live in the terminal's native scrollback
+    // (their rows were committed via maya::Cmd::commit_scrollback).  We
+    // preserve absolute turn numbering by counting finalized assistant
+    // messages *before* the view window too, so a user seeing "Turn 42"
+    // after scrolling back stays consistent.
+    const std::size_t total = m.current.messages.size();
+    const std::size_t start = static_cast<std::size_t>(
+        std::clamp(m.thread_view_start, 0, static_cast<int>(total)));
     int turn = 1;
-    for (const auto& msg : m.current.messages) {
+    for (std::size_t i = 0; i < start; ++i)
+        if (m.current.messages[i].role == Role::Assistant) ++turn;
+    for (std::size_t i = start; i < total; ++i) {
+        const auto& msg = m.current.messages[i];
         rows.push_back(render_message(msg, turn, m));
         if (msg.role == Role::Assistant) ++turn;
     }

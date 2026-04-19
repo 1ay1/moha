@@ -292,6 +292,15 @@ struct Model {
     DiffReviewState     diff_review;
     TodoState           todo;
     int                 thread_scroll = 0;
+
+    // ── View virtualization ──────────────────────────────────────────
+    // Index of the first message the view should render.  Messages before
+    // this point are considered committed to the terminal's native
+    // scrollback (maya's InlineFrameState::commit_prefix was called for
+    // their rows).  Advancing this counter + returning Cmd::commit_scrollback
+    // keeps the Yoga/paint cost bounded to the window, not the full
+    // transcript.
+    int thread_view_start = 0;
 };
 
 } // namespace moha

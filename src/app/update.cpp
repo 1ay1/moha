@@ -21,6 +21,52 @@ namespace {
 using Step = std::pair<Model, Cmd<Msg>>;
 inline Step done(Model m) { return {std::move(m), Cmd<Msg>::none()}; }
 
+// ── View virtualization ───────────────────────────────────────────────────
+// When the transcript grows past kWindow messages, slice kChunk of the oldest
+// into terminal scrollback so maya's Yoga/paint cost stays O(window).  We
+// estimate each sliced message's row height so Cmd::commit_scrollback can
+// shift maya's prev-frame buffer by the right amount; an imperfect estimate
+// costs at most one visible refresh of the window on the slice frame.
+
+inline constexpr int kViewWindow = 60;
+inline constexpr int kSliceChunk = 20;
+inline constexpr int kEstWidth   = 100;  // no terminal width in Model yet
+
+int estimate_message_rows(const Message& msg) {
+    int rows = 3; // turn divider + spacing around body
+    if (!msg.text.empty()) {
+        const int w = std::max(1, kEstWidth - 4);
+        rows += static_cast<int>(msg.text.size()) / w + 1;
+        int nl = 0;
+        for (char c : msg.text) if (c == '\n') ++nl;
+        rows += nl;
+    }
+    for (const auto& tc : msg.tool_calls) {
+        rows += 4;
+        if (!tc.output.empty()) {
+            int nl = 0;
+            for (char c : tc.output) if (c == '\n') ++nl;
+            rows += std::min(nl, 10);
+        }
+    }
+    return rows;
+}
+
+Cmd<Msg> maybe_virtualize(Model& m) {
+    const int total = static_cast<int>(m.current.messages.size());
+    const int visible = total - m.thread_view_start;
+    // Only slice in discrete chunks — a one-per-turn slice would refresh
+    // the visible area every turn, whereas chunking it causes one refresh
+    // every kSliceChunk turns.
+    if (visible <= kViewWindow + kSliceChunk) return Cmd<Msg>::none();
+
+    int committed_rows = 0;
+    for (int i = m.thread_view_start; i < m.thread_view_start + kSliceChunk; ++i)
+        committed_rows += estimate_message_rows(m.current.messages[i]);
+    m.thread_view_start += kSliceChunk;
+    return Cmd<Msg>::commit_scrollback(committed_rows);
+}
+
 // ── Composer ──────────────────────────────────────────────────────────────
 
 Step submit_message(Model m) {
@@ -47,7 +93,11 @@ Step submit_message(Model m) {
     m.current.updated_at = std::chrono::system_clock::now();
     m.stream.phase = Phase::Streaming;
     m.stream.active = true;
-    auto cmd = cmd::launch_stream(m);
+    auto virt = maybe_virtualize(m);
+    auto launch = cmd::launch_stream(m);
+    auto cmd = virt.is_none()
+        ? std::move(launch)
+        : Cmd<Msg>::batch(std::vector<Cmd<Msg>>{std::move(virt), std::move(launch)});
     return {std::move(m), std::move(cmd)};
 }
 
@@ -390,6 +440,12 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
         [&](ThreadListSelect) -> Step {
             if (!m.threads.empty()) m.current = m.threads[m.thread_list.index];
             m.thread_list.open = false;
+            // A freshly-loaded thread has no prev-frame correspondence in
+            // the inline buffer — render everything that fits in the
+            // window; older messages just won't appear in scrollback, which
+            // is expected on a cold load.
+            int total = static_cast<int>(m.current.messages.size());
+            m.thread_view_start = std::max(0, total - kViewWindow);
             return done(std::move(m));
         },
         [&](NewThread) -> Step {
@@ -402,6 +458,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             m.composer.text.clear();
             m.composer.cursor = 0;
             m.stream.phase = Phase::Idle;
+            m.thread_view_start = 0;
             return done(std::move(m));
         },
 
