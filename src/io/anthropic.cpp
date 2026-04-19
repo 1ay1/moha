@@ -1,6 +1,7 @@
 #include "moha/io/anthropic.hpp"
 
 #include <cstdlib>
+#include <filesystem>
 #include <sstream>
 #include <vector>
 
@@ -199,6 +200,34 @@ json build_messages(const Thread& t) {
 }
 
 std::string default_system_prompt() {
+    // Platform / shell hints so the model generates the right command syntax.
+    // Without these, the bash tool gets POSIX-only commands (uname, sw_vers,
+    // cat /etc/os-release) on Windows, which fail under cmd.exe.
+#if defined(_WIN32)
+    constexpr const char* os_name  = "Windows";
+    constexpr const char* shell    = "cmd.exe (Windows Command Prompt)";
+    constexpr const char* shell_hint =
+        "Prefer native Windows equivalents: `dir` / `where` / `systeminfo` / "
+        "`type` / `findstr` / `powershell -c`. Do NOT use POSIX-only tools "
+        "like `uname`, `cat /etc/os-release`, `sw_vers`, `ls`, `grep`, `sed`, "
+        "`awk`, or shell heredocs (`<<EOF`) — they will fail. "
+        "Commands chain with `&&` and `||` under cmd.exe, but path separators "
+        "are backslashes and paths with spaces must be quoted.";
+#elif defined(__APPLE__)
+    constexpr const char* os_name  = "macOS (Darwin)";
+    constexpr const char* shell    = "sh";
+    constexpr const char* shell_hint =
+        "Use POSIX tools; `sw_vers` gives macOS version, `uname -a` gives kernel.";
+#else
+    constexpr const char* os_name  = "Linux";
+    constexpr const char* shell    = "sh";
+    constexpr const char* shell_hint =
+        "Use POSIX tools; `/etc/os-release` gives distro info, `uname -a` gives kernel.";
+#endif
+
+    std::string cwd;
+    try { cwd = std::filesystem::current_path().string(); } catch (...) {}
+
     std::ostringstream oss;
     oss << "You are Moha, a terminal coding assistant based on Claude. "
         << "You work in the user's current directory. "
@@ -206,7 +235,15 @@ std::string default_system_prompt() {
         << "Be concise. When proposing file edits, prefer the edit tool over write. "
         << "Use the write tool to create files and edit to modify them — never shell out "
         << "(cat/echo/sed/heredoc) for file IO; one tool call per file change. "
-        << "Before running destructive shell commands, explain what you're doing.\n";
+        << "Before running destructive shell commands, explain what you're doing.\n\n"
+        << "<environment>\n"
+        << "  os: " << os_name << "\n"
+        << "  shell: " << shell << "\n";
+    if (!cwd.empty()) oss << "  cwd: " << cwd << "\n";
+    oss << "</environment>\n\n"
+        << "<shell-notes>\n"
+        << shell_hint << "\n"
+        << "</shell-notes>\n";
     return oss.str();
 }
 
@@ -293,10 +330,19 @@ void run_stream_sync(Request req, EventSink sink) {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
     curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+    curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
+    // Stall guard: if the stream delivers fewer than 1 byte/sec for 90 s,
+    // curl aborts with CURLE_OPERATION_TIMEDOUT instead of hanging forever.
+    // Without this a stalled TLS connection (Schannel/Windows has occasional
+    // buffering quirks) leaves the UI stuck on "Streaming…".
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 90L);
     // HTTP/1.1 + identity encoding so each SSE event flushes to our callback
     // the moment it arrives, instead of being buffered inside a gzip stream.
     curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1);
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "identity");
+    // Write to our callback directly; 0 or low buffer keeps latency down.
+    curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, 4096L);
     auth::apply_tls_options(curl);
 
     CURLcode rc = curl_easy_perform(curl);

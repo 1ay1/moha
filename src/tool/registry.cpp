@@ -11,7 +11,7 @@
 #include <regex>
 #include <sstream>
 #include <string>
-#include <thread>
+#include <vector>
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -22,6 +22,16 @@
 #endif
 
 #include "moha/io/diff.hpp"
+
+#ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+#endif
 
 namespace moha::tools {
 
@@ -47,88 +57,109 @@ void write_file(const fs::path& p, const std::string& content) {
     ofs.write(content.data(), (std::streamsize)content.size());
 }
 
-std::string run_command(const std::string& cmd, int max_chars = 30000,
-                        int timeout_secs = 120) {
-    // Enforce a wall-clock timeout. Without this, a hung command (network wait,
-    // infinite loop, REPL with no stdin close) blocks the worker thread forever
-    // and the UI hangs on the spinner.
 #ifdef _WIN32
-    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+// CreateProcess-based runner: redirects the child's stdin to NUL so it cannot
+// steal keystrokes from the TUI or disturb the console mode. stdout+stderr
+// merge into a pipe read by the caller. Saves + restores the stdin console
+// mode as a belt-and-suspenders guard against a child resetting ENABLE_LINE_INPUT
+// / ENABLE_ECHO_INPUT, which would cause subsequent typing to echo at the
+// cursor (the bug where keystrokes appear at the footer instead of the composer).
+std::string run_command_win32(const std::string& cmd, int max_chars,
+                              int timeout_secs) {
+    HANDLE h_stdin = ::GetStdHandle(STD_INPUT_HANDLE);
+    DWORD saved_in_mode = 0;
+    bool  have_saved_mode =
+        h_stdin != INVALID_HANDLE_VALUE && ::GetConsoleMode(h_stdin, &saved_in_mode);
+
+    struct Restore {
+        HANDLE h; DWORD mode; bool active;
+        ~Restore() { if (active) ::SetConsoleMode(h, mode); }
+    } restore{h_stdin, saved_in_mode, have_saved_mode};
+
     HANDLE rd = nullptr, wr = nullptr;
-    if (!CreatePipe(&rd, &wr, &sa, 0)) return "[CreatePipe failed]";
-    // Only the child should inherit the write end of the pipe.
-    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    if (!::CreatePipe(&rd, &wr, &sa, 0)) return "[CreatePipe failed]";
+    ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+
+    HANDLE nul = ::CreateFileA("NUL", GENERIC_READ,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                               OPEN_EXISTING, 0, nullptr);
+    if (nul == INVALID_HANDLE_VALUE) {
+        ::CloseHandle(rd); ::CloseHandle(wr);
+        return "[CreateFile(NUL) failed]";
+    }
 
     STARTUPINFOA si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput  = nul;
     si.hStdOutput = wr;
     si.hStdError  = wr;
-    si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
+
+    // cmd.exe /S /C "…" — /S preserves quoting inside the command string.
+    std::string line = "cmd.exe /S /C \"" + cmd + "\"";
+    std::vector<char> cmdline(line.begin(), line.end());
+    cmdline.push_back('\0');
 
     PROCESS_INFORMATION pi{};
-    // CreateProcessA mutates the command-line buffer — copy to writable memory.
-    std::string cmdline = "cmd.exe /C " + cmd;
-    BOOL ok = CreateProcessA(
-        nullptr, cmdline.data(), nullptr, nullptr,
-        TRUE, 0, nullptr, nullptr, &si, &pi);
-    CloseHandle(wr); // parent keeps only the read end
+    BOOL ok = ::CreateProcessA(nullptr, cmdline.data(), nullptr, nullptr,
+                               TRUE, CREATE_NO_WINDOW, nullptr, nullptr,
+                               &si, &pi);
+    ::CloseHandle(wr);
+    ::CloseHandle(nul);
     if (!ok) {
-        CloseHandle(rd);
-        return "[CreateProcess failed]";
+        ::CloseHandle(rd);
+        DWORD e = ::GetLastError();
+        return "[CreateProcess failed: " + std::to_string(e) + "]";
     }
-
-    // Watchdog terminates the child after the deadline. We poll instead of
-    // WaitForSingleObject(timeout) so the main thread can drain the pipe
-    // concurrently and avoid pipe-buffer-fill deadlocks.
-    std::atomic<bool> timed_out{false};
-    std::atomic<bool> main_done{false};
-    std::thread watchdog([&, hproc = pi.hProcess]{
-        const auto deadline = std::chrono::steady_clock::now()
-                            + std::chrono::seconds(timeout_secs);
-        while (!main_done.load(std::memory_order_acquire)) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                timed_out.store(true, std::memory_order_release);
-                TerminateProcess(hproc, 1);
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-    });
 
     std::ostringstream out;
-    std::array<char, 4096> buf{};
     size_t total = 0;
-    DWORD n = 0;
-    while (ReadFile(rd, buf.data(), (DWORD)buf.size(), &n, nullptr) && n > 0) {
-        if (total + n > (size_t)max_chars) {
-            out.write(buf.data(), (std::streamsize)((size_t)max_chars - total));
-            out << "\n[output truncated]";
-            total = (size_t)max_chars;
-            TerminateProcess(pi.hProcess, 1);
-            break;
+    bool truncated = false;
+    char buf[4096];
+    for (;;) {
+        DWORD n = 0;
+        if (!::ReadFile(rd, buf, sizeof(buf), &n, nullptr) || n == 0) break;
+        if (!truncated) {
+            size_t room = (total < (size_t)max_chars)
+                        ? (size_t)max_chars - total : 0;
+            size_t write = n < room ? n : room;
+            out.write(buf, (std::streamsize)write);
+            total += write;
+            if (write < (size_t)n) { truncated = true; out << "\n[output truncated]"; }
         }
-        out.write(buf.data(), (std::streamsize)n);
-        total += n;
     }
+    ::CloseHandle(rd);
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD wait = ::WaitForSingleObject(pi.hProcess,
+                                       timeout_secs > 0
+                                       ? (DWORD)timeout_secs * 1000u
+                                       : INFINITE);
     DWORD exit_code = 0;
-    GetExitCodeProcess(pi.hProcess, &exit_code);
-    main_done.store(true, std::memory_order_release);
-    watchdog.join();
-
-    CloseHandle(rd);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
     std::string output = out.str();
-    if (timed_out.load(std::memory_order_acquire))
+    if (wait == WAIT_TIMEOUT) {
+        ::TerminateProcess(pi.hProcess, 1);
+        ::WaitForSingleObject(pi.hProcess, 2000);
         output += "\n[timed out after " + std::to_string(timeout_secs) + "s]";
-    else if (exit_code != 0)
-        output += "\n[exit code " + std::to_string(exit_code) + "]";
+    } else {
+        ::GetExitCodeProcess(pi.hProcess, &exit_code);
+        if (exit_code != 0)
+            output += "\n[exit code " + std::to_string((int)exit_code) + "]";
+    }
+    ::CloseHandle(pi.hProcess);
+    ::CloseHandle(pi.hThread);
     return output;
+}
+#endif
+
+std::string run_command(const std::string& cmd, int max_chars = 30000,
+                        int timeout_secs = 120) {
+#ifdef _WIN32
+    return run_command_win32(cmd, max_chars, timeout_secs);
 #else
+    // Enforce a wall-clock timeout via GNU coreutils `timeout`. Without this,
+    // a hung command (network wait, infinite loop, REPL with no stdin close)
+    // blocks the worker thread forever and the UI hangs on the spinner.
     std::string wrapped = "timeout --kill-after=2s " + std::to_string(timeout_secs)
                         + "s sh -c " + [&]{
         std::string q = "'";
@@ -294,10 +325,22 @@ ToolDef tool_edit() {
 ToolDef tool_bash() {
     ToolDef t;
     t.name = ToolName{std::string{"bash"}};
-    t.description = "Run a shell command and return its output. "
-                    "Output is truncated at 30k chars. Use for builds, tests, git, etc. "
-                    "Do NOT use for file IO — use the write/edit/read tools instead "
-                    "(no cat/echo/sed/heredoc to create or modify files).";
+    t.description =
+#ifdef _WIN32
+        "Run a shell command via Windows cmd.exe and return its output. "
+        "Output is truncated at 30k chars. Use for builds, tests, git, etc. "
+        "This runs under cmd.exe on Windows — use native equivalents like "
+        "`dir`, `where`, `systeminfo`, `type`, `findstr`, or `powershell -c`. "
+        "Do NOT use POSIX-only commands (`uname`, `cat /etc/os-release`, "
+        "`sw_vers`, `ls`, `grep`, `sed`, `awk`, heredocs) — they will fail. "
+        "Do NOT use for file IO — use the write/edit/read tools instead."
+#else
+        "Run a shell command and return its output. "
+        "Output is truncated at 30k chars. Use for builds, tests, git, etc. "
+        "Do NOT use for file IO — use the write/edit/read tools instead "
+        "(no cat/echo/sed/heredoc to create or modify files)."
+#endif
+    ;
     t.input_schema = json{
         {"type","object"},
         {"required", {"command"}},
