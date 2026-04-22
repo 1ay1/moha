@@ -32,14 +32,35 @@ ToolDef tool_write() {
         std::string raw = args.value("path", "");
         if (raw.empty())
             return std::unexpected(ToolError{"path required"});
-        // An explicit empty string is legitimate (creating an empty file),
-        // but a missing key almost always means the model forgot to include
-        // the content — fail loudly so it self-corrects.
-        if (!args.is_object() || !args.contains("content"))
-            return std::unexpected(ToolError{"content required (pass empty string for an empty file)"});
-        if (!args["content"].is_string())
-            return std::unexpected(ToolError{"content must be a string"});
-        std::string content = args["content"].get<std::string>();
+        // Recover from common Claude tool-call shapes instead of failing:
+        //   • content missing            → empty file
+        //   • content: null              → empty file
+        //   • content: number/bool       → coerce via dump()
+        //   • content: array of strings  → join with "\n" (sometimes emitted
+        //                                   when the model gets confused and
+        //                                   treats content as "lines")
+        // The output below names what we received so the model can re-issue
+        // with proper content if it intended otherwise, without a red error.
+        std::string content;
+        std::string coercion_note;
+        if (args.is_object() && args.contains("content")) {
+            const auto& c = args["content"];
+            if (c.is_string())       content = c.get<std::string>();
+            else if (c.is_null())    coercion_note = " (content was null — wrote empty file)";
+            else if (c.is_array()) {
+                for (std::size_t i = 0; i < c.size(); ++i) {
+                    if (i) content += '\n';
+                    if (c[i].is_string()) content += c[i].get<std::string>();
+                    else                  content += c[i].dump();
+                }
+                coercion_note = " (content was an array — joined with newlines)";
+            } else {
+                content = c.dump();
+                coercion_note = " (content was not a string — coerced)";
+            }
+        } else {
+            coercion_note = " (no `content` field provided — wrote empty file; re-run with content if that was not intended)";
+        }
         auto p = util::normalize_path(raw);
         std::string original;
         std::error_code ec;
@@ -60,7 +81,8 @@ ToolDef tool_write() {
             return std::unexpected(ToolError{err});
         std::ostringstream msg;
         msg << (exists ? "Overwrote " : "Created ") << p.string()
-            << " (" << change.added << "+ " << change.removed << "-)";
+            << " (" << change.added << "+ " << change.removed << "-)"
+            << coercion_note;
         return ToolOutput{msg.str(), std::move(change)};
     };
     return t;

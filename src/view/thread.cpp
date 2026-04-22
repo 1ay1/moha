@@ -334,7 +334,11 @@ Element render_tool_call(const ToolUse& tc) {
                 path.empty() ? "write" : path, tc.status, tc.expanded, tc.output, elapsed);
         }
         WriteTool wt(path.empty() ? "write" : path);
-        wt.set_expanded(tc.expanded);
+        // Auto-expand while the model is still streaming `content` (Pending)
+        // or the tool is writing to disk (Running) so the user sees a live
+        // preview of the file being produced. Collapses on Done; user can
+        // still toggle open via tc.expanded.
+        wt.set_expanded(!done || tc.expanded);
         wt.set_content(safe_arg(tc.args, "content"));
         wt.set_max_preview_lines(4);
         wt.set_status(map_status<WriteTool>(tc.status,
@@ -350,7 +354,9 @@ Element render_tool_call(const ToolUse& tc) {
                 path.empty() ? "edit" : path, tc.status, tc.expanded, tc.output, elapsed);
         }
         EditTool et(path.empty() ? "edit" : path);
-        et.set_expanded(tc.expanded);
+        // Auto-expand while streaming old/new strings so a big refactor's
+        // progress is visible — same rationale as write.
+        et.set_expanded(!done || tc.expanded);
         et.set_old_text(safe_arg(tc.args, "old_string"));
         et.set_new_text(safe_arg(tc.args, "new_string"));
         et.set_status(map_status<EditTool>(tc.status,

@@ -69,33 +69,112 @@ std::optional<std::string> sniff_string(const std::string& raw,
     return std::nullopt;  // string not closed yet
 }
 
+// Like `sniff_string` but returns whatever has accumulated so far, even when
+// the closing quote hasn't arrived yet. Needed for fields whose value dwarfs
+// every other arg — write's `content`, edit's `old_string`/`new_string` —
+// because waiting for the close means the user sees an empty card for the
+// entire duration of a 12 tok/s 800-line file write. We stop at a half-
+// escape at buffer edge so we don't emit a dangling `\` into the widget.
+std::optional<std::string> sniff_string_progressive(const std::string& raw,
+                                                    std::string_view key) {
+    std::string needle = "\"" + std::string{key} + "\"";
+    size_t p = raw.find(needle);
+    if (p == std::string::npos) return std::nullopt;
+    p += needle.size();
+    while (p < raw.size() && (raw[p] == ' ' || raw[p] == '\t' || raw[p] == '\n')) p++;
+    if (p >= raw.size() || raw[p] != ':') return std::nullopt;
+    p++;
+    while (p < raw.size() && (raw[p] == ' ' || raw[p] == '\t' || raw[p] == '\n')) p++;
+    if (p >= raw.size() || raw[p] != '"') return std::nullopt;
+    p++;
+    std::string out;
+    out.reserve(256);
+    while (p < raw.size()) {
+        char c = raw[p];
+        if (c == '\\') {
+            if (p + 1 >= raw.size()) break;  // half-escape at buffer edge — stop
+            char n = raw[p + 1];
+            switch (n) {
+                case 'n': out += '\n'; break;
+                case 't': out += '\t'; break;
+                case 'r': out += '\r'; break;
+                case '"': out += '"';  break;
+                case '\\':out += '\\'; break;
+                case '/': out += '/';  break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                default:  out += n;    break;
+            }
+            p += 2;
+        } else if (c == '"') {
+            return out;  // closed — canonical
+        } else {
+            out.push_back(c);
+            p++;
+        }
+    }
+    return out;  // open string — return partial
+}
+
 // For a given tool, fill `tc.args` with whichever scalar field is most useful
 // to display in the card header. We write into `tc.args` (rather than a
 // separate preview field) so the existing view code — which reads path /
 // command / pattern from args — picks it up unchanged.
 void update_stream_preview(ToolUse& tc) {
-    auto try_set = [&](std::string_view key) {
-        auto v = sniff_string(tc.args_streaming, key);
-        if (!v) return false;
+    auto set_arg = [&](std::string_view key, std::string v) {
         if (!tc.args.is_object()) tc.args = json::object();
         auto& cur = tc.args[std::string{key}];
-        if (!cur.is_string() || cur.get<std::string>() != *v) {
-            cur = *v;
+        if (!cur.is_string() || cur.get<std::string>() != v) {
+            cur = std::move(v);
             tc.mark_args_dirty();
         }
-        return true;
+    };
+    auto try_set = [&](std::string_view key) {
+        if (auto v = sniff_string(tc.args_streaming, key)) { set_arg(key, *v); return true; }
+        return false;
+    };
+    auto try_set_partial = [&](std::string_view key) {
+        if (auto v = sniff_string_progressive(tc.args_streaming, key)) { set_arg(key, *v); return true; }
+        return false;
     };
     const auto& n = tc.name.value;
-    if      (n == "read" || n == "write" || n == "edit" || n == "list_dir")
-        try_set("path");
-    else if (n == "bash") { try_set("command"); }
-    else if (n == "grep") { try_set("pattern"); try_set("path"); }
-    else if (n == "glob") { try_set("pattern"); }
+    if      (n == "read" || n == "list_dir") try_set("path");
+    else if (n == "write") { try_set("path"); try_set_partial("content"); }
+    else if (n == "edit")  { try_set("path"); try_set_partial("old_string"); try_set_partial("new_string"); }
+    else if (n == "bash")  { try_set("command"); }
+    else if (n == "grep")  { try_set("pattern"); try_set("path"); }
+    else if (n == "glob")  { try_set("pattern"); }
     else if (n == "find_definition") try_set("symbol");
     else if (n == "web_fetch")       try_set("url");
     else if (n == "web_search")      try_set("query");
     else if (n == "diagnostics")     try_set("command");
     else if (n == "git_commit")      try_set("message");
+}
+
+// Rescue partial args when json::parse fails on the raw SSE buffer (truncated
+// mid-content, malformed escape, etc). We best-effort sniff each expected
+// scalar field and hand the result back as a json object — if at least one
+// usable field came through, the tool gets to run instead of the whole turn
+// dying on a cosmetic parse error. Returns {} when nothing salvageable.
+json salvage_args(const ToolUse& tc) {
+    json out = json::object();
+    auto pick = [&](std::string_view key) {
+        if (auto v = sniff_string_progressive(tc.args_streaming, key))
+            out[std::string{key}] = *v;
+    };
+    const auto& n = tc.name.value;
+    if      (n == "read" || n == "list_dir") { pick("path"); }
+    else if (n == "write") { pick("path"); pick("content"); }
+    else if (n == "edit")  { pick("path"); pick("old_string"); pick("new_string"); }
+    else if (n == "bash")  { pick("command"); }
+    else if (n == "grep")  { pick("pattern"); pick("path"); }
+    else if (n == "glob")  { pick("pattern"); }
+    else if (n == "find_definition") { pick("symbol"); }
+    else if (n == "web_fetch")       { pick("url"); }
+    else if (n == "web_search")      { pick("query"); }
+    else if (n == "diagnostics")     { pick("command"); }
+    else if (n == "git_commit")      { pick("message"); }
+    return out;
 }
 
 // ── View virtualization ───────────────────────────────────────────────────
@@ -356,13 +435,22 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                         // buffer so we don't hold two copies until finalize.
                         std::string{}.swap(tc.args_streaming);
                     } catch (const std::exception& ex) {
-                        // Fail the tool loudly instead of silently running with {}.
-                        // Status::Error shorts the kick loop and the output is fed
-                        // back to the model so it can self-correct on the next turn.
-                        tc.status = ToolUse::Status::Error;
-                        tc.output = std::string{"invalid tool arguments: "} + ex.what()
-                                  + "\nraw: " + tc.args_streaming;
-                        std::string{}.swap(tc.args_streaming);
+                        // Parse failed — typically an SSE cutoff mid-content.
+                        // Salvage whatever scalar fields we can via the same
+                        // progressive sniffs used for live preview, so the
+                        // tool still has a shot at running with partial args
+                        // instead of nuking the whole turn.
+                        auto salvaged = salvage_args(tc);
+                        if (!salvaged.empty()) {
+                            tc.args = std::move(salvaged);
+                            tc.mark_args_dirty();
+                            std::string{}.swap(tc.args_streaming);
+                        } else {
+                            tc.status = ToolUse::Status::Error;
+                            tc.output = std::string{"invalid tool arguments: "} + ex.what()
+                                      + "\nraw: " + tc.args_streaming;
+                            std::string{}.swap(tc.args_streaming);
+                        }
                     }
                 }
             }

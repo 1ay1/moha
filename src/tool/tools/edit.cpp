@@ -36,12 +36,19 @@ ToolDef tool_edit() {
         std::string raw = args.value("path", "");
         if (raw.empty())
             return std::unexpected(ToolError{"path required"});
+        // old_string is the needle — genuinely required. new_string is
+        // optional: a missing field or null means "delete the match", which
+        // is the same shape as new_string:"". We'd rather silently accept
+        // that than flash a red error card for a recoverable model slip.
         if (!args.contains("old_string") || !args["old_string"].is_string())
             return std::unexpected(ToolError{"old_string required (must be a string)"});
-        if (!args.contains("new_string") || !args["new_string"].is_string())
-            return std::unexpected(ToolError{"new_string required (must be a string; pass empty to delete)"});
         std::string old_s = args["old_string"].get<std::string>();
-        std::string new_s = args["new_string"].get<std::string>();
+        std::string new_s;
+        if (args.contains("new_string")) {
+            const auto& v = args["new_string"];
+            if (v.is_string())      new_s = v.get<std::string>();
+            else if (!v.is_null())  new_s = v.dump();
+        }
         bool all = args.value("replace_all", false);
         if (old_s.empty())
             return std::unexpected(ToolError{"old_string cannot be empty"});
