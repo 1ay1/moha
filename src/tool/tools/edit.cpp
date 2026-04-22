@@ -288,6 +288,10 @@ ToolDef tool_edit() {
             }},
         }},
     };
+    // See write.cpp for the full rationale. Edit's `edits[].new_text` can
+    // also be multi-KB on big refactors; eager streaming keeps the
+    // input_json_delta cadence matched to the model's emission rate.
+    t.eager_input_streaming = true;
     t.needs_permission = [](Profile p){ return p != Profile::Write; };
     t.execute = util::adapt<EditArgs>(parse_edit_args, run_edit);
     return t;

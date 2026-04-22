@@ -26,7 +26,8 @@ Cmd<Msg> launch_stream(Model& m) {
             if (m.profile == Profile::Ask
                 && (t.name == "write" || t.name == "edit" || t.name == "bash"))
                 continue;
-            req.tools.push_back({t.name.value, t.description, t.input_schema});
+            req.tools.push_back({t.name.value, t.description, t.input_schema,
+                                 t.eager_input_streaming});
         }
     }
     req.auth_header = deps().auth_header;

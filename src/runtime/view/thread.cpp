@@ -74,6 +74,24 @@ std::string safe_arg(const nlohmann::json& args, const char* key) {
     return args.value(key, "");
 }
 
+// Pick the first non-empty string under any of the listed keys.
+// Mirrors the alias-tolerant parsing the tool implementations themselves
+// do (write/edit accept `path | file_path | filepath | filename`,
+// `display_description | description`, etc.) — without this, the view
+// reads a single canonical key and a model that picks an alias renders
+// as a blank card even though the underlying tool ran fine.
+std::string pick_arg(const nlohmann::json& args,
+                     std::initializer_list<const char*> keys) {
+    if (!args.is_object()) return {};
+    for (const char* k : keys) {
+        if (auto it = args.find(k); it != args.end() && it->is_string()) {
+            const auto& s = it->get_ref<const std::string&>();
+            if (!s.empty()) return s;
+        }
+    }
+    return {};
+}
+
 int safe_int_arg(const nlohmann::json& args, const char* key, int def) {
     if (!args.is_object() || !args.contains(key)) return def;
     return args.value(key, def);
@@ -311,9 +329,9 @@ Element render_tool_call(const ToolUse& tc) {
 }
 
 Element render_tool_call_uncached(const ToolUse& tc) {
-    auto path = safe_arg(tc.args, "path");
+    auto path = pick_arg(tc.args, {"path", "file_path", "filepath", "filename"});
     auto cmd  = safe_arg(tc.args, "command");
-    auto desc = safe_arg(tc.args, "display_description");
+    auto desc = pick_arg(tc.args, {"display_description", "description"});
 
     bool done = tc.is_terminal();
 
@@ -380,7 +398,14 @@ Element render_tool_call_uncached(const ToolUse& tc) {
         // preview of the file being produced. Collapses on Done; user can
         // still toggle open via tc.expanded.
         wt.set_expanded(!done || tc.expanded);
-        wt.set_content(safe_arg(tc.args, "content"));
+        // Mirror the alias chain in src/tool/tools/write.cpp so the preview
+        // shows the body whichever key the model picked. (`content` is the
+        // canonical schema field; the rest are common aliases models reach
+        // for. Last-resort salvage is intentionally not attempted here —
+        // that's the tool's job; the view just shows whatever's claimed.)
+        wt.set_content(pick_arg(tc.args, {"content", "file_text", "text",
+                                          "body", "data", "contents",
+                                          "file_content"}));
         wt.set_max_preview_lines(6);
         wt.set_status(map_status<WriteTool>(tc.status,
             WriteStatus::Writing, WriteStatus::Failed, WriteStatus::Written));
@@ -403,11 +428,36 @@ Element render_tool_call_uncached(const ToolUse& tc) {
                 header, tc.status, tc.expanded, tc.output(), elapsed);
         }
         EditTool et(header);
-        // Auto-expand while streaming old/new strings so a big refactor's
-        // progress is visible — same rationale as write.
-        et.set_expanded(!done || tc.expanded);
-        et.set_old_text(safe_arg(tc.args, "old_string"));
-        et.set_new_text(safe_arg(tc.args, "new_string"));
+        // Edit cards stay expanded permanently — the diff is the whole point
+        // of the card and is usually small enough to leave visible. (Write
+        // collapses on done because it's the whole file body.)
+        et.set_expanded(true);
+        // The tool accepts three input shapes (see src/tool/tools/edit.cpp):
+        //   1. canonical:  edits: [{old_text, new_text, ...}, ...]
+        //   2. Zed-legacy: old_text / new_text at top level
+        //   3. moha-orig:  old_string / new_string at top level
+        // The system prompt + tool description steer the model toward (1),
+        // so reading only `old_string`/`new_string` left the diff section
+        // empty and the card looked collapsed. Probe in priority order.
+        auto pick_edit_field = [&](const char* canonical_key,
+                                   const char* legacy_key,
+                                   const char* orig_key) -> std::string {
+            if (tc.args.is_object()) {
+                if (auto it = tc.args.find("edits");
+                    it != tc.args.end() && it->is_array() && !it->empty()
+                    && it->front().is_object())
+                {
+                    const auto& e0 = it->front();
+                    if (auto v = e0.find(canonical_key);
+                        v != e0.end() && v->is_string()) return v->get<std::string>();
+                }
+            }
+            auto v = safe_arg(tc.args, legacy_key);
+            if (!v.empty()) return v;
+            return safe_arg(tc.args, orig_key);
+        };
+        et.set_old_text(pick_edit_field("old_text", "old_text", "old_string"));
+        et.set_new_text(pick_edit_field("new_text", "new_text", "new_string"));
         et.set_status(map_status<EditTool>(tc.status,
             EditStatus::Applying, EditStatus::Failed, EditStatus::Applied));
         et.set_elapsed(elapsed);

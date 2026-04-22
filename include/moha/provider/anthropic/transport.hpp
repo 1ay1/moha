@@ -21,6 +21,7 @@ struct ToolSpec {
     std::string name;
     std::string description;
     nlohmann::json input_schema;
+    bool eager_input_streaming = false;
 };
 
 struct Request {
@@ -28,11 +29,10 @@ struct Request {
     std::string system_prompt;
     std::vector<Message> messages;
     std::vector<ToolSpec> tools;
-    // 32000 covers all Claude 4.x models. Running lower than this caps
-    // long write/edit calls mid-tool-input (model burns its budget streaming
-    // input_json_delta, hits the cap, Anthropic emits message_stop with
-    // stop_reason=max_tokens, tool args are truncated).
-    int max_tokens = 32000;
+    // Always set by AnthropicProvider from provider::Request (which owns the
+    // default). No initializer here — keeping one risks the same silent-
+    // override bug that masked the cap on long write/edit calls.
+    int max_tokens;
 
     std::string auth_header;                 // "Bearer <t>" or raw API key
     auth::Style auth_style = auth::Style::ApiKey;

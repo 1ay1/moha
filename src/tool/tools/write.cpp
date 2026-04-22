@@ -158,38 +158,39 @@ ExecResult run_write(const WriteArgs& a) {
 ToolDef tool_write() {
     ToolDef t;
     t.name = ToolName{std::string{"write"}};
+    // CC's exact Write tool description (verbatim from the v2.1.113 binary).
+    // Matching byte-for-byte keeps the model on the same well-trained path
+    // it uses for Claude Code — off-spec descriptions and extra fields
+    // measurably slow input_json_delta streaming for big bodies (model emits
+    // pre-content boilerplate; server appears to route differently). The
+    // alias-tolerant arg reader still accepts `path` as a legacy synonym for
+    // `file_path`, so existing on-disk thread state keeps loading.
     t.description =
-        "Create a NEW file or completely replace an existing one with the "
-        "given contents. Use `edit` instead when modifying parts of an "
-        "existing file — `write` is wasteful for small changes (the whole "
-        "file streams over the wire) and harder to review. Pick `write` "
-        "only when: (a) the file does not exist yet, or (b) you are "
-        "regenerating the entire file from scratch (e.g. format conversion, "
-        "code generation). ALWAYS include the full body in `content` — never "
-        "call with `path` alone. Creates parent directories as needed. "
-        "ALWAYS include a brief `display_description` (e.g. 'Generate landing "
-        "page HTML') — it shows in the card while content streams.";
-    // Property order matters for streaming UX. Claude emits JSON keys in
-    // schema-declaration order, so we list `path` first (short, gives the
-    // user immediate context in the card title), then `display_description`
-    // (also short, paints the body), then `content` last so the bulk-stream
-    // happens AFTER the user can see what file is being written and why.
+        "Writes a file to the local filesystem.\n\n"
+        "Usage:\n"
+        "- This tool will overwrite the existing file if there is one at the "
+        "provided path.\n"
+        "- If this is an existing file, you MUST use the Read tool first to "
+        "read the file's contents.\n"
+        "- Prefer the Edit tool for modifying existing files — it only sends "
+        "the diff. Only use this tool to create new files or for complete "
+        "rewrites.";
     t.input_schema = json{
         {"type","object"},
-        {"required", {"path","content"}},
+        {"required", {"file_path","content"}},
         {"properties", {
-            {"path",    {{"type","string"},
-                {"description","Absolute or workspace-relative file path. "
-                               "Stream this FIRST so the UI shows what file "
-                               "is being written before content arrives."}}},
-            {"display_description", {{"type","string"},
-                {"description","One-line summary shown in the card while "
-                               "the file streams (e.g. 'Generate landing "
-                               "page'). Stream second; required for good UX."}}},
-            {"content", {{"type","string"},
-                {"description","Full file body. Stream LAST."}}},
+            {"file_path", {{"type","string"},
+                {"description","The absolute path to the file to write "
+                               "(must be absolute, not relative)."}}},
+            {"content",   {{"type","string"},
+                {"description","The content to write to the file."}}},
         }},
     };
+    // Fine-grained tool streaming: tells Anthropic's edge to stream the
+    // `content` field token-by-token via `input_json_delta` instead of
+    // buffering+trickling. Without this, multi-KB write bodies arrive at
+    // 0–1 tok/s on a stream that's otherwise hitting 60 tok/s for prose.
+    t.eager_input_streaming = true;
     t.needs_permission = [](Profile p){ return p != Profile::Write; };
     t.execute = util::adapt<WriteArgs>(parse_write_args, run_write);
     return t;

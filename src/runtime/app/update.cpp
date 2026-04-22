@@ -175,14 +175,32 @@ std::optional<std::string> get_string_any(const json& obj,
 // to display in the card header. We write into `tc.args` (rather than a
 // separate preview field) so the existing view code — which reads path /
 // command / pattern from args — picks it up unchanged.
+// Hard cap on the live content preview shown during streaming.  The widget
+// only renders the first ~6 lines of `content` while the model is mid-write,
+// and re-extracting / re-comparing / re-laying-out a multi-KB body 8x/sec
+// is what made big writes "feel" stuck even when the bytes were arriving.
+// 4 KiB comfortably covers ~50 wide-screen lines — far more than the widget
+// shows — and bounds every per-tick op to constant work.
+constexpr size_t kStreamingPreviewCap = 4 * 1024;
+
 void update_stream_preview(ToolUse& tc) {
     auto set_arg = [&](std::string_view key, std::string v) {
         if (!tc.args.is_object()) tc.args = json::object();
         auto& cur = tc.args[std::string{key}];
-        if (!cur.is_string() || cur.get<std::string>() != v) {
-            cur = std::move(v);
-            tc.mark_args_dirty();
+        // Cheap "did it change?" — full byte compare on a multi-KB content
+        // string was ~half the per-tick cost. Same-size + same-bookend is a
+        // very strong signal of "unchanged" in practice (the only way it
+        // false-positives is if the model rewrote middle bytes without
+        // changing length, which never happens during append-only streaming).
+        if (cur.is_string()) {
+            const auto& s = cur.get_ref<const std::string&>();
+            if (s.size() == v.size()
+                && (s.empty()
+                    || (s.front() == v.front() && s.back() == v.back())))
+                return;
         }
+        cur = std::move(v);
+        tc.mark_args_dirty();
     };
     auto try_set = [&](std::string_view canon,
                        std::span<const std::string_view> keys = {}) {
@@ -240,10 +258,35 @@ void update_stream_preview(ToolUse& tc) {
         pull_desc();
     }
     else if (n == "write") {
+        // Write's dedicated fast path. The general try_struct call closes
+        // and parses the entire growing args buffer into nlohmann::json on
+        // every tick — fine for tiny tools, ~quadratic on a multi-KB write
+        // body and the dominant cost behind big writes "hanging" the UI
+        // even when bytes are flowing on the wire.
+        //
+        // Path + display_description are <100 bytes each, parsing is cheap,
+        // and we *want* the structured close to handle weird value escapes
+        // robustly. Keep the full try_struct path for those.
         if (!try_struct("path", kPathAliases)) try_set("path", kPathAliases);
         pull_desc();
-        if (!try_struct("content", kContentAliases))
-            try_set_partial("content", kContentAliases);
+
+        // Content goes through a stripped-down path: progressive sniff only
+        // (no full close+parse), tail-clipped to kStreamingPreviewCap so the
+        // preview-update cost is O(cap) regardless of how big the body gets.
+        // Wrapped in try because sniff_string_progressive walks the buffer
+        // by hand and any malformed escape at the buffer edge would, in
+        // principle, still throw via std::string growth — we'd rather show
+        // a stale preview than fail the reducer step.
+        try {
+            auto v = sniff_any(tc.args_streaming, kContentAliases,
+                               /*partial=*/true);
+            if (v && !v->empty()) {
+                if (v->size() > kStreamingPreviewCap)
+                    *v = std::string{"… (showing tail) …\n"}
+                       + v->substr(v->size() - kStreamingPreviewCap);
+                set_arg("content", std::move(*v));
+            }
+        } catch (...) { /* swallow — header fields already painted */ }
     }
     else if (n == "edit") {
         if (!try_struct("path", kPathAliases)) try_set("path", kPathAliases);
@@ -742,11 +785,23 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 && !m.current.messages.back().tool_calls.empty()) {
                 auto& tc = m.current.messages.back().tool_calls.back();
                 tc.args_streaming += e.partial_json;
-                // Defer the full json::parse until StreamToolUseEnd (O(n^2) on
-                // each delta otherwise), but do sniff the single "header" field
-                // (path, command, pattern, ...) so the tool card stops showing
-                // an empty title while the rest of the args stream in.
-                update_stream_preview(tc);
+                // Throttle the live preview. update_stream_preview() closes
+                // the partial JSON and parses the entire growing buffer on
+                // every call — fine for a 200-byte read/grep, ~quadratic for
+                // a multi-KB write `content` body and visible to the user as
+                // the card "hanging" while bytes are arriving on the wire.
+                // First delta runs unconditionally (so the path/header paints
+                // immediately), then we space subsequent re-parses by ~120 ms.
+                // StreamToolUseEnd below always runs the full parse, so the
+                // final state is exact.
+                using clock = std::chrono::steady_clock;
+                constexpr auto kPreviewInterval = std::chrono::milliseconds{120};
+                auto now = clock::now();
+                if (tc.last_preview_at.time_since_epoch().count() == 0
+                    || now - tc.last_preview_at >= kPreviewInterval) {
+                    update_stream_preview(tc);
+                    tc.last_preview_at = now;
+                }
             }
             return done(std::move(m));
         },

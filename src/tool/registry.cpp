@@ -52,13 +52,17 @@ void emit(std::string_view snapshot)   { if (g_sink) g_sink(snapshot); }
 
 namespace {
 
-// Assemble every tool. Order matters only for display in the UI's tool
-// picker — the protocol itself treats the set as unordered.
+// Assemble every tool. Order matters: the protocol treats the set as
+// unordered but the model has a strong recall bias toward earlier-listed
+// tools. Putting `edit` ahead of `write` is the cheapest single nudge to
+// stop the model from rewriting whole files when a targeted substitution
+// would do — and edit's tiny input_json_delta bodies sidestep the long
+// mid-stream pause Anthropic's edge applies to multi-KB tool_use content.
 std::vector<ToolDef> build_registry() {
     std::vector<ToolDef> r;
     r.push_back(tool_read());
-    r.push_back(tool_write());
     r.push_back(tool_edit());
+    r.push_back(tool_write());
     r.push_back(tool_bash());
     r.push_back(tool_grep());
     r.push_back(tool_glob());

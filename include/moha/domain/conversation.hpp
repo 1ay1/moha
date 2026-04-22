@@ -84,6 +84,14 @@ struct ToolUse {
     ToolName       name;
     nlohmann::json args;
     std::string    args_streaming;
+    // Throttle for the live preview re-parse during input_json_delta. The
+    // preview path closes the partial JSON and runs `nlohmann::json::parse`
+    // on the entire growing buffer to extract long fields (write `content`,
+    // edit `edits[*].old_text`/`new_text`); doing that on every tiny delta
+    // is O(n²) and was the dominant CPU cost on a multi-KB write — visible
+    // as the UI "hanging" while the wire is healthy. Reducer skips the
+    // preview re-parse if less than ~250 ms has passed since the last one.
+    std::chrono::steady_clock::time_point last_preview_at{};
     Status         status   = Pending{};
     bool           expanded = true;
 

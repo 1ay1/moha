@@ -81,6 +81,14 @@ FILE* debug_log() {
 void dbg(const char* fmt, ...) {
     FILE* fp = debug_log();
     if (!fp) return;
+    // Monotonic ms-since-first-call so SSE event timing can be measured
+    // without parsing wall-clock timestamps. Compares cheap, scoped to the
+    // process lifetime, and unambiguous when grepping the log.
+    using clock = std::chrono::steady_clock;
+    static const auto t0 = clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  clock::now() - t0).count();
+    std::fprintf(fp, "[+%6lldms] ", static_cast<long long>(ms));
     va_list ap; va_start(ap, fmt);
     std::vfprintf(fp, fmt, ap);
     va_end(ap);
@@ -94,24 +102,37 @@ using json = nlohmann::json;
 // Claude Code CLI sends so OAuth tokens minted for "Claude Code" are accepted
 // — Anthropic's edge gates oauth-2025-04-20 traffic on the matching x-app /
 // user-agent / anthropic-beta combination. Pinned to the CLI version we
-// reverse-engineered against (cli.js BUILD_TIME 2026-02-16); refresh when a
-// newer release adds beta flags we want to ride.
+// reverse-engineered against (cli.js BUILD_TIME 2026-04-17, VERSION 2.1.113);
+// refresh when a newer release adds beta flags we want to ride.
 namespace headers {
     inline constexpr const char* anthropic_version = "2023-06-01";
-    inline constexpr const char* claude_cli_version = "2.1.44";
-    inline constexpr const char* anth_sdk_version  = "0.74.0";
+    inline constexpr const char* claude_cli_version = "2.1.113";
+    inline constexpr const char* anth_sdk_version  = "0.81.0";
     inline constexpr const char* node_runtime_ver  = "v22.11.0";
-    inline constexpr const char* user_agent        =
-        "claude-cli/2.1.44 (external, cli)";
+    // Matches CC's `bA()`: literal `claude-code/<VERSION>` — no "(external,
+    // cli)" suffix, no `claude-cli` prefix. Older suffix variant correlated
+    // with mid-stream buffering on long tool_use bodies.
+    inline constexpr const char* user_agent        = "claude-code/2.1.113";
     inline constexpr const char* x_app             = "cli";
 
-    // Beta IDs (literal strings from cli.js line 1336 / line 20). Listed
-    // individually so select_betas() can compose the call-site set.
-    inline constexpr const char* beta_claude_code         = "claude-code-20250219";
-    inline constexpr const char* beta_oauth               = "oauth-2025-04-20";
-    inline constexpr const char* beta_interleaved_think   = "interleaved-thinking-2025-05-14";
-    inline constexpr const char* beta_prompt_cache_scope  = "prompt-caching-scope-2026-01-05";
-    inline constexpr const char* beta_context_1m          = "context-1m-2025-08-07";
+    // Beta IDs (literal strings extracted from the v2.1.113 binary's
+    // `fR8(model)` builder). Listed individually so select_betas() can compose
+    // the call-site set in the same order Claude Code's cocktail-builder
+    // pushes them. Thinking betas (interleaved-thinking, redact-thinking) are
+    // intentionally absent — see select_betas() for why.
+    inline constexpr const char* beta_claude_code            = "claude-code-20250219";
+    inline constexpr const char* beta_oauth                  = "oauth-2025-04-20";
+    inline constexpr const char* beta_context_1m             = "context-1m-2025-08-07";
+    inline constexpr const char* beta_context_management     = "context-management-2025-06-27";
+    inline constexpr const char* beta_prompt_cache_scope     = "prompt-caching-scope-2026-01-05";
+    // Per-tool `eager_input_streaming: true` is honored without a beta header
+    // on Claude 4.6 (GA there). For older models (haiku-4-5, claude-3.x) the
+    // edge requires this header — sending it on 4.6+ is a no-op so we always
+    // include it when any tool in the request opts in. Discovered from CC's
+    // breaking-changes doc strings ("fine-grained-tool-streaming-2025-05-14 →
+    // GA on 4.6, remove") and verified against zed-industries/zed's
+    // crates/anthropic completion path.
+    inline constexpr const char* beta_fine_grained_streaming = "fine-grained-tool-streaming-2025-05-14";
 } // namespace headers
 
 namespace {
@@ -143,6 +164,10 @@ struct StreamCtx {
     // iterate() calls — reusing one per stream avoids a malloc per SSE frame.
     simdjson::ondemand::parser simd_parser;
     simdjson::padded_string     simd_scratch;
+    // Diagnostic: count thinking-block deltas the model emitted so we can
+    // tell "model is reasoning silently" apart from "wire is stalled" in
+    // the debug log. Surfaced when the stream finishes.
+    int thinking_deltas = 0;
 };
 
 // Fast path: content_block_delta dominates stream volume (one per output
@@ -183,6 +208,12 @@ bool dispatch_content_block_delta_fast(StreamCtx& ctx, const std::string& data) 
         ctx.sink(StreamToolUseDelta{std::string{partial}});
         return true;
     }
+    // Thinking blocks have nothing to render but we still want to count them
+    // so the dbg log can distinguish "model reasoning" from "wire stalled".
+    if (delta_type == "thinking_delta" || delta_type == "signature_delta") {
+        ++ctx.thinking_deltas;
+        return true;
+    }
     return false;
 }
 
@@ -196,13 +227,23 @@ void dispatch_event(StreamCtx& ctx, const std::string& name, const std::string& 
         return;
     }
 
+    // ping events are heartbeat keepalives — Anthropic interleaves them so
+    // proxies don't kill the long-poll. Acknowledge silently; emitting a Msg
+    // would just spam the reducer.
+    if (name == "ping") return;
+
     json j;
     try { j = json::parse(data); } catch (...) { return; }
     if (name == "message_start") {
         ctx.sink(StreamStarted{});
         if (j.contains("message") && j["message"].contains("usage")) {
-            int in = j["message"]["usage"].value("input_tokens", 0);
-            ctx.sink(StreamUsage{in, 0});
+            const auto& u = j["message"]["usage"];
+            StreamUsage su;
+            su.input_tokens                = u.value("input_tokens", 0);
+            su.output_tokens               = u.value("output_tokens", 0);
+            su.cache_creation_input_tokens = u.value("cache_creation_input_tokens", 0);
+            su.cache_read_input_tokens     = u.value("cache_read_input_tokens", 0);
+            ctx.sink(su);
         }
     } else if (name == "content_block_start") {
         auto block = j.value("content_block", json::object());
@@ -220,6 +261,16 @@ void dispatch_event(StreamCtx& ctx, const std::string& name, const std::string& 
             ctx.sink(StreamTextDelta{delta.value("text", "")});
         } else if (type == "input_json_delta") {
             ctx.sink(StreamToolUseDelta{delta.value("partial_json", "")});
+        } else if (type == "thinking_delta" || type == "signature_delta") {
+            // Extended-thinking models can emit thinking_delta blocks even
+            // when we don't enable thinking via the request body — Anthropic
+            // routes some opus turns through an implicit reasoning pass. We
+            // don't render thinking content in the UI yet, but bumping the
+            // stream's byte counter via a zero-length text delta keeps the
+            // tok/s display from showing 0 while the model is actually
+            // working. Without this, a long reasoning pass looks identical
+            // to a stalled stream and the user just cancels.
+            ++ctx.thinking_deltas;
         }
     } else if (name == "content_block_stop") {
         if (ctx.in_tool_use) {
@@ -230,8 +281,13 @@ void dispatch_event(StreamCtx& ctx, const std::string& name, const std::string& 
         }
     } else if (name == "message_delta") {
         if (j.contains("usage")) {
-            int out = j["usage"].value("output_tokens", 0);
-            ctx.sink(StreamUsage{0, out});
+            const auto& u = j["usage"];
+            StreamUsage su;
+            su.input_tokens                = u.value("input_tokens", 0);
+            su.output_tokens               = u.value("output_tokens", 0);
+            su.cache_creation_input_tokens = u.value("cache_creation_input_tokens", 0);
+            su.cache_read_input_tokens     = u.value("cache_read_input_tokens", 0);
+            ctx.sink(su);
         }
         if (j.contains("delta") && j["delta"].contains("stop_reason")
             && j["delta"]["stop_reason"].is_string()) {
@@ -284,6 +340,12 @@ json tool_spec_to_json(const ToolSpec& s) {
     j["name"] = s.name;
     j["description"] = s.description;
     j["input_schema"] = s.input_schema;
+    // Anthropic's fine-grained tool streaming opt-in (per-tool field).
+    // Only emit when true so cache-key shape matches CC's tool blocks for
+    // tools that don't use it. GA on Claude 4.6+; gated by the
+    // `fine-grained-tool-streaming-2025-05-14` beta header on older models
+    // (we send that beta unconditionally so the field is always honored).
+    if (s.eager_input_streaming) j["eager_input_streaming"] = true;
     return j;
 }
 
@@ -320,20 +382,36 @@ constexpr const char* stainless_arch() {
 }
 
 // Pick the anthropic-beta value list for /v1/messages exactly the way the
-// cli.js gate `y1A(model)` does (cli.js line 1504): drop claude-code on
-// haiku models, gate context-1m on `[1m]` model suffix, always send the
-// oauth beta on Bearer-auth, and ride prompt-caching-scope by default since
-// the latest CLI does. We deliberately omit the statsig-gated / interleaved-
-// thinking flags — they're harmless to add but only switch on for first-
-// party REPL contexts and we don't have the statsig signal here.
-std::string select_betas(std::string_view model, bool is_oauth) {
+// Mirrors Claude Code v2.1.113's `fR8(model)` cocktail builder for the
+// firstParty path, MINUS the two thinking betas. Why we deviate from CC:
+//
+// `interleaved-thinking-2025-05-14` lets the model plan between content
+// blocks; combined with `redact-thinking-2026-02-12` (which suppresses the
+// thinking deltas from the wire), the result on long write/edit calls was
+// 20-30 s of dead-air between a tool_use's `display_description` and its
+// `content` field — the model was generating redacted thinking tokens we
+// never see, then dumping the whole `content` body in one burst. CC papers
+// over this with a "Thinking…" spinner; moha's TUI doesn't, so it just looks
+// frozen. Dropping both betas forces the model to start emitting `content`
+// immediately. If you ever want to render thinking blocks, drop only the
+// redact one and surface the visible thinking deltas in the UI.
+std::string select_betas(std::string_view model, bool is_oauth,
+                         bool any_eager_streaming = false) {
     std::vector<std::string_view> b;
-    const bool is_haiku = model.find("haiku") != std::string_view::npos;
-    if (!is_haiku) b.emplace_back(headers::beta_claude_code);
-    if (is_oauth)  b.emplace_back(headers::beta_oauth);
+    const bool is_haiku   = model.find("haiku")     != std::string_view::npos;
+    const bool is_claude4 = model.find("opus-4")    != std::string_view::npos
+                         || model.find("sonnet-4")  != std::string_view::npos
+                         || model.find("haiku-4")   != std::string_view::npos;
+
+    if (!is_haiku)   b.emplace_back(headers::beta_claude_code);          // !q
+    if (is_oauth)    b.emplace_back(headers::beta_oauth);                // Hq()
     if (model.find("[1m]") != std::string_view::npos)
-        b.emplace_back(headers::beta_context_1m);
-    b.emplace_back(headers::beta_prompt_cache_scope);
+                     b.emplace_back(headers::beta_context_1m);           // AL(H)
+    if (is_claude4)  b.emplace_back(headers::beta_context_management);   // eU(provider) && CR4(H)
+    b.emplace_back(headers::beta_prompt_cache_scope);                    // _ (fa() — always true firstParty)
+    if (any_eager_streaming)
+                     b.emplace_back(headers::beta_fine_grained_streaming);
+
     std::string out;
     for (size_t i = 0; i < b.size(); ++i) {
         if (i) out.push_back(',');
@@ -345,10 +423,15 @@ std::string select_betas(std::string_view model, bool is_oauth) {
 // Build the lowercase HTTP/2 header set in the same order Claude Code lays
 // them out. Order isn't semantically required (HTTP doesn't care) but
 // matching it makes wireshark dumps line up cleanly during debugging.
+//
+// `streaming=true` adds the same x-stainless-helper-method+x-stainless-helper
+// pair that cli.js's MessageStream._createMessage() injects when entering the
+// BetaToolRunner agent loop — Anthropic's edge keys some quotas off these.
 http::Headers build_request_headers(bool is_oauth,
                                     const std::string& auth_header,
                                     std::string_view beta_value,
-                                    int timeout_seconds) {
+                                    int timeout_seconds,
+                                    bool streaming = false) {
     http::Headers h;
     h.push_back({"accept",         "application/json"});
     h.push_back({"content-type",   "application/json"});
@@ -366,6 +449,13 @@ http::Headers build_request_headers(bool is_oauth,
     h.push_back({"x-stainless-runtime-version", headers::node_runtime_ver});
     h.push_back({"x-stainless-retry-count",     "0"});
     h.push_back({"x-stainless-timeout",         std::to_string(timeout_seconds)});
+    if (streaming) {
+        // .stream() helpers in cli.js always set helper-method=stream; the
+        // sibling x-stainless-helper carries the agent-loop tag so Anthropic
+        // can distinguish raw API consumers from the official tool runner.
+        h.push_back({"x-stainless-helper-method", "stream"});
+        h.push_back({"x-stainless-helper",        "BetaToolRunner"});
+    }
     if (is_oauth) h.push_back({"authorization", auth_header});
     else          h.push_back({"x-api-key",     auth_header});
     return h;
@@ -407,11 +497,15 @@ std::string machine_id_hex(int nibbles) {
 }
 
 std::string make_user_id() {
-    // `user_<email-hash:8>_account_<uuid:32>_session_<uuid:32>` — fixed
-    // widths so the regex Anthropic's edge applies (if any) accepts it.
-    auto email = machine_id_hex(8);
-    auto acct  = machine_id_hex(32);
-    // Per-process session id: fold high-resolution clock into another FNV.
+    // CC v2.1.113's `T7H()` returns `metadata.user_id` as a JSON-stringified
+    // object: `{"device_id":..,"account_uuid":..,"session_id":..}`. Earlier
+    // CLI builds used the flat `user_<hex>_account_<hex>_session_<hex>` shape
+    // — moha shipped that and it correlated with a 20-30 s mid-stream pause
+    // on long tool_use bodies. Anthropic's edge appears to inspect this field
+    // for routing/quota; matching the new shape byte-for-byte is part of the
+    // fix. We don't own a real account UUID under OAuth here, so we leave it
+    // empty exactly as CC does when one isn't available.
+    auto device_id  = machine_id_hex(32);
     auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
     uint64_t s1 = 0xcbf29ce484222325ull;
     for (int i = 0; i < 8; ++i) { s1 ^= (now >> (i*8)) & 0xff; s1 *= 0x100000001b3ull; }
@@ -419,7 +513,12 @@ std::string make_user_id() {
     char buf[33];
     std::snprintf(buf, sizeof(buf), "%016llx%016llx",
                   (unsigned long long)s1, (unsigned long long)s2);
-    return "user_" + email + "_account_" + acct + "_session_" + std::string(buf, 32);
+    auto session_id = std::string(buf, 32);
+    return nlohmann::json{
+        {"device_id",    device_id},
+        {"account_uuid", ""},
+        {"session_id",   session_id},
+    }.dump();
 }
 
 } // namespace
@@ -498,30 +597,32 @@ std::string default_system_prompt() {
     try { cwd = std::filesystem::current_path().string(); } catch (...) {}
 
     std::ostringstream oss;
-    oss << "You are Moha, a terminal coding assistant based on Claude, "
-        << "working in the user's current directory like Zed's agent or "
-        << "Claude Code. Be concise; let tool cards speak for themselves "
-        << "rather than narrating every step.\n\n"
+    oss << "You are Moha, a terminal coding assistant. Act, don't ask. "
+        << "When the user says something vague (\"edit it\", \"make it "
+        << "better\", \"improve it\", \"make it interesting\", \"fix it\"), "
+        << "make a reasonable improvement yourself with `edit` — do NOT "
+        << "respond with a list of options or clarifying questions. Keep "
+        << "prose short; let tool cards speak for themselves.\n\n"
         << "<file-editing>\n"
-        << "  - Modify existing files with `edit` (one or more "
-        << "old_text→new_text substitutions). It produces a clean diff and "
-        << "streams less data than rewriting the whole file.\n"
-        << "  - Use `write` ONLY when (a) creating a brand-new file, or "
-        << "(b) regenerating an entire file from scratch (format conversion, "
-        << "full code generation). Never use `write` to change a few lines "
-        << "of an existing file.\n"
-        << "  - When editing, `read` the file first if you don't already "
-        << "have its current contents — `edit.old_text` must match exactly.\n"
-        << "  - NEVER shell out (cat/echo/sed/heredoc/printf) for file IO. "
-        << "One `write` or `edit` call per file change.\n"
+        << "  - For ANY change to a file that already exists, use `edit`. "
+        << "If the file is in conversation history (you wrote it, or you "
+        << "read it earlier), construct `edit.old_text` from memory — do "
+        << "NOT re-read it.\n"
+        << "  - `write` is ONLY for files that do not exist yet. If the "
+        << "file exists, you must use `edit`, even for big changes (chain "
+        << "multiple `edit` calls if needed). Do not call `write` on an "
+        << "existing file under any circumstances. Calling `write` on an "
+        << "existing file dumps the entire body over the wire and stalls "
+        << "the stream — it is the single worst latency choice available "
+        << "to you.\n"
+        << "  - `edit.old_text` must match the file exactly (indentation "
+        << "matters; trailing whitespace is tolerated). If unsure, `read` "
+        << "the relevant slice first.\n"
+        << "  - NEVER shell out (cat/echo/sed/heredoc/printf) for file IO.\n"
         << "  - ALWAYS include a brief `display_description` on `write` "
-        << "and `edit` calls (e.g. 'Add retry on 429'). It shows in the "
-        << "tool card while the file streams, so the user sees what you "
-        << "are doing before the bytes finish arriving.\n"
-        << "  - Tool inputs stream as JSON. The schemas list `path` first "
-        << "for a reason: emit it (and `display_description`) before the "
-        << "long fields (`content`, `edits`) so the UI paints meaningful "
-        << "context immediately. Don't reorder.\n"
+        << "and `edit`. It paints in the tool card before the long fields "
+        << "stream — schemas list `path` and `display_description` first "
+        << "for that reason, don't reorder.\n"
         << "</file-editing>\n\n"
         << "<shell>\n"
         << "  - Use `bash` for commands. Explain destructive ones before "
@@ -571,30 +672,58 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
     body["max_tokens"] = req.max_tokens;
     body["stream"]     = true;
 
-    if (is_oauth) {
-        // Two text blocks, the second cache-pinned, mirrors how cli.js
-        // (line ~5641) lays out the system prompt — first block is the
-        // immutable Claude Code preamble; second is the runtime-derived
-        // environment text. Cached prefixes survive across turns.
+    // GA-stable ephemeral cache breakpoint — no `ttl` (defaults to 5 min) and
+    // no `scope` (defaults to per-organization). Claude Code's `Dt6` adds
+    // `ttl:"1h"` when `extended-cache-ttl-2025-04-11` is in its beta header
+    // set; we don't ride that beta, and sending `ttl:"1h"` without the gate
+    // makes Anthropic's edge silently drop the breakpoint — every turn becomes
+    // a cache miss and the stream gets routed through a throttled tier (~1-2
+    // tok/s on opus). The 5 min default is plenty for a back-to-back REPL.
+    const json kCacheCtl = {{"type", "ephemeral"}};
+
+    // System is always sent as a content-block array so we can attach
+    // cache_control regardless of auth style. OAuth additionally prepends
+    // the immutable Claude Code preamble (cli.js line ~5641) so Anthropic's
+    // edge accepts the OAuth token; API-key callers skip that preamble.
+    {
         json sys = json::array();
-        sys.push_back({
-            {"type", "text"},
-            {"text", "You are Claude Code, Anthropic's official CLI for Claude."}
-        });
+        if (is_oauth) {
+            sys.push_back({
+                {"type", "text"},
+                {"text", "You are Claude Code, Anthropic's official CLI for Claude."}
+            });
+        }
         sys.push_back({
             {"type", "text"},
             {"text", req.system_prompt},
-            {"cache_control", {{"type", "ephemeral"}}}
+            {"cache_control", kCacheCtl}
         });
         body["system"] = std::move(sys);
-    } else {
-        body["system"] = req.system_prompt;
     }
 
-    body["messages"] = build_messages(Thread{ThreadId{""}, "", req.messages, {}, {}});
+    json msgs_j = build_messages(Thread{ThreadId{""}, "", req.messages, {}, {}});
+    // Conversation cache breakpoints: cli.js pins BOTH the second-to-last
+    // and the last message's last content block (see auto-mode classifier
+    // and main loop). Two breakpoints enable rolling re-use — turn N's last
+    // breakpoint becomes turn N+1's second-to-last, so the cached prefix
+    // matches incrementally. With system + last-tool we sit at the 4-slot
+    // Anthropic ceiling.
+    auto pin_last_block = [&](json& msg) {
+        if (!msg.contains("content") || !msg["content"].is_array()
+            || msg["content"].empty()) return;
+        msg["content"].back()["cache_control"] = kCacheCtl;
+    };
+    if (msgs_j.size() >= 2) pin_last_block(msgs_j[msgs_j.size() - 2]);
+    if (!msgs_j.empty())    pin_last_block(msgs_j.back());
+    body["messages"] = std::move(msgs_j);
     if (!req.tools.empty()) {
         json tools_j = json::array();
         for (const auto& t : req.tools) tools_j.push_back(tool_spec_to_json(t));
+        // Tools cache breakpoint goes on the LAST tool — the schema array is
+        // serialized in order and Anthropic's edge caches the prefix up to
+        // and including the marked block. Matches cli.js where the tool list
+        // is built once per session and the last entry carries cache_control.
+        tools_j.back()["cache_control"] = kCacheCtl;
         body["tools"] = std::move(tools_j);
     }
     body["metadata"] = json{{"user_id", make_user_id()}};
@@ -612,9 +741,16 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
     // `?beta=true` matches `beta.messages.create` in the SDK (cli.js line 393)
     // — the same path Anthropic's edge gates the beta header set against.
     hreq.path    = "/v1/messages?beta=true";
+    // 300 s matches cli.js mb1(): API_TIMEOUT_MS env override or default 300 s
+    // for local (120 s for CLAUDE_CODE_REMOTE). x-stainless-timeout is
+    // advertisement, not enforcement — our actual stream is unbounded with
+    // cancellation polled at frame boundaries.
+    const bool any_eager = std::ranges::any_of(req.tools,
+        [](const auto& t){ return t.eager_input_streaming; });
     hreq.headers = build_request_headers(is_oauth, req.auth_header,
-                                         select_betas(req.model, is_oauth),
-                                         /*timeout_seconds=*/600);
+                                         select_betas(req.model, is_oauth, any_eager),
+                                         /*timeout_seconds=*/300,
+                                         /*streaming=*/true);
     hreq.body    = std::move(body_str);
 
     // We split on HTTP status: 2xx → feed SSE chunks straight to the parser;
@@ -647,8 +783,9 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
     auto result = http::default_client().stream(hreq, std::move(handler),
                                                 tos, std::move(cancel));
 
-    dbg("==== http status=%d transport=%s ====\n", http_status,
-        result ? "ok" : result.error().c_str());
+    dbg("==== http status=%d transport=%s thinking_deltas=%d ====\n",
+        http_status, result ? "ok" : result.error().c_str(),
+        ctx.thinking_deltas);
 
     if (!result) {
         // Network / TLS / nghttp2-level error — never produced a complete SSE

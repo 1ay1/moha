@@ -24,7 +24,8 @@ public:
         for (auto& t : req.tools)
             areq.tools.push_back({std::move(t.name),
                                   std::move(t.description),
-                                  std::move(t.input_schema)});
+                                  std::move(t.input_schema),
+                                  t.eager_input_streaming});
         run_stream_sync(std::move(areq), std::move(sink), std::move(req.cancel));
     }
 };

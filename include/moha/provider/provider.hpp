@@ -26,6 +26,10 @@ struct ToolSpec {
     std::string name;
     std::string description;
     nlohmann::json input_schema;
+    // Anthropic's fine-grained tool streaming flag — see ToolDef in
+    // tool/registry.hpp for the full story. Mirrored on the wire as
+    // `eager_input_streaming: true` per tool when set.
+    bool eager_input_streaming = false;
 };
 
 struct Request {
@@ -33,7 +37,18 @@ struct Request {
     std::string system_prompt;
     std::vector<Message> messages;
     std::vector<ToolSpec> tools;
-    int max_tokens = 32000;
+    // Single source of truth for the per-request output cap. 16384 matches
+    // Claude Code v2.1.113's main-loop config (the binary's docs explicitly
+    // warn that `max_tokens > ~16000` puts traffic on a slower path that
+    // risks SDK HTTP timeouts). Earlier 64000 default was correlated with
+    // 20-30 s mid-stream pauses on long write/edit calls.
+    //
+    // Trade-off: a single tool_use whose `content` field exceeds ~12-13k
+    // tokens of file body will hit the cap and arrive truncated (model burns
+    // its budget streaming input_json_delta, then stop_reason=max_tokens).
+    // For most edits/writes this is fine; bump per-request for known-huge
+    // generations.
+    int max_tokens = 16384;
 
     std::string auth_header;
     auth::Style auth_style = auth::Style::ApiKey;

@@ -27,7 +27,15 @@ struct StreamTextDelta { std::string text; };
 struct StreamToolUseStart { ToolCallId id; ToolName name; };
 struct StreamToolUseDelta { std::string partial_json; };
 struct StreamToolUseEnd {};
-struct StreamUsage { int input_tokens; int output_tokens; };
+// Mirrors Anthropic's message.usage shape. cache_* fields are non-zero only
+// when the request hit a cache_control breakpoint. Fields default to 0 so
+// callers that only care about input/output keep working.
+struct StreamUsage {
+    int input_tokens               = 0;
+    int output_tokens              = 0;
+    int cache_creation_input_tokens = 0;
+    int cache_read_input_tokens    = 0;
+};
 // `stop_reason` mirrors Anthropic's message_delta.delta.stop_reason
 // ("end_turn", "tool_use", "max_tokens", "stop_sequence", or empty when the
 // stream ended without one). The reducer uses this to distinguish a clean

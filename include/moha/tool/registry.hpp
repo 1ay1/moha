@@ -78,6 +78,17 @@ struct ToolDef {
     std::string description;
     nlohmann::json input_schema;
 
+    // Anthropic's fine-grained tool streaming flag (GA on Claude 4.6, gated by
+    // beta `fine-grained-tool-streaming-2025-05-14` on older models). When set,
+    // the API streams `input_json_delta` events token-by-token as the model
+    // emits the tool input, instead of buffering and trickling the whole tool
+    // input in larger chunks. Decisive for `write` (multi-KB content body):
+    // without this, big writes drop from ~60 tok/s to ~1 tok/s as Anthropic's
+    // edge holds bytes for batching. CC sets this when `tengu_fgts` statsig
+    // is enabled or `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=1`; Zed
+    // sets it per-tool that opts in via `supports_input_streaming()`.
+    bool eager_input_streaming = false;
+
     std::function<bool(Profile)> needs_permission;
     std::function<ExecResult(const nlohmann::json& args)> execute;
 };
