@@ -80,6 +80,19 @@ std::string write_file(const fs::path& p, const std::string& content) {
     return {};
 }
 
+// Structured subprocess result. Callers that want human-formatted output
+// (bash tool) build a message per-state (success/fail/timeout/truncated)
+// following Zed's terminal_tool conventions. Callers that just want the
+// captured bytes (git, diagnostics) use the legacy string wrapper below.
+struct CmdResult {
+    std::string output;      // captured stdout+stderr, possibly truncated
+    int         exit_code  = 0;
+    bool        timed_out  = false;
+    bool        truncated  = false;
+    bool        started    = true;
+    std::string start_error; // populated when started=false
+};
+
 #ifdef _WIN32
 // CreateProcess-based runner. Redirects the child's stdin to NUL so it cannot
 // steal keystrokes from the TUI or disturb the console mode. stdout+stderr
@@ -90,8 +103,9 @@ std::string write_file(const fs::path& p, const std::string& content) {
 //
 // Takes a fully prepared command line. Callers that want shell semantics wrap
 // in `cmd.exe /S /C "..."`; callers that want direct exec build a quoted argv.
-std::string run_win32_cmdline(const std::string& cmdline, int max_chars,
+CmdResult run_win32_cmdline_s(const std::string& cmdline, int max_chars,
                               int timeout_secs) {
+    CmdResult r;
     HANDLE h_stdin = ::GetStdHandle(STD_INPUT_HANDLE);
     DWORD saved_in_mode = 0;
     bool  have_saved_mode =
@@ -104,7 +118,9 @@ std::string run_win32_cmdline(const std::string& cmdline, int max_chars,
 
     HANDLE rd = nullptr, wr = nullptr;
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
-    if (!::CreatePipe(&rd, &wr, &sa, 0)) return "[CreatePipe failed]";
+    if (!::CreatePipe(&rd, &wr, &sa, 0)) {
+        r.started = false; r.start_error = "CreatePipe failed"; return r;
+    }
     ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
 
     HANDLE nul = ::CreateFileA("NUL", GENERIC_READ,
@@ -112,7 +128,7 @@ std::string run_win32_cmdline(const std::string& cmdline, int max_chars,
                                OPEN_EXISTING, 0, nullptr);
     if (nul == INVALID_HANDLE_VALUE) {
         ::CloseHandle(rd); ::CloseHandle(wr);
-        return "[CreateFile(NUL) failed]";
+        r.started = false; r.start_error = "CreateFile(NUL) failed"; return r;
     }
 
     STARTUPINFOA si{};
@@ -134,23 +150,24 @@ std::string run_win32_cmdline(const std::string& cmdline, int max_chars,
     if (!ok) {
         ::CloseHandle(rd);
         DWORD e = ::GetLastError();
-        return "[CreateProcess failed: " + std::to_string(e) + "]";
+        r.started = false;
+        r.start_error = "CreateProcess failed (" + std::to_string(e) + ")";
+        return r;
     }
 
     std::ostringstream out;
     size_t total = 0;
-    bool truncated = false;
     char buf[4096];
     for (;;) {
         DWORD n = 0;
         if (!::ReadFile(rd, buf, sizeof(buf), &n, nullptr) || n == 0) break;
-        if (!truncated) {
+        if (!r.truncated) {
             size_t room = (total < (size_t)max_chars)
                         ? (size_t)max_chars - total : 0;
             size_t write = n < room ? n : room;
             out.write(buf, (std::streamsize)write);
             total += write;
-            if (write < (size_t)n) { truncated = true; out << "\n[output truncated]"; }
+            if (write < (size_t)n) r.truncated = true;
         }
     }
     ::CloseHandle(rd);
@@ -160,19 +177,18 @@ std::string run_win32_cmdline(const std::string& cmdline, int max_chars,
                                        ? (DWORD)timeout_secs * 1000u
                                        : INFINITE);
     DWORD exit_code = 0;
-    std::string output = out.str();
     if (wait == WAIT_TIMEOUT) {
         ::TerminateProcess(pi.hProcess, 1);
         ::WaitForSingleObject(pi.hProcess, 2000);
-        output += "\n[timed out after " + std::to_string(timeout_secs) + "s]";
+        r.timed_out = true;
     } else {
         ::GetExitCodeProcess(pi.hProcess, &exit_code);
-        if (exit_code != 0)
-            output += "\n[exit code " + std::to_string((int)exit_code) + "]";
+        r.exit_code = (int)exit_code;
     }
     ::CloseHandle(pi.hProcess);
     ::CloseHandle(pi.hThread);
-    return output;
+    r.output = out.str();
+    return r;
 }
 
 // CommandLineToArgvW-compatible quoting (see MSDN "Parsing C++ Command-Line
@@ -215,61 +231,113 @@ std::string posix_shell_quote(const std::string& s) {
 }
 #endif
 
-std::string run_command(const std::string& cmd, int max_chars = 30000,
+CmdResult run_command_s(const std::string& cmd, int max_chars = 30000,
                         int timeout_secs = 120) {
 #ifdef _WIN32
     // cmd.exe /S /C "…" — /S tells cmd to strip just the outermost quotes and
     // leave everything else (including embedded "...") intact.
-    return run_win32_cmdline("cmd.exe /S /C \"" + cmd + "\"",
-                             max_chars, timeout_secs);
+    return run_win32_cmdline_s("cmd.exe /S /C \"" + cmd + "\"",
+                               max_chars, timeout_secs);
 #else
+    CmdResult r;
     // Enforce a wall-clock timeout via GNU coreutils `timeout`. Without this,
     // a hung command (network wait, infinite loop, REPL with no stdin close)
     // blocks the worker thread forever and the UI hangs on the spinner.
     std::string wrapped = "timeout --kill-after=2s " + std::to_string(timeout_secs)
                         + "s sh -c " + posix_shell_quote(cmd) + " 2>&1";
     FILE* pipe = popen(wrapped.c_str(), "r");
-    if (!pipe) return "[popen failed]";
+    if (!pipe) { r.started = false; r.start_error = "popen failed"; return r; }
     std::ostringstream out;
     std::array<char, 4096> buf{};
     size_t total = 0;
     while (fgets(buf.data(), (int)buf.size(), pipe)) {
-        out << buf.data();
-        total += std::strlen(buf.data());
-        if (total > (size_t)max_chars) { out << "\n[output truncated]"; break; }
+        size_t n = std::strlen(buf.data());
+        if (r.truncated) continue;  // drain rest; allow process to finish cleanly
+        if (total + n > (size_t)max_chars) {
+            out.write(buf.data(), (std::streamsize)((size_t)max_chars - total));
+            total = (size_t)max_chars;
+            r.truncated = true;
+        } else {
+            out << buf.data();
+            total += n;
+        }
     }
     int rc = pclose(pipe);
-    std::string output = out.str();
+    r.output = out.str();
     // GNU `timeout` exits 124 on timeout, 137 on KILL after grace.
-    if (rc == 124 * 256 || rc == 137 * 256)
-        output += "\n[timed out after " + std::to_string(timeout_secs) + "s]";
-    else if (rc != 0)
-        output += "\n[exit code " + std::to_string(rc) + "]";
-    return output;
+    if (rc == 124 * 256 || rc == 137 * 256) r.timed_out = true;
+    else r.exit_code = (rc >> 8) & 0xff;
+    return r;
 #endif
 }
 
 // Execute a program with a pre-built argv, bypassing the shell. Use this for
 // anything where we control the argv and don't want users' paths, commit
 // messages, refs, or format strings mangled by cmd.exe/sh quoting rules.
-std::string run_argv(const std::vector<std::string>& argv,
+CmdResult run_argv_s(const std::vector<std::string>& argv,
                      int max_chars = 30000, int timeout_secs = 120) {
-    if (argv.empty()) return "[empty command]";
+    CmdResult r;
+    if (argv.empty()) { r.started = false; r.start_error = "empty command"; return r; }
 #ifdef _WIN32
     std::string cmdline;
     for (size_t i = 0; i < argv.size(); ++i) {
         if (i) cmdline.push_back(' ');
         cmdline += win_quote_arg(argv[i]);
     }
-    return run_win32_cmdline(cmdline, max_chars, timeout_secs);
+    return run_win32_cmdline_s(cmdline, max_chars, timeout_secs);
 #else
     std::string cmd;
     for (size_t i = 0; i < argv.size(); ++i) {
         if (i) cmd.push_back(' ');
         cmd += posix_shell_quote(argv[i]);
     }
-    return run_command(cmd, max_chars, timeout_secs);
+    return run_command_s(cmd, max_chars, timeout_secs);
 #endif
+}
+
+// Flatten a CmdResult into a single string in the pre-refactor shape. Used
+// by git/diagnostics tools that have always just sliced suffix markers out
+// of the concatenated blob — preserving that interface keeps their parsers
+// (e.g. git_commit's `out.find("[exit code")` check) working unchanged.
+std::string legacy_format(const CmdResult& r, int timeout_secs) {
+    if (!r.started) return "[" + r.start_error + "]";
+    std::string o = r.output;
+    if (r.truncated) o += "\n[output truncated]";
+    if (r.timed_out) o += "\n[timed out after " + std::to_string(timeout_secs) + "s]";
+    else if (r.exit_code != 0) o += "\n[exit code " + std::to_string(r.exit_code) + "]";
+    return o;
+}
+
+std::string run_command(const std::string& cmd, int max_chars = 30000,
+                        int timeout_secs = 120) {
+    return legacy_format(run_command_s(cmd, max_chars, timeout_secs), timeout_secs);
+}
+
+std::string run_argv(const std::vector<std::string>& argv,
+                     int max_chars = 30000, int timeout_secs = 120) {
+    return legacy_format(run_argv_s(argv, max_chars, timeout_secs), timeout_secs);
+}
+
+bool should_skip_dir(const std::string& name) {
+    static const std::vector<std::string> skip = {
+        ".git", "node_modules", "build", "target", "__pycache__",
+        ".cache", "vendor", "dist", "out", ".next", ".venv",
+        "cmake-build-debug", "cmake-build-release", ".idea", ".vscode",
+        "_deps", "third_party", "thirdparty", "3rdparty", "external",
+    };
+    for (const auto& s : skip) if (name == s) return true;
+    return false;
+}
+
+bool is_binary_file(const fs::path& p) {
+    std::ifstream ifs(p, std::ios::binary);
+    if (!ifs) return true;
+    char buf[512];
+    ifs.read(buf, sizeof(buf));
+    auto n = ifs.gcount();
+    for (int i = 0; i < n; ++i)
+        if (buf[i] == '\0') return true;
+    return false;
 }
 
 // ---- Read ------------------------------------------------------------------
@@ -300,6 +368,15 @@ ToolDef tool_read() {
             return std::unexpected(ToolError{"file not found: " + p.string()});
         if (!fs::is_regular_file(p, ec))
             return std::unexpected(ToolError{"not a regular file: " + p.string()});
+        if (is_binary_file(p)) {
+            uintmax_t sz = fs::file_size(p, ec);
+            std::ostringstream msg;
+            msg << "cannot read binary file: " << p.string()
+                << " (" << (ec ? 0 : sz) << " bytes). "
+                << "Use the bash tool with `file`, `hexdump`, or similar "
+                << "if you need to inspect it.";
+            return std::unexpected(ToolError{msg.str()});
+        }
         auto content = read_file(p);
         std::istringstream iss(content);
         std::ostringstream out;
@@ -349,17 +426,24 @@ ToolDef tool_write() {
         auto p = normalize_path(raw);
         std::string original;
         std::error_code ec;
-        if (fs::exists(p, ec)) {
+        bool exists = fs::exists(p, ec);
+        if (exists) {
             if (!fs::is_regular_file(p, ec))
                 return std::unexpected(ToolError{"not a regular file: " + p.string()});
             original = read_file(p);
         }
+        // No-op short-circuit: an identical rewrite is often the model
+        // "confirming" a file state it already reached. Skipping the fs
+        // touch avoids spurious mtime bumps that break incremental builds.
+        if (exists && original == content)
+            return ToolOutput{"File already matches content — no changes written.",
+                              std::nullopt};
         auto change = diff::compute(p.string(), original, content);
         if (auto err = write_file(p, content); !err.empty())
             return std::unexpected(ToolError{err});
         std::ostringstream msg;
-        msg << "wrote " << p.string() << " (" << change.added << "+ "
-            << change.removed << "-)";
+        msg << (exists ? "Overwrote " : "Created ") << p.string()
+            << " (" << change.added << "+ " << change.removed << "-)";
         return ToolOutput{msg.str(), std::move(change)};
     };
     return t;
@@ -435,12 +519,21 @@ ToolDef tool_edit() {
                     + "; add surrounding context or pass replace_all=true"});
             updated.replace(pos, old_s.size(), new_s);
         }
+        if (original == updated)
+            return ToolOutput{"No edits were made — old_string and new_string "
+                              "produced identical content.", std::nullopt};
         auto change = diff::compute(p.string(), original, updated);
         if (auto err = write_file(p, updated); !err.empty())
             return std::unexpected(ToolError{err});
+        // Return a ```diff fenced block so the model sees exactly what changed
+        // (not just a +/- count). This makes follow-up edits more accurate and
+        // mirrors Zed's EditFileTool output shape.
+        std::string unified = diff::render_unified(change);
         std::ostringstream msg;
-        msg << "edited " << p.string() << " (" << change.added << "+ "
-            << change.removed << "-)";
+        msg << "Edited " << p.string() << " (" << change.added << "+ "
+            << change.removed << "-):\n\n```diff\n" << unified;
+        if (unified.empty() || unified.back() != '\n') msg << "\n";
+        msg << "```";
         return ToolOutput{msg.str(), std::move(change)};
     };
     return t;
@@ -481,61 +574,98 @@ ToolDef tool_bash() {
             return std::unexpected(ToolError{"command required"});
         int timeout = args.value("timeout", 120);
         if (timeout <= 0 || timeout > 600) timeout = 120;
-        auto output = run_command(cmd, 30000, timeout);
-        return ToolOutput{std::move(output), std::nullopt};
+        auto r = run_command_s(cmd, 30000, timeout);
+
+        // Zed-style per-state output. Keeping each state textually distinct
+        // helps the model interpret results: success+empty is affirmative
+        // (not ambiguous blank), failure names its exit code, and timeout
+        // surfaces the partial output rather than silently dropping it.
+        if (!r.started)
+            return std::unexpected(ToolError{
+                "failed to spawn command: " + r.start_error});
+
+        auto fence = [](const std::string& body) {
+            return std::string{"```\n"} + body + (body.empty() || body.back() == '\n'
+                                                  ? "" : "\n") + "```";
+        };
+
+        std::ostringstream out;
+        if (r.timed_out) {
+            if (r.output.empty()) {
+                out << "Command \"" << cmd << "\" timed out after "
+                    << timeout << "s. No output was captured.";
+            } else {
+                out << "Command \"" << cmd << "\" timed out after "
+                    << timeout << "s. Output captured before timeout:\n\n"
+                    << fence(r.output);
+            }
+        } else if (r.exit_code != 0) {
+            if (r.output.empty()) {
+                out << "Command \"" << cmd << "\" failed with exit code "
+                    << r.exit_code << ".";
+            } else {
+                out << "Command \"" << cmd << "\" failed with exit code "
+                    << r.exit_code << ".\n\n" << fence(r.output);
+            }
+        } else if (r.output.empty()) {
+            out << "Command executed successfully.";
+        } else {
+            out << fence(r.output);
+        }
+        if (r.truncated)
+            out << "\n\n[output truncated at 30000 bytes]";
+
+        return ToolOutput{out.str(), std::nullopt};
     };
     return t;
-}
-
-bool should_skip_dir(const std::string& name) {
-    static const std::vector<std::string> skip = {
-        ".git", "node_modules", "build", "target", "__pycache__",
-        ".cache", "vendor", "dist", "out", ".next", ".venv",
-        "cmake-build-debug", "cmake-build-release", ".idea", ".vscode",
-        "_deps", "third_party", "thirdparty", "3rdparty", "external",
-    };
-    for (const auto& s : skip) if (name == s) return true;
-    return false;
-}
-
-bool is_binary_file(const fs::path& p) {
-    std::ifstream ifs(p, std::ios::binary);
-    if (!ifs) return true;
-    char buf[512];
-    ifs.read(buf, sizeof(buf));
-    auto n = ifs.gcount();
-    for (int i = 0; i < n; ++i)
-        if (buf[i] == '\0') return true;
-    return false;
 }
 
 // ---- Grep ------------------------------------------------------------------
 ToolDef tool_grep() {
     ToolDef t;
     t.name = ToolName{std::string{"grep"}};
-    t.description = "Search for a regex pattern across files. Returns matching lines "
-                    "with file paths and line numbers. Truncated at 500 matches.";
+    t.description = "Search for a regex pattern across files. Returns matches grouped by "
+                    "file with 2 lines of context, paginated 20 results per page. "
+                    "Case-insensitive by default; pass case_sensitive=true for exact case. "
+                    "Use offset for subsequent pages.";
     t.input_schema = json{
         {"type","object"},
         {"required", {"pattern"}},
         {"properties", {
-            {"pattern", {{"type","string"}, {"description","Regex pattern to search for"}}},
-            {"path",    {{"type","string"}, {"description","Directory to search (default: cwd)"}}},
-            {"glob",    {{"type","string"}, {"description","File extension filter (e.g. *.cpp)"}}},
+            {"pattern",        {{"type","string"}, {"description","Regex pattern to search for"}}},
+            {"path",           {{"type","string"}, {"description","Directory to search (default: cwd)"}}},
+            {"glob",           {{"type","string"}, {"description","File extension filter (e.g. *.cpp)"}}},
+            {"case_sensitive", {{"type","boolean"}, {"description","Case-sensitive match (default: false)"}}},
+            {"offset",         {{"type","integer"}, {"description","Skip this many matches (for pagination)"}}},
         }},
     };
     t.needs_permission = [](Profile){ return false; };
     t.execute = [](const json& args) -> ExecResult {
+        constexpr int kPerPage = 20;
+        constexpr int kContext = 2;
+        constexpr int kMaxScanned = 500;   // hard cap on matches we collect overall
+
         std::string pat = args.value("pattern", "");
         std::string root = args.value("path", ".");
         std::string file_glob = args.value("glob", "");
+        bool case_sensitive = args.value("case_sensitive", false);
+        int offset = args.value("offset", 0);
+        if (offset < 0) offset = 0;
         if (pat.empty()) return std::unexpected(ToolError{"pattern required"});
+
+        auto flags = std::regex::ECMAScript;
+        if (!case_sensitive) flags = flags | std::regex::icase;
         std::regex re;
-        try { re = std::regex(pat); } catch (const std::regex_error& e) {
+        try { re = std::regex(pat, flags); } catch (const std::regex_error& e) {
             return std::unexpected(ToolError{std::string{"invalid regex '"} + pat + "': " + e.what()});
         }
-        std::ostringstream out;
-        int matches = 0;
+
+        // Collect matches grouped by file, so we don't re-read files we've
+        // already scanned when paginating within them.
+        struct FileHits { std::vector<std::string> lines; std::vector<int> match_rows; };
+        std::vector<std::pair<fs::path, FileHits>> files;
+        int total_matches = 0;
+
         std::error_code ec;
         for (auto it = fs::recursive_directory_iterator(root,
                     fs::directory_options::skip_permission_denied, ec);
@@ -558,18 +688,74 @@ ToolDef tool_grep() {
             if (is_binary_file(p)) continue;
             std::ifstream ifs(p);
             if (!ifs) continue;
+
+            FileHits fh;
             std::string line;
-            int n = 1;
-            while (std::getline(ifs, line)) {
-                if (std::regex_search(line, re)) {
-                    out << p.string() << ":" << n << ":" << line << "\n";
-                    if (++matches > 500) { out << "[>500 matches, truncated]\n"; goto done; }
+            while (std::getline(ifs, line)) fh.lines.push_back(line);
+            for (int i = 0; i < (int)fh.lines.size(); ++i) {
+                if (std::regex_search(fh.lines[i], re)) {
+                    fh.match_rows.push_back(i);    // 0-based row
+                    if (++total_matches >= kMaxScanned) break;
                 }
-                n++;
             }
+            if (!fh.match_rows.empty())
+                files.emplace_back(p, std::move(fh));
+            if (total_matches >= kMaxScanned) break;
         }
-        done:
-        if (matches == 0) return ToolOutput{"no matches", std::nullopt};
+
+        if (total_matches == 0) return ToolOutput{"No matches found.", std::nullopt};
+
+        // Page = matches [offset, offset+kPerPage). Walk files, emit markdown.
+        int shown = 0;
+        int skipped = 0;
+        std::ostringstream out;
+        for (const auto& [p, fh] : files) {
+            // Merge near-adjacent matches so their context windows collapse
+            // into a single fenced block (avoids duplicating lines when two
+            // matches are within 2*kContext of each other). Each "range" is
+            // [start_row, end_row] inclusive, referring to rows in fh.lines.
+            std::vector<std::pair<int,int>> page_ranges;
+            for (int row : fh.match_rows) {
+                if (skipped < offset) { skipped++; continue; }
+                if (shown >= kPerPage) break;
+                int start = std::max(0, row - kContext);
+                int end = std::min((int)fh.lines.size() - 1, row + kContext);
+                if (!page_ranges.empty() && start <= page_ranges.back().second + 1) {
+                    page_ranges.back().second = std::max(page_ranges.back().second, end);
+                } else {
+                    page_ranges.emplace_back(start, end);
+                }
+                shown++;
+            }
+            if (page_ranges.empty()) continue;
+
+            out << "## Matches in " << p.string() << "\n\n";
+            for (auto [s, e] : page_ranges) {
+                out << "### L" << (s + 1) << "-" << (e + 1) << "\n";
+                out << "```\n";
+                for (int i = s; i <= e; ++i) out << fh.lines[i] << "\n";
+                out << "```\n\n";
+            }
+            if (shown >= kPerPage) break;
+        }
+
+        // Footer: if more matches exist past this page, hint at next offset.
+        int remaining = total_matches - (offset + shown);
+        if (remaining > 0) {
+            out << "Showing matches " << (offset + 1) << "-" << (offset + shown)
+                << " of " << total_matches
+                << (total_matches == kMaxScanned ? "+ (scan limit reached)" : "")
+                << ". Use offset: " << (offset + kPerPage)
+                << " to see the next page.";
+        } else if (shown == 0) {
+            // offset beyond end
+            return ToolOutput{
+                "No matches on this page. Total matches: "
+                + std::to_string(total_matches)
+                + ". Try a smaller offset.", std::nullopt};
+        } else {
+            out << "Showing all " << total_matches << " matches.";
+        }
         return ToolOutput{out.str(), std::nullopt};
     };
     return t;

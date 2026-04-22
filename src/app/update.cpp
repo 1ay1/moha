@@ -21,6 +21,83 @@ namespace {
 using Step = std::pair<Model, Cmd<Msg>>;
 inline Step done(Model m) { return {std::move(m), Cmd<Msg>::none()}; }
 
+// Partial-JSON scalar sniffer. The Anthropic SSE stream delivers tool args as
+// `input_json_delta` chunks that form incomplete JSON until the tool_use block
+// closes. We want the widget to show the path/command/pattern live, not after
+// the block closes. Full nlohmann::json parse can't handle partial input, so
+// we walk the buffer by hand looking for a key we recognize, then collect its
+// string value until the closing quote. Returns std::nullopt until a fully
+// closed string is available. Zed uses `partial-json-fixer` for the same job.
+std::optional<std::string> sniff_string(const std::string& raw,
+                                        std::string_view key) {
+    std::string needle = "\"" + std::string{key} + "\"";
+    size_t p = raw.find(needle);
+    if (p == std::string::npos) return std::nullopt;
+    p += needle.size();
+    while (p < raw.size() && (raw[p] == ' ' || raw[p] == '\t' || raw[p] == '\n')) p++;
+    if (p >= raw.size() || raw[p] != ':') return std::nullopt;
+    p++;
+    while (p < raw.size() && (raw[p] == ' ' || raw[p] == '\t' || raw[p] == '\n')) p++;
+    if (p >= raw.size() || raw[p] != '"') return std::nullopt;
+    p++;
+    std::string out;
+    out.reserve(64);
+    while (p < raw.size()) {
+        char c = raw[p];
+        if (c == '\\') {
+            if (p + 1 >= raw.size()) return std::nullopt;  // wait for next delta
+            char n = raw[p + 1];
+            switch (n) {
+                case 'n': out += '\n'; break;
+                case 't': out += '\t'; break;
+                case 'r': out += '\r'; break;
+                case '"': out += '"';  break;
+                case '\\':out += '\\'; break;
+                case '/': out += '/';  break;
+                case 'b': out += '\b'; break;
+                case 'f': out += '\f'; break;
+                default:  out += n;    break;  // u-escapes degrade to literal
+            }
+            p += 2;
+        } else if (c == '"') {
+            return out;
+        } else {
+            out.push_back(c);
+            p++;
+        }
+    }
+    return std::nullopt;  // string not closed yet
+}
+
+// For a given tool, fill `tc.args` with whichever scalar field is most useful
+// to display in the card header. We write into `tc.args` (rather than a
+// separate preview field) so the existing view code — which reads path /
+// command / pattern from args — picks it up unchanged.
+void update_stream_preview(ToolUse& tc) {
+    auto try_set = [&](std::string_view key) {
+        auto v = sniff_string(tc.args_streaming, key);
+        if (!v) return false;
+        if (!tc.args.is_object()) tc.args = json::object();
+        auto& cur = tc.args[std::string{key}];
+        if (!cur.is_string() || cur.get<std::string>() != *v) {
+            cur = *v;
+            tc.mark_args_dirty();
+        }
+        return true;
+    };
+    const auto& n = tc.name.value;
+    if      (n == "read" || n == "write" || n == "edit" || n == "list_dir")
+        try_set("path");
+    else if (n == "bash") { try_set("command"); }
+    else if (n == "grep") { try_set("pattern"); try_set("path"); }
+    else if (n == "glob") { try_set("pattern"); }
+    else if (n == "find_definition") try_set("symbol");
+    else if (n == "web_fetch")       try_set("url");
+    else if (n == "web_search")      try_set("query");
+    else if (n == "diagnostics")     try_set("command");
+    else if (n == "git_commit")      try_set("message");
+}
+
 // ── View virtualization ───────────────────────────────────────────────────
 // When the transcript grows past kWindow messages, slice kChunk of the oldest
 // into terminal scrollback so maya's Yoga/paint cost stays O(window).  We
@@ -250,10 +327,11 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 && !m.current.messages.back().tool_calls.empty()) {
                 auto& tc = m.current.messages.back().tool_calls.back();
                 tc.args_streaming += e.partial_json;
-                // Defer parsing until StreamToolUseEnd — partial JSON fails
-                // every parse attempt during streaming, and the cost is O(n^2)
-                // in the arg size. args_streaming alone is enough to render
-                // a progress hint in the view.
+                // Defer the full json::parse until StreamToolUseEnd (O(n^2) on
+                // each delta otherwise), but do sniff the single "header" field
+                // (path, command, pattern, ...) so the tool card stops showing
+                // an empty title while the rest of the args stream in.
+                update_stream_preview(tc);
             }
             return done(std::move(m));
         },
