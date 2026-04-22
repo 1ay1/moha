@@ -108,6 +108,11 @@ struct ToolUse {
     nlohmann::json args;
     std::string    args_streaming;
     std::string    output;
+    // Live stdout+stderr snapshot for a running tool. Shown in the card while
+    // status == Running so the user sees progress immediately instead of
+    // waiting until the whole command finishes. Replaced by the formatted
+    // `output` once the terminal ToolExecOutput arrives.
+    std::string    progress_text;
     Status         status   = Status::Pending;
     bool           expanded = true;
     // Wall-clock stamps for progress reporting. `started_at` is set when the

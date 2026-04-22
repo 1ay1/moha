@@ -33,6 +33,12 @@ struct StreamError { std::string message; };
 
 // ── Tool execution (local) ───────────────────────────────────────────────
 struct ToolExecOutput { ToolCallId id; std::string output; bool error; };
+// Live progress snapshot from a running tool (e.g. bash stdout+stderr so far).
+// Contains the FULL accumulated output, not a delta — the update handler can
+// assign unconditionally without maintaining append state. Coalesced at the
+// subprocess boundary (~100 ms) so a chatty command doesn't flood the event
+// queue with micro-updates.
+struct ToolExecProgress { ToolCallId id; std::string snapshot; };
 
 // ── Permission ───────────────────────────────────────────────────────────
 struct PermissionApprove {};
@@ -99,7 +105,7 @@ using Msg = std::variant<
     StreamStarted, StreamTextDelta,
     StreamToolUseStart, StreamToolUseDelta, StreamToolUseEnd,
     StreamUsage, StreamFinished, StreamError,
-    ToolExecOutput,
+    ToolExecOutput, ToolExecProgress,
     PermissionApprove, PermissionReject, PermissionApproveAlways,
     OpenModelPicker, CloseModelPicker, ModelPickerMove, ModelPickerSelect, ModelPickerToggleFavorite, ModelsLoaded,
     OpenThreadList, CloseThreadList, ThreadListMove, ThreadListSelect, NewThread,

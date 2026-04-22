@@ -103,8 +103,26 @@ add_executable(moha
     src/io/persistence.cpp
     src/io/diff.cpp
 
-    # ── tool: registry + definitions ─────────────────────────────────
+    # ── tool: registry + per-tool implementations + shared util ──────
     src/tool/registry.cpp
+    src/tool/util/utf8.cpp
+    src/tool/util/fs_helpers.cpp
+    src/tool/util/glob.cpp
+    src/tool/util/subprocess.cpp
+    src/tool/util/bash_validate.cpp
+    src/tool/tools/read.cpp
+    src/tool/tools/write.cpp
+    src/tool/tools/edit.cpp
+    src/tool/tools/bash.cpp
+    src/tool/tools/grep.cpp
+    src/tool/tools/glob.cpp
+    src/tool/tools/list_dir.cpp
+    src/tool/tools/todo.cpp
+    src/tool/tools/web_fetch.cpp
+    src/tool/tools/web_search.cpp
+    src/tool/tools/find_definition.cpp
+    src/tool/tools/diagnostics.cpp
+    src/tool/tools/git.cpp
 
     # ── app: Elm-style runtime (init / update / subscribe / cmd) ─────
     src/app/deps.cpp

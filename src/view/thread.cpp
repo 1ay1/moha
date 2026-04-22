@@ -372,6 +372,11 @@ Element render_tool_call(const ToolUse& tc) {
             bt.set_exit_code(rc);
             if (rc != 0) bt.set_status(BashStatus::Failed);
             bt.set_output(strip_bash_output_fence(tc.output));
+        } else if (!tc.progress_text.empty()) {
+            // Live stream: stdout+stderr captured so far. Shown verbatim
+            // (no fence stripping — the fence is added only by the final
+            // formatter once the process exits).
+            bt.set_output(tc.progress_text);
         }
         return bt.build();
     }
@@ -388,6 +393,9 @@ Element render_tool_call(const ToolUse& tc) {
             bt.set_exit_code(rc);
             bt.set_status(rc == 0 ? BashStatus::Success : BashStatus::Failed);
             bt.set_output(strip_bash_output_fence(tc.output));
+        } else if (!tc.progress_text.empty()) {
+            bt.set_output(tc.progress_text);
+            bt.set_status(BashStatus::Running);
         } else {
             bt.set_status(map_status<BashTool>(tc.status,
                 BashStatus::Running, BashStatus::Failed, BashStatus::Success));

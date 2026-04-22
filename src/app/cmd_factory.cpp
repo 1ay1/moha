@@ -50,6 +50,15 @@ Cmd<Msg> run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args) {
          name = std::move(tool_name),
          args = std::move(args)]
         (std::function<void(Msg)> dispatch) {
+            // Install a thread-local progress sink *before* dispatch so the
+            // subprocess runner inside the tool can stream stdout+stderr to
+            // the UI as bytes arrive. RAII scope guarantees the sink is
+            // cleared even if the tool throws, so the next tool run can't
+            // inherit a stale dispatch lambda.
+            moha::tools::progress::Scope progress_scope{
+                [dispatch, id](std::string_view snapshot) {
+                    dispatch(ToolExecProgress{id, std::string{snapshot}});
+                }};
             try {
                 auto result = tool::DynamicDispatch::execute(name.value, args);
                 if (result) {

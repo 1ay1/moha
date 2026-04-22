@@ -228,6 +228,11 @@ void apply_tool_output(Model& m, const ToolCallId& id, std::string&& output, boo
                 tc.output = std::move(output);
                 tc.status = error ? ToolUse::Status::Error : ToolUse::Status::Done;
                 tc.finished_at = std::chrono::steady_clock::now();
+                // Live buffer has been superseded by the formatted result.
+                // Keep tc.progress_text empty so the view's fallback logic
+                // ("show progress_text while Running, output when Done")
+                // can't accidentally double-render stale bytes.
+                std::string{}.swap(tc.progress_text);
             }
 }
 
@@ -398,6 +403,20 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 for (auto& tc : last.tool_calls)
                     std::string{}.swap(tc.args_streaming);
             }
+            return done(std::move(m));
+        },
+
+        // ── Live tool progress (streaming subprocess output) ────────────
+        // Arrives from the subprocess runner every ~80 ms with the full
+        // accumulated output so far. We just set it — no Cmd to return —
+        // and rely on the existing Tick subscription (active during
+        // ExecutingTool) to re-render. Ignore if the tool has already
+        // finalised (a late snapshot racing the terminal ToolExecOutput).
+        [&](ToolExecProgress& e) -> Step {
+            for (auto& msg_ : m.current.messages)
+                for (auto& tc : msg_.tool_calls)
+                    if (tc.id == e.id && tc.status == ToolUse::Status::Running)
+                        tc.progress_text = std::move(e.snapshot);
             return done(std::move(m));
         },
 
