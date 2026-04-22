@@ -1,14 +1,16 @@
 #include "moha/tool/tools.hpp"
 #include "moha/tool/util/arg_reader.hpp"
 #include "moha/tool/util/tool_args.hpp"
-#include "moha/io/auth.hpp"
+#include "moha/io/http.hpp"
 
+#include <algorithm>
+#include <chrono>
+#include <expected>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
 namespace moha::tools {
@@ -31,10 +33,6 @@ struct WebFetchArgs {
     std::vector<std::pair<std::string, std::string>> headers;
     std::string display_description;
 };
-
-// Shared with web_search via extern linkage — both tools cap response size
-// at 200 KB so a misbehaving server can't blow the model's context.
-constexpr size_t kMaxFetchBytes = 200'000;
 
 std::expected<WebFetchArgs, ToolError> parse_web_fetch_args(const json& j) {
     util::ArgReader ar(j);
@@ -59,66 +57,79 @@ std::expected<WebFetchArgs, ToolError> parse_web_fetch_args(const json& j) {
     };
 }
 
-} // namespace
+// Cap the response body so a chatty server can't blow the model's context.
+constexpr size_t kMaxFetchBytes = 200'000;
 
-size_t web_fetch_write_cb(char* ptr, size_t size, size_t nmemb, void* userdata) {
-    auto* buf = static_cast<std::string*>(userdata);
-    size_t total = size * nmemb;
-    if (buf->size() + total > kMaxFetchBytes) {
-        buf->append(ptr, kMaxFetchBytes - buf->size());
-        return 0;
+// Parse https://host[:port]/path. http:// is rejected at the arg-validation
+// layer above (TLS-only), but we still need to handle the `:port` suffix and
+// query strings cleanly.
+struct ParsedUrl {
+    std::string host;
+    uint16_t port = 443;
+    std::string path = "/";
+};
+
+std::expected<ParsedUrl, std::string> parse_url(std::string_view url) {
+    constexpr std::string_view k = "https://";
+    if (!url.starts_with(k)) return std::unexpected(std::string{"missing https:// scheme"});
+    url.remove_prefix(k.size());
+    auto slash = url.find('/');
+    auto authority = url.substr(0, slash);
+    ParsedUrl out;
+    out.path = (slash == std::string_view::npos) ? "/" : std::string{url.substr(slash)};
+    if (auto colon = authority.find(':'); colon != std::string_view::npos) {
+        out.host.assign(authority.substr(0, colon));
+        try {
+            out.port = static_cast<uint16_t>(std::stoi(std::string{authority.substr(colon + 1)}));
+        } catch (...) { return std::unexpected(std::string{"bad port"}); }
+    } else {
+        out.host.assign(authority);
     }
-    buf->append(ptr, total);
-    return total;
+    if (out.host.empty()) return std::unexpected(std::string{"empty host"});
+    return out;
 }
 
-namespace {
-
 ExecResult run_web_fetch(const WebFetchArgs& a) {
-    CURL* curl = curl_easy_init();
-    if (!curl) return std::unexpected(ToolError::network("failed to initialize HTTP client"));
+    auto u = parse_url(a.url);
+    if (!u) return std::unexpected(
+        ToolError::invalid_args("could not parse url: " + a.url + " (" + u.error() + ")"));
 
-    std::string body;
-    struct curl_slist* hdrs = nullptr;
-    hdrs = curl_slist_append(hdrs, "User-Agent: moha/0.1");
+    http::Request req;
+    req.method = a.method == HttpMethod::Head ? "HEAD"
+               : a.method == HttpMethod::Post ? "POST" : "GET";
+    req.host = u->host;
+    req.port = u->port;
+    req.path = u->path;
+    req.headers.push_back({"user-agent", "moha/0.1"});
     for (const auto& [k, v] : a.headers) {
-        std::string hdr = k + ": " + v;
-        hdrs = curl_slist_append(hdrs, hdr.c_str());
+        std::string lower; lower.reserve(k.size());
+        for (char c : k) lower.push_back(static_cast<char>(std::tolower(c)));
+        req.headers.push_back({std::move(lower), v});
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, a.url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, web_fetch_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
-    auth::apply_tls_options(curl);
+    http::Timeouts tos{
+        .connect = std::chrono::milliseconds(10'000),
+        .total   = std::chrono::milliseconds(30'000),
+    };
+    auto r = http::default_client().send(req, tos);
+    if (!r) return std::unexpected(ToolError::network("fetch failed: " + r.error()));
 
-    if (a.method == HttpMethod::Head)      curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-    else if (a.method == HttpMethod::Post) curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    std::string content_type;
+    for (const auto& h : r->headers)
+        if (h.name == "content-type") { content_type = h.value; break; }
 
-    CURLcode rc = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-
-    char* ct = nullptr;
-    curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &ct);
-    std::string content_type = ct ? ct : "";
-
-    curl_slist_free_all(hdrs);
-    curl_easy_cleanup(curl);
-
-    if (rc != CURLE_OK)
-        return std::unexpected(ToolError::network(std::string{"fetch failed: "} + curl_easy_strerror(rc)));
+    std::string body = std::move(r->body);
+    bool truncated = false;
+    if (body.size() > kMaxFetchBytes) {
+        body.resize(kMaxFetchBytes);
+        truncated = true;
+    }
 
     std::ostringstream out;
-    out << "HTTP " << http_code;
+    out << "HTTP " << r->status;
     if (!content_type.empty()) out << " (" << content_type << ")";
     out << "\n\n" << body;
-    if (body.size() >= kMaxFetchBytes) out << "\n[body truncated at 200KB]";
+    if (truncated) out << "\n[body truncated at 200KB]";
     std::string s = out.str();
     if (!a.display_description.empty())
         s = a.display_description + "\n\n" + s;
@@ -130,7 +141,7 @@ ExecResult run_web_fetch(const WebFetchArgs& a) {
 ToolDef tool_web_fetch() {
     ToolDef t;
     t.name = ToolName{std::string{"web_fetch"}};
-    t.description = "Fetch the contents of a URL. Supports HTTP/HTTPS. Returns the response "
+    t.description = "Fetch the contents of a URL. Supports HTTPS. Returns the response "
                     "body, status code, and content type. Use for documentation, APIs, etc.";
     t.input_schema = json{
         {"type","object"},
@@ -138,7 +149,7 @@ ToolDef tool_web_fetch() {
         {"properties", {
             {"display_description", {{"type","string"},
                 {"description","One-line summary shown in the UI. Optional."}}},
-            {"url",     {{"type","string"}, {"description","The URL to fetch"}}},
+            {"url",     {{"type","string"}, {"description","The URL to fetch (https only)"}}},
             {"method",  {{"type","string"}, {"description","HTTP method (default: GET)"}}},
             {"headers", {{"type","object"}, {"description","Additional headers as key-value pairs"}}},
         }},

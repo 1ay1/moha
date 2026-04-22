@@ -112,24 +112,66 @@ if(TARGET simdjson_static)
     set_target_properties(simdjson_static PROPERTIES SYSTEM TRUE)
 endif()
 
-find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-add_executable(moha
-    src/main.cpp
+# nghttp2 — HTTP/2 protocol engine for the in-house http client. Prefer the
+# upstream CMake config (vcpkg / Homebrew / nghttp2's own export); fall back
+# to pkg-config (Linux distros), then a manual find_path/find_library scan.
+find_package(nghttp2 CONFIG QUIET)
+if(NOT TARGET nghttp2::nghttp2)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(NGHTTP2 IMPORTED_TARGET libnghttp2)
+        if(TARGET PkgConfig::NGHTTP2)
+            add_library(nghttp2::nghttp2 ALIAS PkgConfig::NGHTTP2)
+        endif()
+    endif()
+endif()
+if(NOT TARGET nghttp2::nghttp2)
+    find_path(NGHTTP2_INCLUDE_DIR nghttp2/nghttp2.h)
+    find_library(NGHTTP2_LIBRARY NAMES nghttp2 nghttp2_static)
+    if(NGHTTP2_INCLUDE_DIR AND NGHTTP2_LIBRARY)
+        add_library(nghttp2::nghttp2 UNKNOWN IMPORTED)
+        set_target_properties(nghttp2::nghttp2 PROPERTIES
+            IMPORTED_LOCATION "${NGHTTP2_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${NGHTTP2_INCLUDE_DIR}")
+    else()
+        message(FATAL_ERROR
+            "nghttp2 not found — install libnghttp2-dev (Debian/Ubuntu), "
+            "nghttp2 (Homebrew/Arch), or vcpkg install nghttp2.")
+    endif()
+endif()
 
-    # ── io: HTTP / persistence / auth / diffing ──────────────────────
-    src/io/anthropic.cpp
+# ── Source groups, by domain ──────────────────────────────────────────────
+# The header tree under include/moha/ mirrors this grouping one-for-one:
+#   domain/   — pure value types (no I/O, no UI). Headers only.
+#   io/       — sockets, TLS, HTTP/2, OAuth, on-disk persistence.
+#   provider/ — wire-format adapters for upstream LLM APIs.
+#   diff/     — unified-diff parser used by the edit tool & review modal.
+#   tool/     — the agent's capability surface: registry + per-tool impls.
+#   runtime/  — the Elm-style app: model, update, subscriptions, view tree.
+
+set(MOHA_IO_SOURCES
+    src/io/http.cpp
+    src/io/tls.cpp
     src/io/auth.cpp
     src/io/persistence.cpp
-    src/io/diff.cpp
+)
 
-    # ── tool: registry + per-tool implementations + shared util ──────
+set(MOHA_PROVIDER_SOURCES
+    src/provider/anthropic/transport.cpp
+)
+
+set(MOHA_DIFF_SOURCES
+    src/diff/diff.cpp
+)
+
+set(MOHA_TOOL_SOURCES
     src/tool/registry.cpp
     src/tool/util/utf8.cpp
     src/tool/util/fs_helpers.cpp
-    src/tool/util/glob.cpp
+    src/tool/util/glob_match.cpp
     src/tool/util/subprocess.cpp
     src/tool/util/bash_validate.cpp
     src/tool/util/arg_reader.cpp
@@ -148,24 +190,34 @@ add_executable(moha
     src/tool/tools/find_definition.cpp
     src/tool/tools/diagnostics.cpp
     src/tool/tools/git.cpp
+)
 
-    # ── app: Elm-style runtime (init / update / subscribe / cmd) ─────
-    src/app/deps.cpp
-    src/app/init.cpp
-    src/app/cmd_factory.cpp
-    src/app/update.cpp
-    src/app/subscribe.cpp
+set(MOHA_RUNTIME_SOURCES
+    src/runtime/main.cpp
 
-    # ── view: per-panel Element factories ────────────────────────────
-    src/view/helpers.cpp
-    src/view/thread.cpp
-    src/view/composer.cpp
-    src/view/statusbar.cpp
-    src/view/changes.cpp
-    src/view/pickers.cpp
-    src/view/diff_review.cpp
-    src/view/permission.cpp
-    src/view/view.cpp
+    src/runtime/app/deps.cpp
+    src/runtime/app/init.cpp
+    src/runtime/app/cmd_factory.cpp
+    src/runtime/app/update.cpp
+    src/runtime/app/subscribe.cpp
+
+    src/runtime/view/helpers.cpp
+    src/runtime/view/thread.cpp
+    src/runtime/view/composer.cpp
+    src/runtime/view/statusbar.cpp
+    src/runtime/view/changes.cpp
+    src/runtime/view/pickers.cpp
+    src/runtime/view/diff_review.cpp
+    src/runtime/view/permission.cpp
+    src/runtime/view/view.cpp
+)
+
+add_executable(moha
+    ${MOHA_IO_SOURCES}
+    ${MOHA_PROVIDER_SOURCES}
+    ${MOHA_DIFF_SOURCES}
+    ${MOHA_TOOL_SOURCES}
+    ${MOHA_RUNTIME_SOURCES}
 )
 
 target_include_directories(moha PRIVATE include)
@@ -173,12 +225,22 @@ target_link_libraries(moha PRIVATE
     maya::maya
     nlohmann_json::nlohmann_json
     simdjson::simdjson
-    CURL::libcurl
+    nghttp2::nghttp2
+    OpenSSL::SSL
     OpenSSL::Crypto
     Threads::Threads
 )
 if(WIN32)
-    target_link_libraries(moha PRIVATE shell32)
+    # ws2_32   — Winsock2 (sockets, WSAPoll)
+    # crypt32  — CertOpenSystemStoreW for the Windows root cert loader
+    # shell32  — already needed by existing code paths
+    target_link_libraries(moha PRIVATE ws2_32 crypt32 shell32)
+endif()
+if(APPLE)
+    # macOS root cert loader uses the Security and CoreFoundation frameworks.
+    target_link_libraries(moha PRIVATE
+        "-framework Security"
+        "-framework CoreFoundation")
 endif()
 
 if(MSVC)

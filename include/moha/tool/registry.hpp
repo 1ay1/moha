@@ -9,7 +9,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "moha/model.hpp"
+#include "moha/runtime/model.hpp"
 
 namespace moha::tools {
 

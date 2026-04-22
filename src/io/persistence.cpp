@@ -55,8 +55,8 @@ static json message_to_json(const Message& m) {
         t["id"] = tc.id;
         t["name"] = tc.name;
         t["args"] = tc.args;
-        t["output"] = tc.output;
-        t["status"] = static_cast<int>(tc.status);
+        t["output"] = tc.output();             // empty unless terminal
+        t["status"] = std::string{tc.status_name()};
         tcs.push_back(std::move(t));
     }
     j["tool_calls"] = std::move(tcs);
@@ -77,8 +77,37 @@ static Message message_from_json(const json& j) {
             tc.id = ToolCallId{t.value("id", "")};
             tc.name = ToolName{t.value("name", "")};
             tc.args = t.value("args", json::object());
-            tc.output = t.value("output", "");
-            tc.status = static_cast<ToolUse::Status>(t.value("status", 0));
+            // Old persisted threads stored status as an int enum; new ones
+            // use the string tag returned by ToolUse::status_name(). Accept
+            // both so existing on-disk threads keep loading.
+            std::string status_tag;
+            std::string output = t.value("output", "");
+            if (auto it = t.find("status"); it != t.end()) {
+                if (it->is_string())          status_tag = it->get<std::string>();
+                else if (it->is_number()) {
+                    static constexpr std::string_view legacy[] = {
+                        "pending","approved","running","done","failed","rejected"};
+                    int idx = it->get<int>();
+                    status_tag = std::string{
+                        idx >= 0 && idx < (int)std::size(legacy)
+                            ? legacy[idx] : std::string_view{"pending"}};
+                }
+            }
+            // Reconstruct the variant. Persisted threads only ever land in
+            // terminal states (in-flight tools are never serialized), so the
+            // intermediate states reset to a no-args-time-stamp default.
+            if (status_tag == "done")
+                tc.status = ToolUse::Done{{}, {}, std::move(output)};
+            else if (status_tag == "failed" || status_tag == "error")
+                tc.status = ToolUse::Failed{{}, {}, std::move(output)};
+            else if (status_tag == "rejected")
+                tc.status = ToolUse::Rejected{{}};
+            else if (status_tag == "running")
+                tc.status = ToolUse::Running{{}, {}};
+            else if (status_tag == "approved")
+                tc.status = ToolUse::Approved{{}};
+            else
+                tc.status = ToolUse::Pending{{}};
             m.tool_calls.push_back(std::move(tc));
         }
     }
@@ -140,8 +169,8 @@ void delete_thread(const ThreadId& id) {
     fs::remove(threads_dir() / (id.value + ".json"), ec);
 }
 
-Settings load_settings() {
-    Settings s;
+store::Settings load_settings() {
+    store::Settings s;
     std::ifstream ifs(data_dir() / "settings.json");
     if (!ifs) return s;
     try {
@@ -154,7 +183,7 @@ Settings load_settings() {
     return s;
 }
 
-void save_settings(const Settings& s) {
+void save_settings(const store::Settings& s) {
     json j;
     j["model_id"] = s.model_id;
     j["profile"] = static_cast<int>(s.profile);

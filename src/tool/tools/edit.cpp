@@ -3,7 +3,7 @@
 #include "moha/tool/util/fs_helpers.hpp"
 #include "moha/tool/util/fuzzy_match.hpp"
 #include "moha/tool/util/tool_args.hpp"
-#include "moha/io/diff.hpp"
+#include "moha/diff/diff.hpp"
 
 #include <algorithm>
 #include <filesystem>

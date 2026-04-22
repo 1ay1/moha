@@ -1,20 +1,18 @@
 #include "moha/tool/tools.hpp"
 #include "moha/tool/util/arg_reader.hpp"
 #include "moha/tool/util/tool_args.hpp"
-#include "moha/io/auth.hpp"
+#include "moha/io/http.hpp"
 
+#include <chrono>
+#include <cctype>
 #include <sstream>
 #include <string>
 
-#include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
 namespace moha::tools {
 
 using json = nlohmann::json;
-
-// Shared with web_fetch.cpp — appends to userdata up to a 200 KB cap.
-size_t web_fetch_write_cb(char* ptr, size_t size, size_t nmemb, void* userdata);
 
 namespace {
 
@@ -36,33 +34,43 @@ std::expected<WebSearchArgs, ToolError> parse_web_search_args(const json& j) {
     };
 }
 
+// RFC 3986 percent-encode of the unreserved / not-allowed characters that
+// appear in a typical query string. Matches the subset curl_easy_escape used.
+std::string url_escape(std::string_view s) {
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(s.size() * 3);
+    for (unsigned char c : s) {
+        const bool unreserved =
+            (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~';
+        if (unreserved) {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('%');
+            out.push_back(hex[c >> 4]);
+            out.push_back(hex[c & 0xF]);
+        }
+    }
+    return out;
+}
+
 ExecResult run_web_search(const WebSearchArgs& a) {
-    CURL* curl = curl_easy_init();
-    if (!curl) return std::unexpected(ToolError::network("failed to initialize HTTP client"));
+    http::Request req;
+    req.method = "GET";
+    req.host   = "html.duckduckgo.com";
+    req.port   = 443;
+    req.path   = "/html/?q=" + url_escape(a.query);
+    req.headers.push_back({"user-agent", "moha/0.1 (terminal agent)"});
 
-    char* encoded = curl_easy_escape(curl, a.query.c_str(), (int)a.query.size());
-    std::string url = std::string{"https://html.duckduckgo.com/html/?q="} + encoded;
-    curl_free(encoded);
-
-    std::string body;
-    struct curl_slist* hdrs = nullptr;
-    hdrs = curl_slist_append(hdrs, "User-Agent: moha/0.1 (terminal agent)");
-
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, web_fetch_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
-    auth::apply_tls_options(curl);
-
-    CURLcode rc = curl_easy_perform(curl);
-    curl_slist_free_all(hdrs);
-    curl_easy_cleanup(curl);
-
-    if (rc != CURLE_OK)
-        return std::unexpected(ToolError::network(std::string{"search failed: "} + curl_easy_strerror(rc)));
+    http::Timeouts tos{
+        .connect = std::chrono::milliseconds(10'000),
+        .total   = std::chrono::milliseconds(15'000),
+    };
+    auto r = http::default_client().send(req, tos);
+    if (!r) return std::unexpected(ToolError::network("search failed: " + r.error()));
+    const std::string& body = r->body;
 
     std::ostringstream out;
     int found = 0;

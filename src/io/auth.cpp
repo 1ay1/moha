@@ -1,25 +1,31 @@
-#include "moha/io/auth.hpp"
+#include "moha/auth/auth.hpp"
+
+// OAuth config lives with the provider it belongs to; `using` lets the
+// existing OAuthConfig:: references below stay short.
+#include "moha/provider/anthropic/oauth.hpp"
 
 #include <algorithm>
-#include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <expected>
 #include <fstream>
 #include <iostream>
-#include <atomic>
-#include <mutex>
 #include <random>
 #include <sstream>
+#include <string>
+#include <string_view>
 #include <system_error>
-#include <thread>
+#include <vector>
 
-#include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
+
+#include "moha/io/http.hpp"
 
 #ifdef _WIN32
 #  include <io.h>
@@ -32,6 +38,8 @@
 #endif
 
 namespace moha::auth {
+
+using OAuthConfig = moha::provider::anthropic::OAuthConfig;
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -79,136 +87,15 @@ fs::path config_dir() {
 fs::path credentials_path() { return config_dir() / "credentials.json"; }
 
 // ---------------------------------------------------------------------------
-// CURL share handle — one process-wide SSL session + DNS + connection cache.
-// ---------------------------------------------------------------------------
-// libcurl's default is per-easy caches; a fresh curl_easy_init pays TLS
-// handshake + DNS for every request even when they go to the same host.
-// CURLSH lets us opt into shared caches so turn N+1 reuses the TCP/TLS
-// session of turn N to api.anthropic.com — saving ~80–120ms of handshake
-// on every follow-up call.
-//
-// The share carries its own locks; we just hand libcurl a mutex per data
-// kind. Built once lazily, never destroyed (process-lifetime).
-namespace {
-
-struct ShareBundle {
-    CURLSH* share = nullptr;
-    std::array<std::mutex, CURL_LOCK_DATA_LAST> locks {};
-};
-
-ShareBundle& share_bundle() {
-    // Heap-allocate and leak: libcurl holds a pointer to `locks` via
-    // CURLSHOPT_USERDATA, so the object must outlive every curl handle
-    // that references the share. Process-lifetime leak is cheaper than
-    // careful teardown across unknown destruction order.
-    static ShareBundle* b = [] {
-        auto* bb = new ShareBundle;
-        bb->share = curl_share_init();
-        if (!bb->share) return bb;
-        curl_share_setopt(bb->share, CURLSHOPT_LOCKFUNC,
-            +[](CURL*, curl_lock_data data, curl_lock_access, void* user) {
-                auto* self = static_cast<ShareBundle*>(user);
-                if (static_cast<int>(data) >= 0
-                    && static_cast<int>(data) < CURL_LOCK_DATA_LAST)
-                    self->locks[data].lock();
-            });
-        curl_share_setopt(bb->share, CURLSHOPT_UNLOCKFUNC,
-            +[](CURL*, curl_lock_data data, void* user) {
-                auto* self = static_cast<ShareBundle*>(user);
-                if (static_cast<int>(data) >= 0
-                    && static_cast<int>(data) < CURL_LOCK_DATA_LAST)
-                    self->locks[data].unlock();
-            });
-        curl_share_setopt(bb->share, CURLSHOPT_USERDATA, bb);
-        curl_share_setopt(bb->share, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
-        curl_share_setopt(bb->share, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION);
-        curl_share_setopt(bb->share, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT);
-        return bb;
-    }();
-    return *b;
-}
-
-} // namespace
-
-void apply_shared_cache(void* handle) {
-    CURL* curl = static_cast<CURL*>(handle);
-    if (!curl) return;
-    auto& b = share_bundle();
-    if (b.share) curl_easy_setopt(curl, CURLOPT_SHARE, b.share);
-    // Default DNS TTL is 60 s — wasteful when we hit one host (api.anthropic.com)
-    // turn after turn. 10 minutes matches Anthropic's published edge stability
-    // and lets a long agent session keep one resolved IP for its entire lifetime.
-    curl_easy_setopt(curl, CURLOPT_DNS_CACHE_TIMEOUT, 600L);
-    // Cap the global connection cache. We only ever talk to api.anthropic.com
-    // and platform.claude.com, so the default 5 is plenty — but make it explicit
-    // so an unrelated curl global default change can't bloat us.
-    curl_easy_setopt(curl, CURLOPT_MAXCONNECTS, 8L);
-}
-
-// ---------------------------------------------------------------------------
-// Pre-warm: open TCP+TLS to api.anthropic.com while the user is still typing,
-// so the first real request skips ~150–300 ms of handshake. Runs detached.
+// Pre-warm: open TCP+TLS+h2 to api.anthropic.com while the user is still
+// typing, so the first real request skips the handshake. The http::Client's
+// pool keeps the connection until used or until the 90 s idle TTL elapses.
 // ---------------------------------------------------------------------------
 void prewarm_anthropic() {
     static std::atomic<bool> started{false};
     bool expected = false;
     if (!started.compare_exchange_strong(expected, true)) return;
-
-    std::thread([]{
-        CURL* curl = curl_easy_init();
-        if (!curl) return;
-        curl_easy_setopt(curl, CURLOPT_URL, "https://api.anthropic.com/v1/messages");
-        curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 1L);
-        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
-        curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
-#ifdef CURLOPT_TCP_FASTOPEN
-        curl_easy_setopt(curl, CURLOPT_TCP_FASTOPEN, 1L);
-#endif
-        apply_tls_options(curl);
-        apply_shared_cache(curl);
-        // We intentionally ignore the return code — a failure here is harmless
-        // (the real request on Enter will retry with proper error reporting).
-        (void)curl_easy_perform(curl);
-        curl_easy_cleanup(curl);
-    }).detach();
-}
-
-void apply_tls_options(void* handle) {
-    CURL* curl = static_cast<CURL*>(handle);
-    if (!curl) return;
-    if (const char* ca = std::getenv("CURL_CA_BUNDLE"); ca && *ca) {
-        curl_easy_setopt(curl, CURLOPT_CAINFO, ca);
-    } else if (const char* ca2 = std::getenv("SSL_CERT_FILE"); ca2 && *ca2) {
-        curl_easy_setopt(curl, CURLOPT_CAINFO, ca2);
-    }
-    // Pin TLS 1.3 minimum. Anthropic's edge supports 1.3 universally; locking
-    // the floor here means cold handshake is 1-RTT instead of 1.2's 2-RTT, and
-    // session-resumption (via the shared SSL_SESSION cache) gives 0-RTT on the
-    // second turn. Saves ~80–150 ms on first byte for a fresh agent session.
-    curl_easy_setopt(curl, CURLOPT_SSLVERSION,
-                     (long)(CURL_SSLVERSION_TLSv1_3 | CURL_SSLVERSION_MAX_DEFAULT));
-#ifdef _WIN32
-    // Merge the Windows system cert store into OpenSSL's trust anchors.
-    // Why: corporate environments push MITM root CAs via Group Policy into the
-    // Windows store only; the bundled ca-certificates file won't contain them,
-    // so TLS handshakes fail with CURLE_PEER_FAILED_VERIFICATION behind the proxy.
-    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, (long)CURLSSLOPT_NATIVE_CA);
-#endif
-    if (const char* ins = std::getenv("MOHA_INSECURE"); ins && *ins
-        && std::string(ins) != "0" && std::string(ins) != "false") {
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-        // apply_tls_options is called per-handle; warn exactly once.
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
-            std::fprintf(stderr,
-                "warning: MOHA_INSECURE is set — TLS certificate verification is disabled. "
-                "Auth credentials are exposed to MITM. Unset the variable to restore safety.\n");
-        }
-    }
+    http::default_client().prewarm("api.anthropic.com", 443);
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +168,7 @@ bool save_credentials(const Credentials& c) {
     j["expires_at"] = c.expires_at_ms;
     fs::path p = credentials_path();
     if (!write_private(p, j.dump(2))) return false;
-    restrict_perms(p); // belt-and-suspenders for pre-existing files
+    restrict_perms(p);
     return true;
 }
 
@@ -348,63 +235,113 @@ std::string code_challenge_s256(const std::string& verifier) {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP helpers
+// HTTP helpers (form-encoded POST against the OAuth endpoint)
 // ---------------------------------------------------------------------------
 
 namespace {
-size_t curl_collect_cb(char* p, size_t sz, size_t nm, void* u) {
-    auto* s = static_cast<std::string*>(u);
-    s->append(p, sz * nm);
-    return sz * nm;
-}
 
-struct HttpResult { long http = 0; std::string body; CURLcode rc = CURLE_OK; };
-
-static std::string form_urlencode(const std::vector<std::pair<std::string,std::string>>& kv,
-                                   CURL* curl) {
+// RFC 3986 unreserved set passes through; everything else gets %HH-encoded.
+// Mirrors curl_easy_escape's behaviour for the same input set.
+std::string url_escape(std::string_view s) {
+    static const char* hex = "0123456789ABCDEF";
     std::string out;
-    for (size_t i = 0; i < kv.size(); ++i) {
-        if (i) out += '&';
-        char* k = curl_easy_escape(curl, kv[i].first.c_str(), (int)kv[i].first.size());
-        char* v = curl_easy_escape(curl, kv[i].second.c_str(), (int)kv[i].second.size());
-        out += k ? k : ""; out += '='; out += v ? v : "";
-        if (k) curl_free(k);
-        if (v) curl_free(v);
+    out.reserve(s.size() + s.size() / 4);
+    for (unsigned char c : s) {
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+         || (c >= '0' && c <= '9')
+         || c == '-' || c == '_' || c == '.' || c == '~') {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('%');
+            out.push_back(hex[(c >> 4) & 0xF]);
+            out.push_back(hex[c & 0xF]);
+        }
     }
     return out;
 }
 
+std::string form_urlencode(const std::vector<std::pair<std::string,std::string>>& kv) {
+    std::string out;
+    for (size_t i = 0; i < kv.size(); ++i) {
+        if (i) out += '&';
+        out += url_escape(kv[i].first);
+        out += '=';
+        out += url_escape(kv[i].second);
+    }
+    return out;
+}
+
+// Endpoint parser for the small set of OAuth URLs we hit. We don't pull in a
+// general URL parser: every URL we use is https://, no userinfo, no fragment.
+struct ParsedUrl {
+    std::string host;
+    uint16_t    port = 443;
+    std::string path;   // includes leading '/' and any query string
+};
+
+std::expected<ParsedUrl, std::string> parse_https_url(std::string_view url) {
+    constexpr std::string_view scheme = "https://";
+    if (url.substr(0, scheme.size()) != scheme)
+        return std::unexpected(std::string{"missing https:// scheme"});
+    url.remove_prefix(scheme.size());
+    auto slash = url.find('/');
+    std::string_view authority = url.substr(0, slash);
+    ParsedUrl p;
+    p.path = std::string{slash == std::string_view::npos ? "/" : url.substr(slash)};
+    auto colon = authority.find(':');
+    if (colon == std::string_view::npos) {
+        p.host = std::string{authority};
+    } else {
+        p.host = std::string{authority.substr(0, colon)};
+        try {
+            int port_int = std::stoi(std::string{authority.substr(colon + 1)});
+            if (port_int <= 0 || port_int > 65535)
+                return std::unexpected(std::string{"port out of range"});
+            p.port = static_cast<uint16_t>(port_int);
+        } catch (...) { return std::unexpected(std::string{"bad port"}); }
+    }
+    if (p.host.empty()) return std::unexpected(std::string{"empty host"});
+    return p;
+}
+
+struct HttpResult { int status = 0; std::string body; std::string error; };
+
 HttpResult http_post_form(const std::string& url,
     const std::vector<std::pair<std::string,std::string>>& fields) {
     HttpResult r;
-    CURL* curl = curl_easy_init();
-    if (!curl) { r.rc = CURLE_FAILED_INIT; return r; }
-    std::string body = form_urlencode(fields, curl);
-    curl_slist* hdr = nullptr;
-    hdr = curl_slist_append(hdr, "content-type: application/x-www-form-urlencoded");
-    hdr = curl_slist_append(hdr, "accept: application/json");
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body.size());
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdr);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_collect_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &r.body);
-    apply_tls_options(curl);
-    apply_shared_cache(curl);
-    r.rc = curl_easy_perform(curl);
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.http);
-    curl_slist_free_all(hdr);
-    curl_easy_cleanup(curl);
+    auto parsed = parse_https_url(url);
+    if (!parsed) { r.error = "bad url: " + url + " (" + parsed.error() + ")"; return r; }
+
+    http::Request hreq;
+    hreq.method = "POST";
+    hreq.host   = parsed->host;
+    hreq.port   = parsed->port;
+    hreq.path   = parsed->path;
+    hreq.headers = {
+        {"content-type", "application/x-www-form-urlencoded"},
+        {"accept",       "application/json"},
+        {"user-agent",   "moha/0.1.0"},
+    };
+    hreq.body = form_urlencode(fields);
+
+    http::Timeouts tos;
+    tos.connect = std::chrono::milliseconds(10'000);
+    tos.total   = std::chrono::milliseconds(30'000);
+
+    auto resp = http::default_client().send(hreq, tos);
+    if (!resp) { r.error = resp.error(); return r; }
+    r.status = resp->status;
+    r.body   = std::move(resp->body);
     return r;
 }
+
 } // namespace
 
 // ---------------------------------------------------------------------------
 // Token exchange / refresh
 // ---------------------------------------------------------------------------
 
-static TokenResponse parse_token_json(const std::string& body, long http) {
+static TokenResponse parse_token_json(const std::string& body, int http) {
     TokenResponse r;
     try {
         auto j = json::parse(body);
@@ -424,11 +361,11 @@ static TokenResponse parse_token_json(const std::string& body, long http) {
     return r;
 }
 
-TokenResponse exchange_code(const std::string& code,
-                            const std::string& verifier,
-                            const std::string& state) {
+TokenResponse exchange_code(const OAuthCode& code,
+                            const PkceVerifier& verifier,
+                            const OAuthState& state) {
     // Claude's callback often returns "<code>#<state>" joined. Split if present.
-    std::string actual_code = code;
+    std::string actual_code = code.value;
     auto hash = actual_code.find('#');
     if (hash != std::string::npos) actual_code = actual_code.substr(0, hash);
 
@@ -437,25 +374,25 @@ TokenResponse exchange_code(const std::string& code,
         {"code",          actual_code},
         {"client_id",     OAuthConfig::client_id},
         {"redirect_uri",  OAuthConfig::redirect_uri},
-        {"code_verifier", verifier},
-        {"state",         state},
+        {"code_verifier", verifier.value},
+        {"state",         state.value},
     });
-    if (r.rc != CURLE_OK) {
-        TokenResponse t; t.error = curl_easy_strerror(r.rc); return t;
+    if (!r.error.empty()) {
+        TokenResponse t; t.error = r.error; return t;
     }
-    return parse_token_json(r.body, r.http);
+    return parse_token_json(r.body, r.status);
 }
 
-TokenResponse refresh_access_token(const std::string& refresh_token) {
+TokenResponse refresh_access_token(const RefreshToken& refresh_token) {
     auto r = http_post_form(OAuthConfig::token_url, {
         {"grant_type",    "refresh_token"},
         {"client_id",     OAuthConfig::client_id},
-        {"refresh_token", refresh_token},
+        {"refresh_token", refresh_token.value},
     });
-    if (r.rc != CURLE_OK) {
-        TokenResponse t; t.error = curl_easy_strerror(r.rc); return t;
+    if (!r.error.empty()) {
+        TokenResponse t; t.error = r.error; return t;
     }
-    return parse_token_json(r.body, r.http);
+    return parse_token_json(r.body, r.status);
 }
 
 // ---------------------------------------------------------------------------
@@ -463,25 +400,21 @@ TokenResponse refresh_access_token(const std::string& refresh_token) {
 // ---------------------------------------------------------------------------
 
 Credentials resolve(const std::string& cli_api_key) {
-    // 1. CLI flag
     if (!cli_api_key.empty()) {
         return {Method::ApiKey, cli_api_key, "", 0};
     }
-    // 2. ANTHROPIC_API_KEY
     if (const char* k = std::getenv("ANTHROPIC_API_KEY"); k && *k) {
         return {Method::ApiKey, k, "", 0};
     }
-    // 3. CLAUDE_CODE_OAUTH_TOKEN
     if (const char* t = std::getenv("CLAUDE_CODE_OAUTH_TOKEN"); t && *t) {
         return {Method::OAuth, t, "", 0};
     }
-    // 4. credentials file
     auto loaded = load_credentials();
     if (!loaded) return {};
     Credentials c = *loaded;
     if (c.method == Method::OAuth && c.is_expired() && !c.refresh_token.empty()) {
         std::fprintf(stderr, "moha: refreshing OAuth token... ");
-        auto tr = refresh_access_token(c.refresh_token);
+        auto tr = refresh_access_token(RefreshToken{c.refresh_token});
         if (tr.ok) {
             c.access_token  = tr.access_token;
             if (!tr.refresh_token.empty()) c.refresh_token = tr.refresh_token;
@@ -494,7 +427,7 @@ Credentials resolve(const std::string& cli_api_key) {
             std::fprintf(stderr,
                 "moha: stored OAuth token is expired and refresh failed.\n"
                 "      run 'moha login' to re-authenticate.\n");
-            return {}; // force caller to treat as not-authenticated
+            return {};
         }
     } else if (c.method == Method::OAuth && c.is_expired()) {
         std::fprintf(stderr,
@@ -525,15 +458,6 @@ static void open_browser(const std::string& url) {
 // Subcommands
 // ---------------------------------------------------------------------------
 
-static std::string url_encode(const std::string& s) {
-    CURL* c = curl_easy_init();
-    char* esc = curl_easy_escape(c, s.c_str(), (int)s.size());
-    std::string out = esc ? esc : "";
-    if (esc) curl_free(esc);
-    curl_easy_cleanup(c);
-    return out;
-}
-
 int cmd_login() {
     std::cout << "moha — authenticate with Claude\n\n"
               << "  1) OAuth via claude.ai (Pro/Max subscription)\n"
@@ -559,17 +483,17 @@ int cmd_login() {
     }
 
     // OAuth PKCE flow
-    std::string verifier  = random_urlsafe(128);
-    std::string challenge = code_challenge_s256(verifier);
-    std::string state     = random_urlsafe(32);
+    PkceVerifier verifier{random_urlsafe(128)};
+    std::string  challenge = code_challenge_s256(verifier.value);
+    OAuthState   state{random_urlsafe(32)};
 
     std::ostringstream url;
     url << OAuthConfig::authorize_url
         << "?response_type=code"
         << "&client_id="             << OAuthConfig::client_id
-        << "&redirect_uri="          << url_encode(OAuthConfig::redirect_uri)
-        << "&scope="                 << url_encode(OAuthConfig::scopes)
-        << "&state="                 << state
+        << "&redirect_uri="          << url_escape(OAuthConfig::redirect_uri)
+        << "&scope="                 << url_escape(OAuthConfig::scopes)
+        << "&state="                 << state.value
         << "&code_challenge="        << challenge
         << "&code_challenge_method=S256"
         << "&code=true";
@@ -581,13 +505,13 @@ int cmd_login() {
 
     std::cout << "After logging in, paste the code shown on the callback page: "
               << std::flush;
-    std::string code;
-    std::getline(std::cin, code);
-    while (!code.empty() && (code.back() == '\r' || code.back() == '\n'
-                             || code.back() == ' ')) code.pop_back();
-    if (code.empty()) { std::cerr << "No code entered.\n"; return 1; }
+    std::string code_raw;
+    std::getline(std::cin, code_raw);
+    while (!code_raw.empty() && (code_raw.back() == '\r' || code_raw.back() == '\n'
+                                 || code_raw.back() == ' ')) code_raw.pop_back();
+    if (code_raw.empty()) { std::cerr << "No code entered.\n"; return 1; }
 
-    auto tr = exchange_code(code, verifier, state);
+    auto tr = exchange_code(OAuthCode{std::move(code_raw)}, verifier, state);
     if (!tr.ok) {
         std::cerr << "Token exchange failed: " << tr.error << "\n";
         return 1;
@@ -601,7 +525,7 @@ int cmd_login() {
     if (!save_credentials(c)) {
         std::cerr << "Failed to save credentials.\n"; return 1;
     }
-    std::cout << "\n✓ Logged in. Saved to " << credentials_path().string() << "\n";
+    std::cout << "\n\xE2\x9C\x93 Logged in. Saved to " << credentials_path().string() << "\n";
     return 0;
 }
 
