@@ -82,6 +82,13 @@ void apply_tls_options(void* handle) {
     } else if (const char* ca2 = std::getenv("SSL_CERT_FILE"); ca2 && *ca2) {
         curl_easy_setopt(curl, CURLOPT_CAINFO, ca2);
     }
+#ifdef _WIN32
+    // Merge the Windows system cert store into OpenSSL's trust anchors.
+    // Why: corporate environments push MITM root CAs via Group Policy into the
+    // Windows store only; the bundled ca-certificates file won't contain them,
+    // so TLS handshakes fail with CURLE_PEER_FAILED_VERIFICATION behind the proxy.
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, (long)CURLSSLOPT_NATIVE_CA);
+#endif
     if (const char* ins = std::getenv("MOHA_INSECURE"); ins && *ins
         && std::string(ins) != "0" && std::string(ins) != "false") {
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);

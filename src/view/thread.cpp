@@ -193,6 +193,13 @@ Element render_tool_call(const ToolUse& tc) {
 
     // ── write ───────────────────────────────────────────────────────
     if (tc.name == "write") {
+        // On error, fall back to the generic card so the failure reason
+        // from the tool (permission denied, disk full, etc.) is visible.
+        // WriteTool has no error-text surface.
+        if (tc.status == ToolUse::Status::Error || tc.status == ToolUse::Status::Rejected) {
+            return tool_card("write", ToolCallKind::Edit,
+                path.empty() ? "write" : path, tc.status, tc.expanded, tc.output);
+        }
         WriteTool wt(path.empty() ? "write" : path);
         wt.set_expanded(tc.expanded);
         wt.set_content(safe_arg(tc.args, "content"));
@@ -204,6 +211,10 @@ Element render_tool_call(const ToolUse& tc) {
 
     // ── edit ────────────────────────────────────────────────────────
     if (tc.name == "edit") {
+        if (tc.status == ToolUse::Status::Error || tc.status == ToolUse::Status::Rejected) {
+            return tool_card("edit", ToolCallKind::Edit,
+                path.empty() ? "edit" : path, tc.status, tc.expanded, tc.output);
+        }
         EditTool et(path.empty() ? "edit" : path);
         et.set_expanded(tc.expanded);
         et.set_old_text(safe_arg(tc.args, "old_string"));

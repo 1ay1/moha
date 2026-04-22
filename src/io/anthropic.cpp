@@ -1,7 +1,10 @@
 #include "moha/io/anthropic.hpp"
 
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <mutex>
 #include <sstream>
 #include <vector>
 
@@ -11,6 +14,33 @@
 #include "moha/tool/registry.hpp"
 
 namespace moha::anthropic {
+
+namespace {
+// Env-var-gated request/SSE dump. Set MOHA_DEBUG_API=1 to write to
+// $MOHA_DEBUG_FILE (or ./moha-api.log). Appends, never truncates.
+FILE* debug_log() {
+    static std::mutex m;
+    static FILE* fp = nullptr;
+    static bool tried = false;
+    std::lock_guard<std::mutex> lk(m);
+    if (tried) return fp;
+    tried = true;
+    const char* on = std::getenv("MOHA_DEBUG_API");
+    if (!on || !*on || *on == '0') return nullptr;
+    const char* path = std::getenv("MOHA_DEBUG_FILE");
+    std::string p = (path && *path) ? std::string{path} : std::string{"moha-api.log"};
+    fp = std::fopen(p.c_str(), "ab");
+    return fp;
+}
+void dbg(const char* fmt, ...) {
+    FILE* fp = debug_log();
+    if (!fp) return;
+    va_list ap; va_start(ap, fmt);
+    std::vfprintf(fp, fmt, ap);
+    va_end(ap);
+    std::fflush(fp);
+}
+} // namespace
 
 using json = nlohmann::json;
 
@@ -57,6 +87,7 @@ struct StreamCtx {
 
 void dispatch_event(StreamCtx& ctx, const std::string& name, const std::string& data) {
     if (data.empty() || data == "[DONE]") return;
+    dbg("<< event=%s data=%s\n", name.c_str(), data.c_str());
     json j;
     try { j = json::parse(data); } catch (...) { return; }
     if (name == "message_start") {
@@ -307,6 +338,8 @@ void run_stream_sync(Request req, EventSink sink) {
     }
     std::string body_str = body.dump();
 
+    dbg("==== request ====\n%s\n==== /request ====\n", body_str.c_str());
+
     StreamCtx ctx{sink, nullptr, {}, {}, {}, false, false};
 
     struct curl_slist* headers = nullptr;
@@ -348,9 +381,11 @@ void run_stream_sync(Request req, EventSink sink) {
     CURLcode rc = curl_easy_perform(curl);
     long http = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http);
+    dbg("==== curl rc=%d http=%ld ====\n", (int)rc, http);
     if (rc != CURLE_OK && rc != CURLE_WRITE_ERROR) {
         emit_terminal(ctx, std::string("http: ") + curl_easy_strerror(rc));
     } else if (http >= 400) {
+        dbg("error body: %s\n", ctx.sse.buf.c_str());
         std::string body_err = ctx.sse.buf;
         std::string msg = std::string("HTTP ") + std::to_string(http);
         try {

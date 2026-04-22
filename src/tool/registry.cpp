@@ -17,21 +17,17 @@
 #include <nlohmann/json.hpp>
 
 #ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
 #  include <windows.h>
 #endif
 
+#include "moha/io/auth.hpp"
 #include "moha/io/diff.hpp"
-
-#ifdef _WIN32
-    #ifndef WIN32_LEAN_AND_MEAN
-        #define WIN32_LEAN_AND_MEAN
-    #endif
-    #ifndef NOMINMAX
-        #define NOMINMAX
-    #endif
-    #include <windows.h>
-#endif
 
 namespace moha::tools {
 
@@ -47,24 +43,54 @@ std::string read_file(const fs::path& p) {
     return oss.str();
 }
 
-void write_file(const fs::path& p, const std::string& content) {
-    // parent_path() is empty for a bare filename ("foo.py"); calling
-    // create_directories("") throws filesystem_error on POSIX, which the
-    // tool dispatcher then surfaces as a Failed write to the model.
+// Normalize a user-supplied path. Accepts forward slashes on Windows (the
+// model frequently produces them from POSIX habits), strips surrounding
+// whitespace/quotes, and returns an absolute path relative to cwd when not
+// already absolute — so error messages show an unambiguous location instead
+// of a stripped-down filename that depends on the caller's working dir.
+fs::path normalize_path(std::string s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+    if (s.size() >= 2 && ((s.front() == '"' && s.back() == '"')
+                          || (s.front() == '\'' && s.back() == '\''))) {
+        s = s.substr(1, s.size() - 2);
+    }
+    fs::path p(s);
+    std::error_code ec;
+    if (!p.is_absolute()) p = fs::absolute(p, ec);
+    return p;
+}
+
+// Returns empty string on success, otherwise a human-readable error.
+// Using a string return rather than throwing/exceptions keeps tool lambdas
+// terse while still forcing callers to surface failures — silent ofstream
+// bad-bit was the prior failure mode on Windows (locked files, ACL denials).
+std::string write_file(const fs::path& p, const std::string& content) {
     auto parent = p.parent_path();
-    if (!parent.empty()) fs::create_directories(parent);
-    std::ofstream ofs(p, std::ios::binary);
+    if (!parent.empty()) {
+        std::error_code ec;
+        fs::create_directories(parent, ec);
+        if (ec) return "failed to create directory '" + parent.string() + "': " + ec.message();
+    }
+    std::ofstream ofs(p, std::ios::binary | std::ios::trunc);
+    if (!ofs) return "cannot open '" + p.string() + "' for writing";
     ofs.write(content.data(), (std::streamsize)content.size());
+    ofs.flush();
+    if (!ofs) return "write to '" + p.string() + "' failed (disk full, locked, or permission denied)";
+    return {};
 }
 
 #ifdef _WIN32
-// CreateProcess-based runner: redirects the child's stdin to NUL so it cannot
+// CreateProcess-based runner. Redirects the child's stdin to NUL so it cannot
 // steal keystrokes from the TUI or disturb the console mode. stdout+stderr
 // merge into a pipe read by the caller. Saves + restores the stdin console
 // mode as a belt-and-suspenders guard against a child resetting ENABLE_LINE_INPUT
 // / ENABLE_ECHO_INPUT, which would cause subsequent typing to echo at the
 // cursor (the bug where keystrokes appear at the footer instead of the composer).
-std::string run_command_win32(const std::string& cmd, int max_chars,
+//
+// Takes a fully prepared command line. Callers that want shell semantics wrap
+// in `cmd.exe /S /C "..."`; callers that want direct exec build a quoted argv.
+std::string run_win32_cmdline(const std::string& cmdline, int max_chars,
                               int timeout_secs) {
     HANDLE h_stdin = ::GetStdHandle(STD_INPUT_HANDLE);
     DWORD saved_in_mode = 0;
@@ -96,13 +122,11 @@ std::string run_command_win32(const std::string& cmd, int max_chars,
     si.hStdOutput = wr;
     si.hStdError  = wr;
 
-    // cmd.exe /S /C "…" — /S preserves quoting inside the command string.
-    std::string line = "cmd.exe /S /C \"" + cmd + "\"";
-    std::vector<char> cmdline(line.begin(), line.end());
-    cmdline.push_back('\0');
+    std::vector<char> mutable_cmdline(cmdline.begin(), cmdline.end());
+    mutable_cmdline.push_back('\0');
 
     PROCESS_INFORMATION pi{};
-    BOOL ok = ::CreateProcessA(nullptr, cmdline.data(), nullptr, nullptr,
+    BOOL ok = ::CreateProcessA(nullptr, mutable_cmdline.data(), nullptr, nullptr,
                                TRUE, CREATE_NO_WINDOW, nullptr, nullptr,
                                &si, &pi);
     ::CloseHandle(wr);
@@ -150,23 +174,60 @@ std::string run_command_win32(const std::string& cmd, int max_chars,
     ::CloseHandle(pi.hThread);
     return output;
 }
+
+// CommandLineToArgvW-compatible quoting (see MSDN "Parsing C++ Command-Line
+// Arguments"). Escape behaviour: a run of backslashes is doubled if followed
+// by a `"`, and every literal `"` is prefixed with `\`. Other characters pass
+// through untouched; quoting only wraps the arg if it contains whitespace or
+// `"`.
+std::string win_quote_arg(const std::string& arg) {
+    if (!arg.empty()
+        && arg.find_first_of(" \t\n\v\"") == std::string::npos) {
+        return arg;
+    }
+    std::string out;
+    out.push_back('"');
+    int backslashes = 0;
+    for (char c : arg) {
+        if (c == '\\') { backslashes++; continue; }
+        if (c == '"') {
+            out.append((size_t)backslashes * 2, '\\');
+            out += "\\\"";
+        } else {
+            out.append((size_t)backslashes, '\\');
+            out.push_back(c);
+        }
+        backslashes = 0;
+    }
+    out.append((size_t)backslashes * 2, '\\');
+    out.push_back('"');
+    return out;
+}
+#else
+std::string posix_shell_quote(const std::string& s) {
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') out += "'\\''";
+        else out += c;
+    }
+    out += "'";
+    return out;
+}
 #endif
 
 std::string run_command(const std::string& cmd, int max_chars = 30000,
                         int timeout_secs = 120) {
 #ifdef _WIN32
-    return run_command_win32(cmd, max_chars, timeout_secs);
+    // cmd.exe /S /C "…" — /S tells cmd to strip just the outermost quotes and
+    // leave everything else (including embedded "...") intact.
+    return run_win32_cmdline("cmd.exe /S /C \"" + cmd + "\"",
+                             max_chars, timeout_secs);
 #else
     // Enforce a wall-clock timeout via GNU coreutils `timeout`. Without this,
     // a hung command (network wait, infinite loop, REPL with no stdin close)
     // blocks the worker thread forever and the UI hangs on the spinner.
     std::string wrapped = "timeout --kill-after=2s " + std::to_string(timeout_secs)
-                        + "s sh -c " + [&]{
-        std::string q = "'";
-        for (char c : cmd) { if (c == '\'') q += "'\\''"; else q += c; }
-        q += "'";
-        return q;
-    }() + " 2>&1";
+                        + "s sh -c " + posix_shell_quote(cmd) + " 2>&1";
     FILE* pipe = popen(wrapped.c_str(), "r");
     if (!pipe) return "[popen failed]";
     std::ostringstream out;
@@ -188,6 +249,29 @@ std::string run_command(const std::string& cmd, int max_chars = 30000,
 #endif
 }
 
+// Execute a program with a pre-built argv, bypassing the shell. Use this for
+// anything where we control the argv and don't want users' paths, commit
+// messages, refs, or format strings mangled by cmd.exe/sh quoting rules.
+std::string run_argv(const std::vector<std::string>& argv,
+                     int max_chars = 30000, int timeout_secs = 120) {
+    if (argv.empty()) return "[empty command]";
+#ifdef _WIN32
+    std::string cmdline;
+    for (size_t i = 0; i < argv.size(); ++i) {
+        if (i) cmdline.push_back(' ');
+        cmdline += win_quote_arg(argv[i]);
+    }
+    return run_win32_cmdline(cmdline, max_chars, timeout_secs);
+#else
+    std::string cmd;
+    for (size_t i = 0; i < argv.size(); ++i) {
+        if (i) cmd.push_back(' ');
+        cmd += posix_shell_quote(argv[i]);
+    }
+    return run_command(cmd, max_chars, timeout_secs);
+#endif
+}
+
 // ---- Read ------------------------------------------------------------------
 ToolDef tool_read() {
     ToolDef t;
@@ -205,15 +289,18 @@ ToolDef tool_read() {
     };
     t.needs_permission = [](Profile p){ return p == Profile::Minimal; };
     t.execute = [](const json& args) -> ExecResult {
-        std::string path = args.value("path", "");
+        std::string raw = args.value("path", "");
         int offset = args.value("offset", 1);
         int limit  = args.value("limit", 2000);
-        if (path.empty())
+        if (raw.empty())
             return std::unexpected(ToolError{"path required"});
+        auto p = normalize_path(raw);
         std::error_code ec;
-        if (!fs::exists(path, ec))
-            return std::unexpected(ToolError{"file not found: " + path});
-        auto content = read_file(path);
+        if (!fs::exists(p, ec))
+            return std::unexpected(ToolError{"file not found: " + p.string()});
+        if (!fs::is_regular_file(p, ec))
+            return std::unexpected(ToolError{"not a regular file: " + p.string()});
+        auto content = read_file(p);
         std::istringstream iss(content);
         std::ostringstream out;
         std::string line;
@@ -247,17 +334,31 @@ ToolDef tool_write() {
     };
     t.needs_permission = [](Profile p){ return p != Profile::Write; };
     t.execute = [](const json& args) -> ExecResult {
-        std::string path = args.value("path", "");
-        std::string content = args.value("content", "");
-        if (path.empty())
+        std::string raw = args.value("path", "");
+        if (raw.empty())
             return std::unexpected(ToolError{"path required"});
+        // Require `content` to be present in the args object. An explicit empty
+        // string is legitimate (creating an empty file), but a missing key
+        // almost always means the model forgot to include the content — fail
+        // loudly so it can self-correct rather than writing an empty file.
+        if (!args.is_object() || !args.contains("content"))
+            return std::unexpected(ToolError{"content required (pass empty string for an empty file)"});
+        if (!args["content"].is_string())
+            return std::unexpected(ToolError{"content must be a string"});
+        std::string content = args["content"].get<std::string>();
+        auto p = normalize_path(raw);
         std::string original;
         std::error_code ec;
-        if (fs::exists(path, ec)) original = read_file(path);
-        auto change = diff::compute(path, original, content);
-        write_file(path, content);
+        if (fs::exists(p, ec)) {
+            if (!fs::is_regular_file(p, ec))
+                return std::unexpected(ToolError{"not a regular file: " + p.string()});
+            original = read_file(p);
+        }
+        auto change = diff::compute(p.string(), original, content);
+        if (auto err = write_file(p, content); !err.empty())
+            return std::unexpected(ToolError{err});
         std::ostringstream msg;
-        msg << "wrote " << path << " (" << change.added << "+ "
+        msg << "wrote " << p.string() << " (" << change.added << "+ "
             << change.removed << "-)";
         return ToolOutput{msg.str(), std::move(change)};
     };
@@ -282,19 +383,30 @@ ToolDef tool_edit() {
     };
     t.needs_permission = [](Profile p){ return p != Profile::Write; };
     t.execute = [](const json& args) -> ExecResult {
-        std::string path = args.value("path", "");
-        std::string old_s = args.value("old_string", "");
-        std::string new_s = args.value("new_string", "");
-        bool all = args.value("replace_all", false);
-        if (path.empty())
+        if (!args.is_object())
+            return std::unexpected(ToolError{"args must be an object"});
+        std::string raw = args.value("path", "");
+        if (raw.empty())
             return std::unexpected(ToolError{"path required"});
-        std::error_code ec;
-        if (!fs::exists(path, ec))
-            return std::unexpected(ToolError{"file not found: " + path});
-        std::string original = read_file(path);
-        std::string updated = original;
+        if (!args.contains("old_string") || !args["old_string"].is_string())
+            return std::unexpected(ToolError{"old_string required (must be a string)"});
+        if (!args.contains("new_string") || !args["new_string"].is_string())
+            return std::unexpected(ToolError{"new_string required (must be a string; pass empty to delete)"});
+        std::string old_s = args["old_string"].get<std::string>();
+        std::string new_s = args["new_string"].get<std::string>();
+        bool all = args.value("replace_all", false);
         if (old_s.empty())
-            return std::unexpected(ToolError{"old_string empty"});
+            return std::unexpected(ToolError{"old_string cannot be empty"});
+        if (old_s == new_s)
+            return std::unexpected(ToolError{"old_string and new_string are identical — nothing to change"});
+        auto p = normalize_path(raw);
+        std::error_code ec;
+        if (!fs::exists(p, ec))
+            return std::unexpected(ToolError{"file not found: " + p.string()});
+        if (!fs::is_regular_file(p, ec))
+            return std::unexpected(ToolError{"not a regular file: " + p.string()});
+        std::string original = read_file(p);
+        std::string updated = original;
         if (all) {
             size_t pos = 0; int n = 0;
             while ((pos = updated.find(old_s, pos)) != std::string::npos) {
@@ -302,19 +414,32 @@ ToolDef tool_edit() {
                 pos += new_s.size();
                 n++;
             }
-            if (n == 0) return std::unexpected(ToolError{"old_string not found"});
+            if (n == 0)
+                return std::unexpected(ToolError{"old_string not found in " + p.string()});
         } else {
             auto pos = updated.find(old_s);
-            if (pos == std::string::npos)
-                return std::unexpected(ToolError{"old_string not found"});
+            if (pos == std::string::npos) {
+                // Help the model localize its error: if the string isn't unique
+                // whitespace is the most common cause.
+                std::string hint;
+                std::string squashed_old, squashed_new;
+                for (char c : old_s) if (c != ' ' && c != '\t' && c != '\n') squashed_old += c;
+                for (char c : updated) if (c != ' ' && c != '\t' && c != '\n') squashed_new += c;
+                if (!squashed_old.empty()
+                    && squashed_new.find(squashed_old) != std::string::npos)
+                    hint = " (the text exists but whitespace differs — match the exact indentation)";
+                return std::unexpected(ToolError{"old_string not found in " + p.string() + hint});
+            }
             if (updated.find(old_s, pos + 1) != std::string::npos)
-                return std::unexpected(ToolError{"old_string is not unique; pass replace_all=true"});
+                return std::unexpected(ToolError{"old_string is not unique in " + p.string()
+                    + "; add surrounding context or pass replace_all=true"});
             updated.replace(pos, old_s.size(), new_s);
         }
-        auto change = diff::compute(path, original, updated);
-        write_file(path, updated);
+        auto change = diff::compute(p.string(), original, updated);
+        if (auto err = write_file(p, updated); !err.empty())
+            return std::unexpected(ToolError{err});
         std::ostringstream msg;
-        msg << "edited " << path << " (" << change.added << "+ "
+        msg << "edited " << p.string() << " (" << change.added << "+ "
             << change.removed << "-)";
         return ToolOutput{msg.str(), std::move(change)};
     };
@@ -406,8 +531,8 @@ ToolDef tool_grep() {
         std::string file_glob = args.value("glob", "");
         if (pat.empty()) return std::unexpected(ToolError{"pattern required"});
         std::regex re;
-        try { re = std::regex(pat); } catch (...) {
-            return std::unexpected(ToolError{"bad regex"});
+        try { re = std::regex(pat); } catch (const std::regex_error& e) {
+            return std::unexpected(ToolError{std::string{"invalid regex '"} + pat + "': " + e.what()});
         }
         std::ostringstream out;
         int matches = 0;
@@ -666,6 +791,7 @@ ToolDef tool_web_fetch() {
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
         curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+        auth::apply_tls_options(curl);
 
         if (method == "HEAD")
             curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
@@ -718,21 +844,36 @@ ToolDef tool_find_definition() {
         if (sym.empty())
             return std::unexpected(ToolError{"symbol required"});
 
+        // Regex-escape the symbol. Operator names (`operator*`, `operator<<`)
+        // and templated forms otherwise explode the regex parser.
+        std::string esc;
+        esc.reserve(sym.size() * 2);
+        for (char c : sym) {
+            switch (c) {
+                case '.': case '*': case '+': case '?': case '(': case ')':
+                case '[': case ']': case '{': case '}': case '|': case '^':
+                case '$': case '\\':
+                    esc.push_back('\\'); [[fallthrough]];
+                default:
+                    esc.push_back(c);
+            }
+        }
+
         // Patterns that typically indicate a definition
         std::vector<std::regex> patterns;
         try {
             // C/C++
-            patterns.emplace_back("\\b(class|struct|enum|union|namespace|typedef|using)\\s+" + sym + "\\b");
-            patterns.emplace_back("\\b\\w[\\w:*&<> ]*\\s+" + sym + "\\s*\\(");
-            patterns.emplace_back("#define\\s+" + sym + "\\b");
+            patterns.emplace_back("\\b(class|struct|enum|union|namespace|typedef|using)\\s+" + esc + "\\b");
+            patterns.emplace_back("\\b\\w[\\w:*&<> ]*\\s+" + esc + "\\s*\\(");
+            patterns.emplace_back("#define\\s+" + esc + "\\b");
             // Python
-            patterns.emplace_back("\\b(def|class)\\s+" + sym + "\\s*[\\(:]");
+            patterns.emplace_back("\\b(def|class)\\s+" + esc + "\\s*[\\(:]");
             // JS/TS
-            patterns.emplace_back("\\b(function|const|let|var|type|interface|export)\\s+" + sym + "\\b");
+            patterns.emplace_back("\\b(function|const|let|var|type|interface|export)\\s+" + esc + "\\b");
             // Go
-            patterns.emplace_back("\\b(func|type)\\s+" + sym + "\\b");
+            patterns.emplace_back("\\b(func|type)\\s+" + esc + "\\b");
             // Rust
-            patterns.emplace_back("\\b(fn|struct|enum|trait|type|mod|const|static)\\s+" + sym + "\\b");
+            patterns.emplace_back("\\b(fn|struct|enum|trait|type|mod|const|static)\\s+" + esc + "\\b");
         } catch (...) {
             return std::unexpected(ToolError{"invalid symbol name for regex"});
         }
@@ -808,21 +949,25 @@ ToolDef tool_diagnostics() {
     t.execute = [](const json& args) -> ExecResult {
         std::string cmd = args.value("command", "");
         std::error_code ec;
+        // Auto-detect commands use run_argv so we don't depend on shell features
+        // like `| head -N` (cmd.exe has no head). The 30k-char truncation in
+        // run_argv caps runaway output.
+        std::vector<std::string> auto_argv;
         if (cmd.empty()) {
             if (fs::exists("build/build.ninja", ec) || fs::exists("build/Makefile", ec))
-                cmd = "cmake --build build 2>&1 | head -100";
+                auto_argv = {"cmake", "--build", "build"};
             else if (fs::exists("Cargo.toml", ec))
-                cmd = "cargo check 2>&1 | head -100";
+                auto_argv = {"cargo", "check"};
             else if (fs::exists("go.mod", ec))
-                cmd = "go build ./... 2>&1 | head -100";
+                auto_argv = {"go", "build", "./..."};
             else if (fs::exists("package.json", ec))
-                cmd = "npx tsc --noEmit 2>&1 | head -50";
+                auto_argv = {"npx", "tsc", "--noEmit"};
             else if (fs::exists("Makefile", ec))
-                cmd = "make -n 2>&1 | head -100";
+                auto_argv = {"make", "-n"};
             else
                 return std::unexpected(ToolError{"no build system detected; pass a command"});
         }
-        auto output = run_command(cmd);
+        auto output = auto_argv.empty() ? run_command(cmd) : run_argv(auto_argv);
         if (output.empty()) return ToolOutput{"no diagnostics (clean build)", std::nullopt};
         return ToolOutput{std::move(output), std::nullopt};
     };
@@ -844,7 +989,8 @@ ToolDef tool_git_status() {
     t.needs_permission = [](Profile){ return false; };
     t.execute = [](const json& args) -> ExecResult {
         std::string root = args.value("path", ".");
-        auto output = run_command("git -C " + root + " status --porcelain=v2 --branch");
+        auto output = run_argv({"git", "-C", root, "status",
+                                "--porcelain=v2", "--branch"});
         return ToolOutput{std::move(output), std::nullopt};
     };
     return t;
@@ -869,11 +1015,11 @@ ToolDef tool_git_diff() {
         std::string path = args.value("path", "");
         bool staged = args.value("staged", false);
         std::string ref = args.value("ref", "");
-        std::string cmd = "git diff --stat -p";
-        if (staged) cmd += " --cached";
-        if (!ref.empty()) cmd += " " + ref;
-        if (!path.empty()) cmd += " -- " + path;
-        auto output = run_command(cmd, 50000);
+        std::vector<std::string> argv = {"git", "diff", "--stat", "-p"};
+        if (staged) argv.push_back("--cached");
+        if (!ref.empty()) argv.push_back(ref);
+        if (!path.empty()) { argv.push_back("--"); argv.push_back(path); }
+        auto output = run_argv(argv, 50000);
         if (output.empty()) return ToolOutput{"no changes", std::nullopt};
         return ToolOutput{std::move(output), std::nullopt};
     };
@@ -900,15 +1046,17 @@ ToolDef tool_git_log() {
         std::string path = args.value("path", "");
         std::string ref = args.value("ref", "HEAD");
         bool oneline = args.value("oneline", false);
-        std::string cmd = "git log";
-        if (oneline)
-            cmd += " --oneline";
-        else
-            cmd += " --format='%h %ad %an%n  %s' --date=short";
-        cmd += " -" + std::to_string(count);
-        cmd += " " + ref;
-        if (!path.empty()) cmd += " -- " + path;
-        auto output = run_command(cmd);
+        std::vector<std::string> argv = {"git", "log"};
+        if (oneline) {
+            argv.push_back("--oneline");
+        } else {
+            argv.push_back("--format=%h %ad %an%n  %s");
+            argv.push_back("--date=short");
+        }
+        argv.push_back("-" + std::to_string(count));
+        argv.push_back(ref);
+        if (!path.empty()) { argv.push_back("--"); argv.push_back(path); }
+        auto output = run_argv(argv);
         if (output.empty()) return ToolOutput{"no commits", std::nullopt};
         return ToolOutput{std::move(output), std::nullopt};
     };
@@ -939,24 +1087,18 @@ ToolDef tool_git_commit() {
             return std::unexpected(ToolError{"commit message required"});
 
         if (stage_all) {
-            auto out = run_command("git add -A");
+            auto out = run_argv({"git", "add", "-A"});
             if (out.find("[exit code") != std::string::npos)
                 return std::unexpected(ToolError{"git add failed: " + out});
         } else if (args.contains("files") && args["files"].is_array()) {
             for (const auto& f : args["files"]) {
-                auto out = run_command("git add " + f.get<std::string>());
+                auto out = run_argv({"git", "add", f.get<std::string>()});
                 if (out.find("[exit code") != std::string::npos)
                     return std::unexpected(ToolError{"git add failed: " + out});
             }
         }
 
-        // Escape single quotes in message
-        std::string escaped;
-        for (char c : message) {
-            if (c == '\'') escaped += "'\\''";
-            else escaped += c;
-        }
-        auto output = run_command("git commit -m '" + escaped + "'");
+        auto output = run_argv({"git", "commit", "-m", message});
         return ToolOutput{std::move(output), std::nullopt};
     };
     return t;
@@ -1000,6 +1142,7 @@ ToolDef tool_web_search() {
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
         curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+        auth::apply_tls_options(curl);
 
         CURLcode rc = curl_easy_perform(curl);
         curl_slist_free_all(hdrs);
