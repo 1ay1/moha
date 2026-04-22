@@ -17,6 +17,7 @@
 
 #include "moha/tool/registry.hpp"
 
+#include <concepts>
 #include <expected>
 #include <functional>
 #include <utility>
@@ -25,7 +26,14 @@
 
 namespace moha::tools::util {
 
-template <typename Args>
+// Any struct that a tool's `parse` function emits and `run` consumes.
+// Stated as a concept so adapt's signature gives a sharp error at the
+// call site when a tool author wires up the wrong type — e.g. passes a
+// parser that returns `std::expected<Args, std::string>`.
+template <class T>
+concept ToolArgs = std::is_class_v<T> && std::movable<T>;
+
+template <ToolArgs Args>
 [[nodiscard]] auto adapt(
         std::expected<Args, ToolError> (*parse)(const nlohmann::json&),
         ExecResult (*run)(const Args&))

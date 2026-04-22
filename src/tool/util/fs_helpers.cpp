@@ -14,7 +14,7 @@ std::string read_file(const fs::path& p) {
     return oss.str();
 }
 
-std::string write_file(const fs::path& p, const std::string& content) {
+std::string write_file(const fs::path& p, std::string_view content) {
     auto parent = p.parent_path();
     if (!parent.empty()) {
         std::error_code ec;
@@ -29,14 +29,15 @@ std::string write_file(const fs::path& p, const std::string& content) {
     return {};
 }
 
-fs::path normalize_path(std::string s) {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
-    while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+fs::path normalize_path(std::string_view s) {
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t'))  s.remove_suffix(1);
     if (s.size() >= 2 && ((s.front() == '"' && s.back() == '"')
                           || (s.front() == '\'' && s.back() == '\''))) {
-        s = s.substr(1, s.size() - 2);
+        s.remove_prefix(1);
+        s.remove_suffix(1);
     }
-    fs::path p(s);
+    fs::path p{s};
     std::error_code ec;
     if (!p.is_absolute()) p = fs::absolute(p, ec);
     return p;

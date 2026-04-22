@@ -170,7 +170,7 @@ std::expected<GitCommitArgs, ToolError> parse_git_commit_args(const json& j) {
     util::ArgReader ar(j);
     auto msg_opt = ar.require_str("message");
     if (!msg_opt)
-        return std::unexpected(ToolError{"commit message required"});
+        return std::unexpected(ToolError::invalid_args("commit message required"));
     std::vector<std::string> files;
     if (const json* f = ar.raw("files"); f && f->is_array()) {
         files.reserve(f->size());
@@ -190,12 +190,12 @@ ExecResult run_git_commit(const GitCommitArgs& a) {
     if (a.stage_all) {
         auto out = util::run_argv({"git", "add", "-A"});
         if (out.find("[exit code") != std::string::npos)
-            return std::unexpected(ToolError{"git add failed: " + out});
+            return std::unexpected(ToolError::subprocess("git add failed: " + out));
     } else {
         for (const auto& f : a.files) {
             auto out = util::run_argv({"git", "add", f});
             if (out.find("[exit code") != std::string::npos)
-                return std::unexpected(ToolError{"git add failed: " + out});
+                return std::unexpected(ToolError::subprocess("git add failed: " + out));
         }
     }
     auto output = util::run_argv({"git", "commit", "-m", a.message});

@@ -39,9 +39,9 @@ std::expected<ListDirArgs, ToolError> parse_list_dir_args(const json& j) {
 ExecResult run_list_dir(const ListDirArgs& a) {
     std::error_code ec;
     if (!fs::exists(a.root, ec))
-        return std::unexpected(ToolError{"directory not found: " + a.root});
+        return std::unexpected(ToolError::not_found("directory not found: " + a.root));
     if (!fs::is_directory(a.root, ec))
-        return std::unexpected(ToolError{"not a directory: " + a.root});
+        return std::unexpected(ToolError::not_a_directory("not a directory: " + a.root));
 
     std::ostringstream out;
     int count = 0;

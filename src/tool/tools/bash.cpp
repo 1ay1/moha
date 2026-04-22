@@ -25,10 +25,10 @@ std::expected<BashArgs, ToolError> parse_bash_args(const json& j) {
     util::ArgReader ar(j);
     auto cmd_opt = ar.require_str("command");
     if (!cmd_opt)
-        return std::unexpected(ToolError{"command required"});
+        return std::unexpected(ToolError::invalid_args("command required"));
     std::string cmd = *std::move(cmd_opt);
     if (auto why = util::validate_bash_command(cmd); !why.empty())
-        return std::unexpected(ToolError{std::move(why)});
+        return std::unexpected(ToolError::invalid_args(std::move(why)));
     int timeout = ar.integer("timeout", 120);
     if (timeout <= 0 || timeout > 600) timeout = 120;
     return BashArgs{std::move(cmd), timeout};
@@ -43,8 +43,8 @@ ExecResult run_bash(const BashArgs& a) {
     // Zed-style per-state output: success+empty is affirmative,
     // failure names its exit code, timeout surfaces partial output.
     if (!r.started)
-        return std::unexpected(ToolError{
-            "failed to spawn command: " + r.start_error});
+        return std::unexpected(ToolError::spawn(
+            "failed to spawn command: " + r.start_error));
 
     auto fence = [](const std::string& body) {
         return std::string{"```\n"} + body + (body.empty() || body.back() == '\n'

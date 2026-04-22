@@ -20,8 +20,53 @@ struct ToolOutput {
     std::optional<FileChange> change;
 };
 
+// Typed error kind. Lets the UI color / retry / suggest based on category
+// rather than string-matching `detail`. Add new variants rather than
+// stuffing semantics into the detail message.
+enum class ErrorKind : std::uint8_t {
+    InvalidArgs,    // schema/validation failure (missing field, empty string, out of range)
+    NotFound,       // file/dir/symbol doesn't exist
+    NotAFile,       // exists but isn't a regular file
+    NotADirectory,  // exists but isn't a directory
+    TooLarge,       // input exceeded a size cap (read's 1 MiB, etc.)
+    Binary,         // refused to treat a binary file as text
+    Ambiguous,      // multiple matches where one was required (edit's old_string)
+    NoMatch,        // pattern matched nothing (edit's old_string, grep)
+    InvalidRegex,   // regex didn't compile
+    Network,        // curl / HTTP transport failure
+    Spawn,          // child process failed to start
+    Subprocess,     // subprocess returned non-zero
+    Io,             // generic I/O (write_file failed, etc.)
+    Unknown,        // uncaught exception / unknown tool
+};
+
+[[nodiscard]] std::string_view to_string(ErrorKind k) noexcept;
+
 struct ToolError {
-    std::string message;
+    ErrorKind kind = ErrorKind::Unknown;
+    std::string detail;
+
+    // Factories read well at call sites:
+    //     return std::unexpected(ToolError::not_found(path));
+    [[nodiscard]] static ToolError invalid_args(std::string d)    noexcept { return {ErrorKind::InvalidArgs,   std::move(d)}; }
+    [[nodiscard]] static ToolError not_found(std::string d)       noexcept { return {ErrorKind::NotFound,      std::move(d)}; }
+    [[nodiscard]] static ToolError not_a_file(std::string d)      noexcept { return {ErrorKind::NotAFile,      std::move(d)}; }
+    [[nodiscard]] static ToolError not_a_directory(std::string d) noexcept { return {ErrorKind::NotADirectory, std::move(d)}; }
+    [[nodiscard]] static ToolError too_large(std::string d)       noexcept { return {ErrorKind::TooLarge,      std::move(d)}; }
+    [[nodiscard]] static ToolError binary(std::string d)          noexcept { return {ErrorKind::Binary,        std::move(d)}; }
+    [[nodiscard]] static ToolError ambiguous(std::string d)       noexcept { return {ErrorKind::Ambiguous,     std::move(d)}; }
+    [[nodiscard]] static ToolError no_match(std::string d)        noexcept { return {ErrorKind::NoMatch,       std::move(d)}; }
+    [[nodiscard]] static ToolError invalid_regex(std::string d)   noexcept { return {ErrorKind::InvalidRegex,  std::move(d)}; }
+    [[nodiscard]] static ToolError network(std::string d)         noexcept { return {ErrorKind::Network,       std::move(d)}; }
+    [[nodiscard]] static ToolError spawn(std::string d)           noexcept { return {ErrorKind::Spawn,         std::move(d)}; }
+    [[nodiscard]] static ToolError subprocess(std::string d)      noexcept { return {ErrorKind::Subprocess,    std::move(d)}; }
+    [[nodiscard]] static ToolError io(std::string d)              noexcept { return {ErrorKind::Io,            std::move(d)}; }
+    [[nodiscard]] static ToolError unknown(std::string d)         noexcept { return {ErrorKind::Unknown,       std::move(d)}; }
+
+    // "[not found] path/to/file" — the UI's default stringification when it
+    // doesn't care to branch on kind. Tools that just want the raw message
+    // read `.detail` directly.
+    [[nodiscard]] std::string render() const;
 };
 
 using ExecResult = std::expected<ToolOutput, ToolError>;

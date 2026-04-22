@@ -27,7 +27,7 @@ std::expected<GlobArgs, ToolError> parse_glob_args(const json& j) {
     util::ArgReader ar(j);
     auto pat_opt = ar.require_str("pattern");
     if (!pat_opt)
-        return std::unexpected(ToolError{"pattern required"});
+        return std::unexpected(ToolError::invalid_args("pattern required"));
     return GlobArgs{*std::move(pat_opt), ar.str("path", ".")};
 }
 

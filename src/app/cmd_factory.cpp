@@ -1,5 +1,7 @@
 #include "moha/app/cmd_factory.hpp"
 
+#include <algorithm>
+#include <ranges>
 #include <utility>
 
 #include "moha/io/anthropic.hpp"
@@ -64,7 +66,9 @@ Cmd<Msg> run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args) {
                 if (result) {
                     dispatch(ToolExecOutput{id, std::move(result->text), false});
                 } else {
-                    dispatch(ToolExecOutput{id, std::move(result.error().message), true});
+                    // UI doesn't branch on error kind yet — render as
+                    // "[kind] detail" so the category is visible in history.
+                    dispatch(ToolExecOutput{id, result.error().render(), true});
                 }
             } catch (const std::exception& e) {
                 // DynamicDispatch already catches tool exceptions, but guard
@@ -114,15 +118,11 @@ Cmd<Msg> kick_pending_tools(Model& m) {
     }
 
     if (!any_pending) {
-        bool has_results = false;
-        for (const auto& tc : last.tool_calls) {
-            if (tc.status == ToolUse::Status::Done
+        const bool has_results = std::ranges::any_of(last.tool_calls, [](const auto& tc){
+            return tc.status == ToolUse::Status::Done
                 || tc.status == ToolUse::Status::Error
-                || tc.status == ToolUse::Status::Rejected) {
-                has_results = true;
-                break;
-            }
-        }
+                || tc.status == ToolUse::Status::Rejected;
+        });
         if (has_results) {
             m.stream.phase = Phase::Streaming;
             m.stream.active = true;

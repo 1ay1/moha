@@ -27,7 +27,7 @@ std::string_view first_token(std::string_view cmd) noexcept {
 
 } // namespace
 
-std::string validate_bash_command(const std::string& cmd) {
+std::string validate_bash_command(std::string_view cmd) {
     auto tok = first_token(cmd);
     // REPLs & editors that block waiting on stdin or take over the terminal.
     // Some (python/node) are only interactive when invoked with no args —

@@ -39,10 +39,10 @@ std::expected<WebFetchArgs, ToolError> parse_web_fetch_args(const json& j) {
     util::ArgReader ar(j);
     auto url_opt = ar.require_str("url");
     if (!url_opt)
-        return std::unexpected(ToolError{"url required"});
+        return std::unexpected(ToolError::invalid_args("url required"));
     std::string url = *std::move(url_opt);
     if (!url.starts_with("http://") && !url.starts_with("https://"))
-        return std::unexpected(ToolError{"url must start with http:// or https://"});
+        return std::unexpected(ToolError::invalid_args("url must start with http:// or https://"));
     std::vector<std::pair<std::string, std::string>> hdrs;
     if (const json* h = ar.raw("headers"); h && h->is_object()) {
         for (auto& [k, v] : h->items()) {
@@ -74,7 +74,7 @@ namespace {
 
 ExecResult run_web_fetch(const WebFetchArgs& a) {
     CURL* curl = curl_easy_init();
-    if (!curl) return std::unexpected(ToolError{"failed to initialize HTTP client"});
+    if (!curl) return std::unexpected(ToolError::network("failed to initialize HTTP client"));
 
     std::string body;
     struct curl_slist* hdrs = nullptr;
@@ -110,7 +110,7 @@ ExecResult run_web_fetch(const WebFetchArgs& a) {
     curl_easy_cleanup(curl);
 
     if (rc != CURLE_OK)
-        return std::unexpected(ToolError{std::string{"fetch failed: "} + curl_easy_strerror(rc)});
+        return std::unexpected(ToolError::network(std::string{"fetch failed: "} + curl_easy_strerror(rc)));
 
     std::ostringstream out;
     out << "HTTP " << http_code;

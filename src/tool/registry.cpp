@@ -1,11 +1,38 @@
 #include "moha/tool/registry.hpp"
 #include "moha/tool/tools.hpp"
 
+#include <algorithm>
+#include <format>
+#include <ranges>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 namespace moha::tools {
+
+std::string_view to_string(ErrorKind k) noexcept {
+    switch (k) {
+        case ErrorKind::InvalidArgs:    return "invalid args";
+        case ErrorKind::NotFound:       return "not found";
+        case ErrorKind::NotAFile:       return "not a file";
+        case ErrorKind::NotADirectory:  return "not a directory";
+        case ErrorKind::TooLarge:       return "too large";
+        case ErrorKind::Binary:         return "binary";
+        case ErrorKind::Ambiguous:      return "ambiguous";
+        case ErrorKind::NoMatch:        return "no match";
+        case ErrorKind::InvalidRegex:   return "invalid regex";
+        case ErrorKind::Network:        return "network";
+        case ErrorKind::Spawn:          return "spawn failed";
+        case ErrorKind::Subprocess:     return "subprocess failed";
+        case ErrorKind::Io:             return "io";
+        case ErrorKind::Unknown:        return "unknown";
+    }
+    return "unknown";
+}
+
+std::string ToolError::render() const {
+    return std::format("[{}] {}", to_string(kind), detail);
+}
 
 // ── Live progress sink (thread-local implementation) ────────────────────
 //
@@ -56,8 +83,9 @@ const std::vector<ToolDef>& registry() {
 }
 
 const ToolDef* find(std::string_view name) {
-    for (const auto& t : registry()) if (t.name == name) return &t;
-    return nullptr;
+    const auto& r = registry();
+    auto it = std::ranges::find_if(r, [&](const ToolDef& t) { return t.name.value == name; });
+    return it == r.end() ? nullptr : &*it;
 }
 
 } // namespace moha::tools

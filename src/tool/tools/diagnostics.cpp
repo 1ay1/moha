@@ -21,30 +21,45 @@ struct DiagnosticsArgs {
     std::string command;  // empty means auto-detect
 };
 
+// Typed detection result — stringly-typed "cmake" / "cargo" would let a
+// typo silently fall through to the default branch. An enum class + a
+// single `detect_build_system` that names exactly the supported systems
+// keeps the mapping from marker file → argv localised and total.
+enum class BuildSystem { None, CMake, Cargo, Go, Node, Make };
+
+[[nodiscard]] BuildSystem detect_build_system() noexcept {
+    std::error_code ec;
+    if (fs::exists("build/build.ninja", ec) || fs::exists("build/Makefile", ec)) return BuildSystem::CMake;
+    if (fs::exists("Cargo.toml", ec))    return BuildSystem::Cargo;
+    if (fs::exists("go.mod", ec))        return BuildSystem::Go;
+    if (fs::exists("package.json", ec))  return BuildSystem::Node;
+    if (fs::exists("Makefile", ec))      return BuildSystem::Make;
+    return BuildSystem::None;
+}
+
+[[nodiscard]] std::vector<std::string> build_argv_for(BuildSystem bs) {
+    switch (bs) {
+        case BuildSystem::CMake: return {"cmake", "--build", "build"};
+        case BuildSystem::Cargo: return {"cargo", "check"};
+        case BuildSystem::Go:    return {"go", "build", "./..."};
+        case BuildSystem::Node:  return {"npx", "tsc", "--noEmit"};
+        case BuildSystem::Make:  return {"make", "-n"};
+        case BuildSystem::None:  return {};
+    }
+    return {};
+}
+
 std::expected<DiagnosticsArgs, ToolError> parse_diagnostics_args(const json& j) {
     util::ArgReader ar(j);
     return DiagnosticsArgs{ar.str("command", "")};
 }
 
 ExecResult run_diagnostics(const DiagnosticsArgs& a) {
-    std::error_code ec;
-    // Auto-detect commands use run_argv so we don't depend on shell
-    // features like `| head -N` (cmd.exe has no head). The 30k-char
-    // truncation caps runaway output.
     std::vector<std::string> auto_argv;
     if (a.command.empty()) {
-        if (fs::exists("build/build.ninja", ec) || fs::exists("build/Makefile", ec))
-            auto_argv = {"cmake", "--build", "build"};
-        else if (fs::exists("Cargo.toml", ec))
-            auto_argv = {"cargo", "check"};
-        else if (fs::exists("go.mod", ec))
-            auto_argv = {"go", "build", "./..."};
-        else if (fs::exists("package.json", ec))
-            auto_argv = {"npx", "tsc", "--noEmit"};
-        else if (fs::exists("Makefile", ec))
-            auto_argv = {"make", "-n"};
-        else
-            return std::unexpected(ToolError{"no build system detected; pass a command"});
+        auto_argv = build_argv_for(detect_build_system());
+        if (auto_argv.empty())
+            return std::unexpected(ToolError::not_found("no build system detected; pass a command"));
     }
     auto output = auto_argv.empty() ? util::run_command(a.command)
                                     : util::run_argv(auto_argv);

@@ -19,13 +19,13 @@ namespace fs = std::filesystem;
 // Write content atomically-ish (truncate + write + flush). Returns the
 // empty string on success, or a human-readable error otherwise. Keeps tool
 // lambdas terse while still forcing callers to surface failures.
-[[nodiscard]] std::string write_file(const fs::path& p, const std::string& content);
+[[nodiscard]] std::string write_file(const fs::path& p, std::string_view content);
 
 // Normalise a user-supplied path. Accepts forward slashes on Windows
 // (the model frequently produces them), strips surrounding whitespace and
 // quotes, and returns an absolute path relative to cwd when not already
 // absolute — so error messages name an unambiguous location.
-[[nodiscard]] fs::path normalize_path(std::string s);
+[[nodiscard]] fs::path normalize_path(std::string_view s);
 
 // Strong typedef for an already-normalised filesystem path. The only way
 // to construct one is from a raw string via `NormalizedPath{"..."}`, which
@@ -34,8 +34,7 @@ namespace fs = std::filesystem;
 struct NormalizedPath {
     fs::path value;
 
-    explicit NormalizedPath(std::string raw) : value(normalize_path(std::move(raw))) {}
-    explicit NormalizedPath(fs::path p) : value(std::move(p)) {}
+    explicit NormalizedPath(std::string_view raw) : value(normalize_path(raw)) {}
 
     [[nodiscard]] const fs::path& path() const noexcept { return value; }
     [[nodiscard]] std::string string() const { return value.string(); }

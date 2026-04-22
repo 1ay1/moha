@@ -5,7 +5,7 @@
 #include "moha/io/diff.hpp"
 
 #include <filesystem>
-#include <sstream>
+#include <format>
 #include <string>
 #include <system_error>
 
@@ -28,7 +28,7 @@ std::expected<WriteArgs, ToolError> parse_write_args(const json& j) {
     util::ArgReader ar(j);
     auto raw = ar.require_str("path");
     if (!raw)
-        return std::unexpected(ToolError{"path required"});
+        return std::unexpected(ToolError::invalid_args("path required"));
     // Tolerant coercion: missing/null/array/number content all produce a
     // writable string rather than a red error — the note tells the model
     // what we inferred so it can retry with a proper string if needed.
@@ -52,7 +52,7 @@ ExecResult run_write(const WriteArgs& a) {
     bool exists = fs::exists(p, ec);
     if (exists) {
         if (!fs::is_regular_file(p, ec))
-            return std::unexpected(ToolError{"not a regular file: " + a.path.string()});
+            return std::unexpected(ToolError::not_a_file("not a regular file: " + a.path.string()));
         original = util::read_file(p);
     }
     // No-op short-circuit: an identical rewrite is often the model
@@ -63,12 +63,12 @@ ExecResult run_write(const WriteArgs& a) {
                           std::nullopt};
     auto change = diff::compute(a.path.string(), original, a.content);
     if (auto err = util::write_file(p, a.content); !err.empty())
-        return std::unexpected(ToolError{err});
-    std::ostringstream msg;
-    msg << (exists ? "Overwrote " : "Created ") << a.path.string()
-        << " (" << change.added << "+ " << change.removed << "-)"
-        << a.coercion_note;
-    return ToolOutput{msg.str(), std::move(change)};
+        return std::unexpected(ToolError::io(err));
+    auto msg = std::format("{} {} ({}+ {}-){}",
+                           exists ? "Overwrote" : "Created",
+                           a.path.string(), change.added, change.removed,
+                           a.coercion_note);
+    return ToolOutput{std::move(msg), std::move(change)};
 }
 
 } // namespace

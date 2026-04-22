@@ -20,9 +20,9 @@ class ArgReader {
 public:
     explicit ArgReader(const nlohmann::json& args) noexcept : args_(args) {}
 
-    bool is_object() const noexcept { return args_.is_object(); }
+    [[nodiscard]] bool is_object() const noexcept { return args_.is_object(); }
 
-    bool has(std::string_view key) const {
+    [[nodiscard]] bool has(std::string_view key) const {
         return args_.is_object() && args_.contains(std::string{key});
     }
 
@@ -30,23 +30,23 @@ public:
     // of elements (matching write-tool's idiom). `note` is set to a
     // non-empty human-readable string when a coercion happened, so callers
     // can echo it to the model without showing an error.
-    std::string str(std::string_view key,
-                    std::string def = {},
-                    std::string* note = nullptr) const;
+    [[nodiscard]] std::string str(std::string_view key,
+                                  std::string def = {},
+                                  std::string* note = nullptr) const;
 
     // Like str(), but returns nullopt if the key is missing, null, or
     // produces an empty string after coercion. For genuinely required
     // fields.
-    std::optional<std::string> require_str(std::string_view key) const;
+    [[nodiscard]] std::optional<std::string> require_str(std::string_view key) const;
 
     // Parses "42" strings, truncates doubles. Returns def on missing/null
     // or parse failure.
-    int integer(std::string_view key, int def) const;
+    [[nodiscard]] int integer(std::string_view key, int def) const;
 
     // Accepts "true"/"false" / "1"/"0" strings.
-    bool boolean(std::string_view key, bool def) const;
+    [[nodiscard]] bool boolean(std::string_view key, bool def) const;
 
-    const nlohmann::json* raw(std::string_view key) const;
+    [[nodiscard]] const nlohmann::json* raw(std::string_view key) const noexcept;
 
 private:
     const nlohmann::json& args_;

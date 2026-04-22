@@ -34,7 +34,7 @@ std::expected<GrepArgs, ToolError> parse_grep_args(const json& j) {
     util::ArgReader ar(j);
     auto pat_opt = ar.require_str("pattern");
     if (!pat_opt)
-        return std::unexpected(ToolError{"pattern required"});
+        return std::unexpected(ToolError::invalid_args("pattern required"));
     int offset = ar.integer("offset", 0);
     if (offset < 0) offset = 0;
     return GrepArgs{
@@ -55,7 +55,7 @@ ExecResult run_grep(const GrepArgs& a) {
     if (!a.case_sensitive) flags = flags | std::regex::icase;
     std::regex re;
     try { re = std::regex(a.pattern, flags); } catch (const std::regex_error& e) {
-        return std::unexpected(ToolError{std::string{"invalid regex '"} + a.pattern + "': " + e.what()});
+        return std::unexpected(ToolError::invalid_regex(std::string{"invalid regex '"} + a.pattern + "': " + e.what()));
     }
 
     struct FileHits { std::vector<std::string> lines; std::vector<int> match_rows; };

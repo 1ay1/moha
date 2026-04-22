@@ -9,9 +9,10 @@
 // human-readable rejection reason suitable for surfacing as a ToolError.
 
 #include <string>
+#include <string_view>
 
 namespace moha::tools::util {
 
-[[nodiscard]] std::string validate_bash_command(const std::string& cmd);
+[[nodiscard]] std::string validate_bash_command(std::string_view cmd);
 
 } // namespace moha::tools::util

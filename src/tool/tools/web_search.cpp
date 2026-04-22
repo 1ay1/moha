@@ -27,13 +27,13 @@ std::expected<WebSearchArgs, ToolError> parse_web_search_args(const json& j) {
     util::ArgReader ar(j);
     auto q_opt = ar.require_str("query");
     if (!q_opt)
-        return std::unexpected(ToolError{"query required"});
+        return std::unexpected(ToolError::invalid_args("query required"));
     return WebSearchArgs{*std::move(q_opt), ar.integer("count", 10)};
 }
 
 ExecResult run_web_search(const WebSearchArgs& a) {
     CURL* curl = curl_easy_init();
-    if (!curl) return std::unexpected(ToolError{"failed to initialize HTTP client"});
+    if (!curl) return std::unexpected(ToolError::network("failed to initialize HTTP client"));
 
     char* encoded = curl_easy_escape(curl, a.query.c_str(), (int)a.query.size());
     std::string url = std::string{"https://html.duckduckgo.com/html/?q="} + encoded;
@@ -57,7 +57,7 @@ ExecResult run_web_search(const WebSearchArgs& a) {
     curl_easy_cleanup(curl);
 
     if (rc != CURLE_OK)
-        return std::unexpected(ToolError{std::string{"search failed: "} + curl_easy_strerror(rc)});
+        return std::unexpected(ToolError::network(std::string{"search failed: "} + curl_easy_strerror(rc)));
 
     std::ostringstream out;
     int found = 0;

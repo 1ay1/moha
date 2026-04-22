@@ -28,7 +28,7 @@ std::expected<FindDefinitionArgs, ToolError> parse_find_definition_args(const js
     util::ArgReader ar(j);
     auto sym_opt = ar.require_str("symbol");
     if (!sym_opt)
-        return std::unexpected(ToolError{"symbol required"});
+        return std::unexpected(ToolError::invalid_args("symbol required"));
     return FindDefinitionArgs{*std::move(sym_opt), ar.str("path", ".")};
 }
 
@@ -63,7 +63,7 @@ ExecResult run_find_definition(const FindDefinitionArgs& a) {
         // Rust
         patterns.emplace_back("\\b(fn|struct|enum|trait|type|mod|const|static)\\s+" + esc + "\\b");
     } catch (...) {
-        return std::unexpected(ToolError{"invalid symbol name for regex"});
+        return std::unexpected(ToolError::invalid_regex("invalid symbol name for regex"));
     }
 
     static const std::vector<std::string> skip_dirs = {

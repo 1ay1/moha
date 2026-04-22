@@ -35,12 +35,12 @@ struct DynamicDispatch {
     [[nodiscard]] static ExecResult execute(std::string_view name,
                                             const nlohmann::json& args) noexcept {
         const auto* td = tools::find(name);
-        if (!td) return std::unexpected(ToolError{"unknown tool: " + std::string{name}});
+        if (!td) return std::unexpected(ToolError::not_found("unknown tool: " + std::string{name}));
         auto safe_args = args.is_object() ? args : nlohmann::json::object();
         try {
             return td->execute(safe_args);
         } catch (const std::exception& e) {
-            return std::unexpected(ToolError{std::string{"tool crashed: "} + e.what()});
+            return std::unexpected(ToolError::unknown(std::string{"tool crashed: "} + e.what()));
         }
     }
 

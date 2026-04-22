@@ -8,7 +8,7 @@ namespace moha::tools::util {
 
 using nlohmann::json;
 
-const json* ArgReader::raw(std::string_view key) const {
+const json* ArgReader::raw(std::string_view key) const noexcept {
     if (!args_.is_object()) return nullptr;
     auto it = args_.find(std::string{key});
     return it == args_.end() ? nullptr : &*it;
