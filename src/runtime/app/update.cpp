@@ -231,6 +231,15 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             return {std::move(m), std::move(cmd)};
         },
         [&](StreamError& e) -> Step {
+            // Dedupe: when the stall watchdog fired, it tripped the
+            // cancel token, which causes the worker thread to unwind
+            // and emit its own StreamError("cancelled") shortly after.
+            // The first error already scheduled a retry; ignore any
+            // subsequent ones that arrive before that retry runs,
+            // otherwise we'd race two worker threads into the same
+            // session.
+            if (m.s.retry_pending) return done(std::move(m));
+
             // Worker thread is unwinding; drop the token so the next turn
             // (or scheduled retry) mints a fresh one.
             m.s.cancel.reset();
@@ -260,14 +269,24 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 && klass == provider::ErrorClass::Cancelled) {
                 klass = provider::ErrorClass::Transient;
             }
+
+            // "Committed work" gating for retry: only Done/Running tool
+            // calls + finalized text body block a retry. A Pending tool
+            // (StreamToolUseStart fired, args may have been mid-streaming
+            // when the stall hit) is NOT committed — re-running gives
+            // the model a chance to re-emit it cleanly. Same definition
+            // the truncation-retry path uses (see update/stream.cpp).
+            bool has_committed = false;
+            if (last) {
+                has_committed = !last->text.empty() ||
+                    std::ranges::any_of(last->tool_calls, [](const auto& tc) {
+                        return tc.is_done() || tc.is_running();
+                    });
+            }
             bool can_retry = (klass == provider::ErrorClass::Transient
                            || klass == provider::ErrorClass::RateLimit)
                           && m.s.transient_retries < provider::kMaxRetries
-                          // Only retry if we haven't committed any work
-                          // for this turn — re-running with text/tool
-                          // calls already landed would re-execute them.
-                          && (!last
-                              || (last->text.empty() && last->tool_calls.empty()));
+                          && !has_committed;
 
             if (can_retry) {
                 int attempt = m.s.transient_retries++;
@@ -278,10 +297,12 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 // Phase=Streaming keeps active() true → Tick subscription
                 // stays armed, the user sees the countdown / can Esc.
                 m.s.phase = phase::Streaming{};
-                // Drop the empty placeholder we just wrote (if any) so
-                // the re-launch lands cleanly.
-                if (last && last->text.empty() && last->tool_calls.empty())
-                    m.d.current.messages.pop_back();
+                m.s.retry_pending = true;     // dedupes follow-up StreamErrors
+                // Drop the in-progress assistant message so the retry
+                // doesn't leave a half-formed turn (with an orphan
+                // Pending tool call) in the thread. The new stream will
+                // append a fresh placeholder and the model will re-emit.
+                if (last) m.d.current.messages.pop_back();
                 return {std::move(m),
                     Cmd<Msg>::after(std::chrono::milliseconds(delay),
                                     Msg{RetryStream{}})};
@@ -317,8 +338,12 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             return done(std::move(m));
         },
         [&](RetryStream) -> Step {
-            // Scheduled retry fired. If the user cancelled during the
-            // wait (Esc → CancelStream dropped phase to Idle), do nothing.
+            // Scheduled retry fired. Clear the pending-flag so the
+            // freshly-launched stream's own errors flow through the
+            // normal classifier path. If the user cancelled during the
+            // wait (Esc → CancelStream dropped phase to Idle and
+            // cleared retry_pending), do nothing.
+            m.s.retry_pending = false;
             if (m.s.is_idle()) return done(std::move(m));
             // Re-launch on the same context. launch_stream will mint a
             // new cancel token, append a placeholder assistant message,
@@ -337,6 +362,8 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             if (m.s.cancel) m.s.cancel->cancel();
             m.s.phase = phase::Idle{};
             m.s.status = "cancelled";
+            m.s.retry_pending = false;     // any scheduled retry is moot
+            m.s.stall_dispatched = false;  // re-arm the watchdog cleanly
             return done(std::move(m));
         },
 

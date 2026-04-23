@@ -84,6 +84,15 @@ struct StreamState {
     // circuit the retry. Reset to false in StreamStarted.
     bool stall_dispatched = false;
 
+    // True between "StreamError handler scheduled a RetryStream" and
+    // "RetryStream fired (or user cancelled)." Deduplicates double
+    // retries: when the stall watchdog fires, it dispatches a synthetic
+    // StreamError; the worker thread's eventual StreamError("cancelled")
+    // arrives shortly after. Without this guard, the second one would
+    // match the retry conditions too and fire a second RetryStream,
+    // racing the first into two concurrent worker threads.
+    bool retry_pending = false;
+
     // ── Phase predicates ─────────────────────────────────────────────────
     [[nodiscard]] bool is_idle()                const noexcept { return std::holds_alternative<phase::Idle>(phase); }
     [[nodiscard]] bool is_streaming()           const noexcept { return std::holds_alternative<phase::Streaming>(phase); }
