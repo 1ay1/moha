@@ -103,21 +103,23 @@ Element turn_header(Role role, int turn_num, const Message& msg,
                     const Model& m, std::optional<float> elapsed_secs) {
     auto style = speaker_style_for(role, m);
 
-    // Trailing metadata: timestamp · elapsed · turn N
+    // Trailing metadata: timestamp · elapsed · turn N — rendered with
+    // generous spacing so the eye reads it as a quiet trailing strip,
+    // not a comma-list.
     std::string meta = timestamp_hh_mm(msg.timestamp);
     if (elapsed_secs && *elapsed_secs > 0.0f) {
         char buf[24];
-        if      (*elapsed_secs < 1.0f)  std::snprintf(buf, sizeof(buf), " \xc2\xb7 %.0fms", *elapsed_secs * 1000.0);
-        else if (*elapsed_secs < 60.0f) std::snprintf(buf, sizeof(buf), " \xc2\xb7 %.1fs", static_cast<double>(*elapsed_secs));
+        if      (*elapsed_secs < 1.0f)  std::snprintf(buf, sizeof(buf), "  \xc2\xb7  %.0fms", *elapsed_secs * 1000.0);
+        else if (*elapsed_secs < 60.0f) std::snprintf(buf, sizeof(buf), "  \xc2\xb7  %.1fs", static_cast<double>(*elapsed_secs));
         else {
             int mins = static_cast<int>(*elapsed_secs) / 60;
             float secs = *elapsed_secs - static_cast<float>(mins * 60);
-            std::snprintf(buf, sizeof(buf), " \xc2\xb7 %dm%.0fs", mins, static_cast<double>(secs));
+            std::snprintf(buf, sizeof(buf), "  \xc2\xb7  %dm%.0fs", mins, static_cast<double>(secs));
         }
         meta += buf;
     }
     if (turn_num > 0) {
-        meta += " \xc2\xb7 turn " + std::to_string(turn_num);
+        meta += "  \xc2\xb7  turn " + std::to_string(turn_num);
     }
 
     // `grow(1.0f)` on the header row is load-bearing: without it the row
@@ -692,23 +694,23 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
         rows.push_back(text(""));
     }
 
-    // Tree-style sequence glyph in place of the old gutter numbers:
-    //   ┏━ first event
-    //   ┣━ middle events
-    //   ┗━ last event
-    //   ━━ singleton (rare)
+    // Sequence-position glyph: rounded + light box-drawing characters,
+    // softer than the previous bold ┏━┣━┗━ which read as too-loud
+    // chrome. Modern agent UIs (Cursor, Cline, Linear's pipeline view)
+    // use light strokes for structure and reserve weight for the
+    // *signal* (icon, name, status) — that's the discipline here.
+    //   ╭─ first event
+    //   ├─ middle events
+    //   ╰─ last event
+    //   ── singleton
     // Drawn in the per-event category color so the leading edge of
-    // each row reads as both a sequence position AND a work-category
-    // marker. Compared to the old "01 02 03" numbers this gives a
-    // real pipeline / git-graph feel for the same horizontal cost,
-    // and the tree shape itself is the strongest "this is one
-    // continuous list" signal a TUI can draw.
+    // each row still reads as a colored timeline at a glance.
     auto tree_glyph = [&](std::size_t idx) -> std::string {
-        if (total == 1)              return "\xe2\x94\x81\xe2\x94\x81";  // ━━
-        if (idx == 0)                return "\xe2\x94\x8f\xe2\x94\x81";  // ┏━
+        if (total == 1)              return "\xe2\x94\x80\xe2\x94\x80";  // ──
+        if (idx == 0)                return "\xe2\x95\xad\xe2\x94\x80";  // ╭─
         if (idx + 1 == static_cast<std::size_t>(total))
-                                     return "\xe2\x94\x97\xe2\x94\x81";  // ┗━
-        return                              "\xe2\x94\xa3\xe2\x94\x81";  // ┣━
+                                     return "\xe2\x95\xb0\xe2\x94\x80";  // ╰─
+        return                              "\xe2\x94\x9c\xe2\x94\x80";  // ├─
     };
 
     for (std::size_t i = 0; i < msg.tool_calls.size(); ++i) {
@@ -717,13 +719,14 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
         bool is_active = tc.is_running() || tc.is_approved();
 
         // ── Header row ──────────────────────────────────────────────
-        // Layout: `01  ▸ ✓ Read   src/auth.ts · 234 lines        879ms`
-        //          ^^^ ^ ^^^ ^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        //          gut  m icon name + detail              spacer  dur
-        Element marker = is_active
-            ? text("\xe2\x96\xb8", Style{}.with_fg(info).with_bold())   // ▸
-            : text(" ", {});
-
+        // Layout: `╭─ ⠋ Bash    npm test                       1.2s`
+        //          ^^ ^ ^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        //          tree icon name              detail   spacer dur
+        //
+        // The redundant active-marker (▸) is gone — the spinner icon
+        // already signals "this is the running one." Consistent
+        // 4-cell wide name column gives the detail a stable column
+        // boundary for scanning.
         Element icon = rich_status_icon(tc, spinner_frame);
         std::string name = tool_display_name(tc.name.value);
         std::string detail = tool_timeline_detail(tc);
@@ -743,26 +746,30 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
         if      (tc.is_failed())   name_style = Style{}.with_fg(danger).with_bold();
         else if (tc.is_rejected()) name_style = Style{}.with_fg(warn).with_bold();
         else if (is_active)        name_style = Style{}.with_fg(cat).with_bold();
-        else if (tc.is_done())     name_style = Style{}.with_fg(cat).with_dim();
         else                        name_style = Style{}.with_fg(cat).with_dim();
 
+        // Italic for the detail column — visually separates "data the
+        // tool is acting on" (paths, commands, patterns) from the
+        // surrounding timeline chrome. The eye reads chrome → name →
+        // italic-data without the columns blurring together.
+        Style detail_style = is_active
+            ? Style{}.with_fg(muted).with_italic()
+            : Style{}.with_fg(muted).with_dim().with_italic();
+
         std::vector<Element> hdr;
-        // Tree-glyph in category color — the leading 2 cells of each
-        // event row form a continuous ┏━┣━┗━ pipeline that runs down
-        // the panel. Active events bold; settled dim. The category
-        // color makes the pipeline itself a colored timeline.
+        // Tree-glyph in category color: light strokes for the pipeline
+        // structure, brighter on the active event so the eye lands
+        // there. Settled events stay dim so the running step pops.
         Style tree_style = is_active
-            ? Style{}.with_fg(cat).with_bold()
+            ? Style{}.with_fg(cat)
             : Style{}.with_fg(cat).with_dim();
         hdr.push_back(text(tree_glyph(i), tree_style));
-        hdr.push_back(text(" ", {}));
-        hdr.push_back(marker);
         hdr.push_back(text(" ", {}));
         hdr.push_back(icon);
         hdr.push_back(text("  ", {}));
         hdr.push_back(text(std::move(name), name_style));
         hdr.push_back(text("  ", {}));
-        hdr.push_back(text(std::move(detail), fg_dim(muted)));
+        hdr.push_back(text(std::move(detail), detail_style));
         hdr.push_back(spacer());
         if (tc.is_terminal()) {
             float secs = tool_elapsed(tc);
@@ -771,23 +778,21 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
         }
         rows.push_back((h(std::move(hdr)) | grow(1.0f)).build());
 
-        // ── Body content under a status-colored ┃ stripe ───────────
-        // Body sits aligned beneath the tool name. The stripe is a
-        // *bold* ┃ in the event's status color — green under a done
-        // tool, blue under a running one, red under a failed one.
-        // Heavier than the previous ┊ so each event reads as a real
-        // card with a left status edge, not a thin guide line. Active
-        // events get full color; settled events stay dim so the
-        // running step pops. The 3-space lead aligns the stripe with
-        // the icon column directly above (after `┏━ ▸`).
+        // ── Body content under a light │ stripe ─────────────────────
+        // Body content (file preview, command output, diff hunks) is
+        // supplementary information — chrome should be quiet. Use a
+        // light │ in dim status color so the body reads as "indented
+        // detail under this event" without competing with the header
+        // for visual weight. Active events get the stripe slightly
+        // brighter to keep the running event grouped.
         Color cc = event_connector_color(tc);
         bool is_active_body = tc.is_running() || tc.is_approved();
         Style stripe_style = is_active_body
-            ? Style{}.with_fg(cc).with_bold()
+            ? Style{}.with_fg(cc)
             : Style{}.with_fg(cc).with_dim();
         auto body_rule = h(
             text("   ", {}),                                         // tree+space alignment (3 cols)
-            text("\xe2\x94\x83  ", stripe_style)                     // ┃ (bold)
+            text("\xe2\x94\x82  ", stripe_style)                     // │ (light)
         ).build();
 
         Element body_el = compact_tool_body(tc);
@@ -806,15 +811,15 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
 
         // ── Continuation between events ────────────────────────────
         // A short colored connector below the body keeps the visual
-        // thread running into the next event. Bold ┃ matches the body
-        // stripe, so each event's lane reads as a continuous left
-        // edge from header through body into the next event's header.
-        // 3-space lead aligns with the body stripe + tree glyph col.
+        // thread running into the next event. Light │ matches the new
+        // body stripe — each event's lane reads as a continuous left
+        // edge from header through body into the next event's header,
+        // without overpowering the icon column.
         if (!is_last) {
             Color next_cc = event_connector_color(msg.tool_calls[i + 1]);
             rows.push_back(h(
                 text("   ", {}),
-                text("\xe2\x94\x83", Style{}.with_fg(next_cc).with_dim())  // ┃
+                text("\xe2\x94\x82", Style{}.with_fg(next_cc).with_dim())  // │
             ).build());
         }
         (void)body_has_content;
@@ -852,10 +857,12 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
                  Style{}.with_fg(verb_color).with_bold()),
             text(small_caps(verb_text),
                  Style{}.with_fg(verb_color).with_bold()),
-            text("  \xc2\xb7  ", fg_dim(muted)),
-            text(std::to_string(total) + " actions", fg_dim(muted)),
-            text("  \xc2\xb7  ", fg_dim(muted)),
-            text(format_duration(total_elapsed) + " elapsed", fg_dim(muted))
+            text("   ", {}),
+            text(std::to_string(total)
+                 + (total == 1 ? " action" : " actions"),
+                 fg_dim(muted)),
+            text("   ", {}),
+            text(format_duration(total_elapsed), fg_dim(muted))
         ).build());
     }
 
@@ -874,9 +881,16 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
     }
     title += " ";
 
+    // Quieter panel chrome: dashed border in muted color (not the
+    // speaker rail color — that's loud and competes with the message
+    // rail just to the left). The dashed style reads as "this is a
+    // soft container holding related work" rather than "this is a
+    // separate document." Settled panels dim further so they recede.
+    bool all_done = (done == total && total > 0);
+    Color border_c = all_done ? muted : rail_color;
     return (v(std::move(rows))
             | border(BorderStyle::Round)
-            | bcolor(rail_color)
+            | bcolor(border_c)
             | btext(std::move(title), BorderTextPos::Top, BorderTextAlign::Start)
             | padding(0, 1, 0, 1)
            ).build();
