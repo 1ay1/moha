@@ -8,7 +8,6 @@
 #include <chrono>
 #include <concepts>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -18,14 +17,6 @@
 #include <nlohmann/json.hpp>
 
 #include "moha/domain/id.hpp"
-
-// Forward declarations — storing maya types as shared_ptr keeps this header
-// from having to pull in the full maya element/streaming headers, which
-// would transitively drag layout/render types into every TU.
-namespace maya {
-    struct Element;
-    class  StreamingMarkdown;
-}
 
 namespace moha {
 
@@ -148,17 +139,16 @@ struct ToolUse {
         }, status);
     }
 
-    // Lazy cache of args.dump() for the view. args.dump() is O(args) per call
-    // and showed up in per-frame views (thread/permission cards) for tools
-    // without a bespoke renderer. Invalidate via mark_args_dirty() whenever
-    // `args` is mutated.
+    // Lazy cache of args.dump() for the view. args.dump() is O(args) per
+    // call and ran per-frame for tools without a bespoke renderer, which
+    // made big tool_use streams O(frame × args²). Invalidate via
+    // mark_args_dirty() whenever `args` is mutated.
     mutable std::string args_dump_cache;
     mutable bool        args_dump_valid = false;
 
     void mark_args_dirty() {
         args_dump_valid = false;
         args_dump_cache.clear();
-        render_cache.reset();
     }
     const std::string& args_dump() const {
         if (!args_dump_valid) {
@@ -168,14 +158,11 @@ struct ToolUse {
         return args_dump_cache;
     }
 
-    // Frame-rate render cache. render_tool_call() rebuilds the bordered card
-    // (Yoga layout + paint) every frame; for terminal-state tools that's
-    // pure waste — the card never changes again.
-    mutable std::shared_ptr<maya::Element> render_cache;
-    mutable std::uint64_t render_cache_key = 0;
-
+    // FNV-1a over the fields that render_tool_call's output depends on.
+    // The view-side cache (see moha::ui::tool_card_cache) uses this to
+    // detect whether a terminal-state card can be served from memo.
     [[nodiscard]] std::uint64_t compute_render_key() const {
-        std::uint64_t k = 1469598103934665603ULL;  // FNV offset basis
+        std::uint64_t k = 1469598103934665603ULL;
         auto mix = [&](std::uint64_t v) { k = (k ^ v) * 1099511628211ULL; };
         mix(output().size());
         mix(static_cast<std::uint64_t>(status.index()));
@@ -191,15 +178,6 @@ struct Message {
     std::vector<ToolUse> tool_calls;
     std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now();
     std::optional<CheckpointId> checkpoint_id;
-
-    // ── Per-message render cache (not persisted, not semantic) ──────────
-    // A finalized message's text is immutable in this codebase (only
-    // finalize_turn / StreamError append to it), so we parse once and
-    // reuse the Element forever.  Mutators must reset cached_md_element
-    // explicitly.  The streaming tail gets its own StreamingMarkdown —
-    // block-boundary cached → O(new_chars) per delta.
-    mutable std::shared_ptr<maya::Element>            cached_md_element;
-    mutable std::shared_ptr<maya::StreamingMarkdown>  stream_md;
 };
 
 struct Thread {

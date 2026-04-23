@@ -13,15 +13,15 @@ using namespace maya;
 using namespace maya::dsl;
 
 Element model_picker(const Model& m) {
-    if (!m.model_picker.open) return text("");
+    if (!m.ui.model_picker.open) return text("");
     std::vector<Element> rows;
-    if (m.available_models.empty()) {
+    if (m.d.available_models.empty()) {
         rows.push_back(text("  Loading models\u2026", fg_italic(muted)));
     }
     int i = 0;
-    for (const auto& mi : m.available_models) {
-        bool sel    = i == m.model_picker.index;
-        bool active = mi.id == m.model_id;
+    for (const auto& mi : m.d.available_models) {
+        bool sel    = i == m.ui.model_picker.index;
+        bool active = mi.id == m.d.model_id;
         auto prefix = sel ? text("\u203A ", fg_bold(accent)) : text("  ");
         auto star   = mi.favorite ? text("\u2605 ", fg_of(warn)) : text("  ");
         auto active_mark = active ? text(" \u2713", fg_of(success)) : text("");
@@ -46,14 +46,14 @@ Element model_picker(const Model& m) {
 }
 
 Element thread_list(const Model& m) {
-    if (!m.thread_list.open) return text("");
+    if (!m.ui.thread_list.open) return text("");
     std::vector<Element> rows;
-    if (m.threads.empty()) {
+    if (m.d.threads.empty()) {
         rows.push_back(text("  No threads yet.", fg_italic(muted)));
     }
     int i = 0;
-    for (const auto& t : m.threads) {
-        bool sel = i == m.thread_list.index;
+    for (const auto& t : m.d.threads) {
+        bool sel = i == m.ui.thread_list.index;
         auto prefix = sel ? text("\u203A ", fg_bold(info)) : text("  ");
         rows.push_back(h(prefix,
             text(t.title.empty() ? "(untitled)" : t.title,
@@ -78,13 +78,13 @@ Element thread_list(const Model& m) {
 }
 
 Element command_palette(const Model& m) {
-    if (!m.command_palette.open) return text("");
+    if (!m.ui.command_palette.open) return text("");
 
     std::vector<Element> rows;
     rows.push_back(h(text("\u203A ", fg_bold(highlight)),
-        text(m.command_palette.query.empty() ? "type to filter\u2026"
-                                              : m.command_palette.query,
-             m.command_palette.query.empty() ? fg_italic(muted) : fg_of(fg))
+        text(m.ui.command_palette.query.empty() ? "type to filter\u2026"
+                                              : m.ui.command_palette.query,
+             m.ui.command_palette.query.empty() ? fg_italic(muted) : fg_of(fg))
     ).build());
     rows.push_back(sep);
 
@@ -92,10 +92,10 @@ Element command_palette(const Model& m) {
     for (const auto& cmd : kCommands) {
         std::string_view name{cmd.label};
         std::string_view desc{cmd.description};
-        if (!m.command_palette.query.empty()
-            && name.find(m.command_palette.query) == std::string_view::npos)
+        if (!m.ui.command_palette.query.empty()
+            && name.find(m.ui.command_palette.query) == std::string_view::npos)
             continue;
-        bool sel = i == m.command_palette.index;
+        bool sel = i == m.ui.command_palette.index;
         auto prefix = sel ? text("\u203A ", fg_bold(highlight)) : text("  ");
         rows.push_back(h(prefix,
             text(std::string{name}, sel ? fg_bold(fg) : fg_of(muted)),
@@ -115,16 +115,16 @@ Element command_palette(const Model& m) {
 }
 
 Element todo_modal(const Model& m) {
-    if (!m.todo.open) return text("");
+    if (!m.ui.todo.open) return text("");
 
     std::vector<Element> rows;
 
-    if (m.todo.items.empty()) {
+    if (m.ui.todo.items.empty()) {
         rows.push_back(text("  No tasks yet.", fg_italic(muted)));
         rows.push_back(text("  The agent will create tasks as it works.", fg_dim(muted)));
     } else {
         maya::PlanView plan;
-        for (const auto& item : m.todo.items) {
+        for (const auto& item : m.ui.todo.items) {
             maya::TaskStatus ts;
             switch (item.status) {
                 case TodoStatus::Pending:    ts = maya::TaskStatus::Pending; break;
@@ -135,9 +135,9 @@ Element todo_modal(const Model& m) {
         }
         rows.push_back(plan.build());
 
-        int total = static_cast<int>(m.todo.items.size());
+        int total = static_cast<int>(m.ui.todo.items.size());
         int done_count = 0;
-        for (const auto& item : m.todo.items)
+        for (const auto& item : m.ui.todo.items)
             if (item.status == TodoStatus::Completed) ++done_count;
         rows.push_back(text(""));
         rows.push_back(h(

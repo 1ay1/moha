@@ -45,7 +45,7 @@ int word_count(std::string_view s) {
 } // namespace
 
 Element composer(const Model& m) {
-    const std::string& display = m.composer.text;
+    const std::string& display = m.ui.composer.text;
 
     // ── State-driven colors ───────────────────────────────────────────
     // Pro TUIs (Helix / k9s / Lazygit) use restrained color: a single
@@ -55,15 +55,15 @@ Element composer(const Model& m) {
     // (activity row, send affordance) and adding more chrome here just
     // makes the input feel toyish and over-styled.
     bool has_text = !display.empty();
-    Color prompt_color = m.stream.is_awaiting_permission() ? danger : accent;
-    Color border_color = m.stream.is_awaiting_permission() ? danger : muted;
+    Color prompt_color = m.s.is_awaiting_permission() ? danger : accent;
+    Color border_color = m.s.is_awaiting_permission() ? danger : muted;
 
     // ── Cursor injection ──────────────────────────────────────────────
     // Insert a thin vertical bar at the byte cursor position; this lives
     // inside the text so when we split on '\n' the cursor naturally lands
     // on the right line.
     std::string with_cursor = display;
-    int cur = std::min<int>(m.composer.cursor, static_cast<int>(display.size()));
+    int cur = std::min<int>(m.ui.composer.cursor, static_cast<int>(display.size()));
     with_cursor.insert(cur, "\u258E");                                // ▎
 
     // ── Body: one row per visual line ────────────────────────────────
@@ -78,9 +78,9 @@ Element composer(const Model& m) {
 
     std::vector<Element> body_rows;
     if (!has_text) {
-        std::string placeholder = m.stream.is_streaming()
+        std::string placeholder = m.s.is_streaming()
             ? "streaming \u2014 type to queue\u2026"
-            : m.stream.is_awaiting_permission()
+            : m.s.is_awaiting_permission()
               ? "awaiting permission \u2014 respond above\u2026"
               : "type a message\u2026";
         // Cursor inline before the placeholder so the user sees their
@@ -107,7 +107,7 @@ Element composer(const Model& m) {
     // shows 3 rows so the box doesn't feel cramped; long input grows up
     // to `expanded ? 16 : 8` rows. Beyond that the inner area scrolls.
     int row_count = static_cast<int>(body_rows.size());
-    int max_rows  = m.composer.expanded ? 16 : 8;
+    int max_rows  = m.ui.composer.expanded ? 16 : 8;
     int min_rows  = 3;
     int rows      = std::clamp(row_count, min_rows, max_rows);
 

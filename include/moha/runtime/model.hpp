@@ -6,8 +6,6 @@
 // modals).  Update / view code reach for domain-specific headers directly;
 // only the runtime glue needs the full composite.
 
-#include <array>
-#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -19,6 +17,7 @@
 #include "moha/domain/profile.hpp"
 #include "moha/domain/session.hpp"
 #include "moha/domain/todo.hpp"
+#include "moha/runtime/command_palette.hpp"
 
 namespace moha {
 
@@ -43,35 +42,6 @@ struct ThreadListState {
     int  index = 0;
 };
 
-enum class Command : std::uint8_t {
-    NewThread, ReviewChanges, AcceptAll, RejectAll,
-    CycleProfile, OpenModels, OpenThreads, OpenPlan, Quit,
-};
-
-struct CommandDef {
-    Command     id;
-    const char* label;
-    const char* description;
-};
-
-inline constexpr std::array kCommands = std::array{
-    CommandDef{Command::NewThread,      "New thread",         "Start a fresh conversation"},
-    CommandDef{Command::ReviewChanges,  "Review changes",     "Open diff review pane"},
-    CommandDef{Command::AcceptAll,      "Accept all changes", "Apply every pending hunk"},
-    CommandDef{Command::RejectAll,      "Reject all changes", "Discard every pending hunk"},
-    CommandDef{Command::CycleProfile,   "Cycle profile",      "Write \u2192 Ask \u2192 Minimal"},
-    CommandDef{Command::OpenModels,     "Open model picker",  ""},
-    CommandDef{Command::OpenThreads,    "Open threads",       ""},
-    CommandDef{Command::OpenPlan,      "Open plan",          "View task progress"},
-    CommandDef{Command::Quit,          "Quit",               "Exit moha"},
-};
-
-struct CommandPaletteState {
-    bool open = false;
-    std::string query;
-    int index = 0;
-};
-
 struct DiffReviewState {
     bool open       = false;
     int  file_index = 0;
@@ -84,39 +54,49 @@ struct TodoState {
 };
 
 // ============================================================================
-// Model — the composed application state
+// Model — the composed application state, split into three concerns:
+//   d   — Domain: what the conversation is (persisted, sent to provider).
+//   s   — Session: the in-flight request's state machine + cancel handle.
+//   ui  — UI: picker/modal/view-virtualization state, pure ephemeral.
+//
+// The split lets call sites communicate their scope: a function that only
+// touches `m.ui.*` can't accidentally mutate the conversation; a reducer
+// fragment that reads `m.d.*` doesn't need to thread picker state through.
 // ============================================================================
 
 struct Model {
-    // ── Domain ───────────────────────────────────────────────────────
-    Thread              current;
-    std::vector<Thread> threads;
-    Profile             profile = Profile::Write;
+    struct Domain {
+        Thread              current;
+        std::vector<Thread> threads;
+        Profile             profile = Profile::Write;
 
-    std::vector<ModelInfo> available_models;
-    ModelId                model_id{std::string{"claude-opus-4-5"}};
+        std::vector<ModelInfo> available_models;
+        ModelId                model_id{std::string{"claude-opus-4-5"}};
 
-    std::vector<FileChange>          pending_changes;
-    std::optional<PendingPermission> pending_permission;
+        std::vector<FileChange>          pending_changes;
+        std::optional<PendingPermission> pending_permission;
+    };
 
-    // ── UI sub-states ────────────────────────────────────────────────
-    ComposerState       composer;
-    StreamState         stream;
-    ModelPickerState    model_picker;
-    ThreadListState     thread_list;
-    CommandPaletteState command_palette;
-    DiffReviewState     diff_review;
-    TodoState           todo;
-    int                 thread_scroll = 0;
+    struct UI {
+        ComposerState       composer;
+        ModelPickerState    model_picker;
+        ThreadListState     thread_list;
+        CommandPaletteState command_palette;
+        DiffReviewState     diff_review;
+        TodoState           todo;
+        int                 thread_scroll = 0;
+        // Index of the first message the view should render.  Messages
+        // before this point are committed to the terminal's native
+        // scrollback (maya's InlineFrameState::commit_prefix was called
+        // for their rows).  Advancing this counter + returning
+        // Cmd::commit_scrollback keeps the Yoga/paint cost bounded to the
+        // visible window, not the full transcript.
+        int                 thread_view_start = 0;
+    };
 
-    // ── View virtualization ──────────────────────────────────────────
-    // Index of the first message the view should render.  Messages before
-    // this point are considered committed to the terminal's native
-    // scrollback (maya's InlineFrameState::commit_prefix was called for
-    // their rows).  Advancing this counter + returning Cmd::commit_scrollback
-    // keeps the Yoga/paint cost bounded to the window, not the full
-    // transcript.
-    int thread_view_start = 0;
+    Domain      d;
+    StreamState s;
+    UI          ui;
 };
 
 } // namespace moha

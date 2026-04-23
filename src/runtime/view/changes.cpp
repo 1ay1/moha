@@ -12,9 +12,9 @@ using namespace maya;
 using namespace maya::dsl;
 
 Element changes_strip(const Model& m) {
-    if (m.pending_changes.empty()) return text("");
+    if (m.d.pending_changes.empty()) return text("");
     FileChanges fc;
-    for (const auto& c : m.pending_changes) {
+    for (const auto& c : m.d.pending_changes) {
         auto kind = c.original_contents.empty()
             ? FileChangeKind::Created
             : FileChangeKind::Modified;
@@ -22,7 +22,7 @@ Element changes_strip(const Model& m) {
     }
     auto summary = (v(
         h(text("Changes ", fg_bold(warn)),
-          text(std::format("({} files)", m.pending_changes.size()), fg_of(muted)),
+          text(std::format("({} files)", m.d.pending_changes.size()), fg_of(muted)),
           spacer(),
           text("Ctrl+R", fg_of(fg)), text(" review  ", fg_dim(muted)),
           text("A", fg_of(success)), text(" accept  ", fg_dim(muted)),

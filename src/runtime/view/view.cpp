@@ -25,11 +25,11 @@ Element view(const Model& m) {
     Element overlay;
     bool has_overlay = false;
 
-    if (m.model_picker.open)        { overlay = model_picker(m);  has_overlay = true; }
-    else if (m.thread_list.open)    { overlay = thread_list(m);   has_overlay = true; }
-    else if (m.command_palette.open){ overlay = command_palette(m);has_overlay = true; }
-    else if (m.diff_review.open)    { overlay = diff_review(m);   has_overlay = true; }
-    else if (m.todo.open)           { overlay = todo_modal(m);    has_overlay = true; }
+    if (m.ui.model_picker.open)        { overlay = model_picker(m);  has_overlay = true; }
+    else if (m.ui.thread_list.open)    { overlay = thread_list(m);   has_overlay = true; }
+    else if (m.ui.command_palette.open){ overlay = command_palette(m);has_overlay = true; }
+    else if (m.ui.diff_review.open)    { overlay = diff_review(m);   has_overlay = true; }
+    else if (m.ui.todo.open)           { overlay = todo_modal(m);    has_overlay = true; }
 
     if (has_overlay)
         return zstack({std::move(base),

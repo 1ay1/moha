@@ -15,22 +15,22 @@ std::vector<ModelInfo> seed_models() {
 
 Model init() {
     Model m;
-    m.threads          = deps().load_threads();
-    m.available_models = seed_models();
+    m.d.threads          = deps().load_threads();
+    m.d.available_models = seed_models();
 
     auto settings = deps().load_settings();
-    if (!settings.model_id.empty()) m.model_id = settings.model_id;
+    if (!settings.model_id.empty()) m.d.model_id = settings.model_id;
     // Set the per-model context window now (before any stream runs) so
     // the ctx % bar uses the right denominator from frame 1, not after
     // the user's first message lands.
-    m.stream.context_max = ui::context_max_for_model(m.model_id.value);
-    m.profile = settings.profile;
-    for (auto& mi : m.available_models)
+    m.s.context_max = ui::context_max_for_model(m.d.model_id.value);
+    m.d.profile = settings.profile;
+    for (auto& mi : m.d.available_models)
         for (const auto& fav : settings.favorite_models)
             if (mi.id == fav) mi.favorite = true;
 
-    m.current.id  = deps().new_thread_id();
-    m.stream.status = "ready";
+    m.d.current.id  = deps().new_thread_id();
+    m.s.status = "ready";
     return m;
 }
 

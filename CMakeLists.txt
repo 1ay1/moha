@@ -254,16 +254,22 @@ set(MOHA_TOOL_SOURCES
     src/tool/tools/git.cpp
 )
 
-set(MOHA_RUNTIME_SOURCES
-    src/runtime/main.cpp
-
+# Everything except the entry point — so tests can link the same runtime
+# without fighting main().
+set(MOHA_RUNTIME_NOMAIN_SOURCES
     src/runtime/app/deps.cpp
     src/runtime/app/init.cpp
     src/runtime/app/cmd_factory.cpp
     src/runtime/app/update.cpp
+    src/runtime/app/update/stream.cpp
+    src/runtime/app/update/modal.cpp
+    src/runtime/app/update/tool.cpp
     src/runtime/app/subscribe.cpp
 
+    src/runtime/view/cache.cpp
     src/runtime/view/helpers.cpp
+    src/runtime/view/tool_args.cpp
+    src/runtime/view/tool_card.cpp
     src/runtime/view/thread.cpp
     src/runtime/view/composer.cpp
     src/runtime/view/statusbar.cpp
@@ -274,6 +280,11 @@ set(MOHA_RUNTIME_SOURCES
     src/runtime/view/view.cpp
 )
 
+set(MOHA_RUNTIME_SOURCES
+    src/runtime/main.cpp
+    ${MOHA_RUNTIME_NOMAIN_SOURCES}
+)
+
 add_executable(moha
     ${MOHA_IO_SOURCES}
     ${MOHA_PROVIDER_SOURCES}
@@ -281,6 +292,34 @@ add_executable(moha
     ${MOHA_TOOL_SOURCES}
     ${MOHA_RUNTIME_SOURCES}
 )
+
+# Reducer tests — opt in with -DMOHA_BUILD_TESTS=ON. Shares the full runtime
+# source set so update(...)'s transitive Deps / cmd seam is linkable; swaps
+# main.cpp for the test harness.
+option(MOHA_BUILD_TESTS "Build reducer tests" OFF)
+if(MOHA_BUILD_TESTS)
+    add_executable(moha_reducer_tests
+        ${MOHA_IO_SOURCES}
+        ${MOHA_PROVIDER_SOURCES}
+        ${MOHA_DIFF_SOURCES}
+        ${MOHA_TOOL_SOURCES}
+        ${MOHA_RUNTIME_NOMAIN_SOURCES}
+        tests/reducer_tests.cpp
+    )
+    target_include_directories(moha_reducer_tests PRIVATE include)
+    target_link_libraries(moha_reducer_tests PRIVATE
+        maya::maya
+        nlohmann_json::nlohmann_json
+        simdjson::simdjson
+        nghttp2::nghttp2
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        Threads::Threads
+    )
+    if(WIN32)
+        target_link_libraries(moha_reducer_tests PRIVATE ws2_32 crypt32 shell32)
+    endif()
+endif()
 
 target_include_directories(moha PRIVATE include)
 target_link_libraries(moha PRIVATE

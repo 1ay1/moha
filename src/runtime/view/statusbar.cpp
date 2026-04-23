@@ -168,8 +168,8 @@ std::vector<float> ordered_rate_history(const StreamState& s) {
 // "▌ ⠋ bash ▐" when ExecutingTool is active instead of the generic
 // "Running" label — more useful at a glance.
 std::string_view running_tool_name(const Model& m) {
-    if (m.current.messages.empty()) return {};
-    const auto& last = m.current.messages.back();
+    if (m.d.current.messages.empty()) return {};
+    const auto& last = m.d.current.messages.back();
     if (last.role != Role::Assistant) return {};
     for (const auto& tc : last.tool_calls) {
         if (tc.is_running()) return tc.name.value;
@@ -181,29 +181,29 @@ std::string_view running_tool_name(const Model& m) {
 } // namespace
 
 Element status_bar(const Model& m) {
-    bool is_streaming = m.stream.is_streaming() && m.stream.active;
+    bool is_streaming = m.s.is_streaming() && m.s.active;
 
     // Phase chip colors + glyph resolved up front; used inside the
     // width-aware builder below.
-    Color pcolor = phase_color(m.stream.phase);
-    bool spin = is_streaming || m.stream.is_executing_tool();
+    Color pcolor = phase_color(m.s.phase);
+    bool spin = is_streaming || m.s.is_executing_tool();
     std::string phase_icon = spin
-        ? std::string{m.stream.spinner.current_frame()}
-        : std::string{phase_glyph(m.stream.phase)};
-    std::string phase_label{phase_verb(m.stream.phase)};
-    if (m.stream.is_executing_tool()) {
+        ? std::string{m.s.spinner.current_frame()}
+        : std::string{phase_glyph(m.s.phase)};
+    std::string phase_label{phase_verb(m.s.phase)};
+    if (m.s.is_executing_tool()) {
         if (auto tn = running_tool_name(m); !tn.empty())
             phase_label = std::string{tn};
     }
 
     // Context fullness uses `tokens_in` (includes cache_read + creation).
     // Value is the cumulative prefix size from the most recent request.
-    int ctx_used = m.stream.tokens_in;
+    int ctx_used = m.s.tokens_in;
     bool has_tokens = ctx_used > 0;
-    int pct = (m.stream.context_max > 0)
-                  ? std::min(100, ctx_used * 100 / m.stream.context_max)
+    int pct = (m.s.context_max > 0)
+                  ? std::min(100, ctx_used * 100 / m.s.context_max)
                   : 0;
-    bool has_breadcrumb = !m.current.title.empty();
+    bool has_breadcrumb = !m.d.current.title.empty();
 
     // ── Responsive activity row ─────────────────────────────────────────
     // Sections are dropped progressively as width shrinks so the row never
@@ -230,7 +230,7 @@ Element status_bar(const Model& m) {
                                                       : 12;
                 lparts.push_back(h(
                     edge_mark(pcolor),
-                    text(" " + truncate_middle(m.current.title, title_budget),
+                    text(" " + truncate_middle(m.d.current.title, title_budget),
                          fg_of(fg).with_bold()),
                     sep_dot()
                 ).build());
@@ -238,7 +238,7 @@ Element status_bar(const Model& m) {
             lparts.push_back(phase_pill);
             if (w >= 60) {
                 lparts.push_back(sep_thin());
-                lparts.push_back(profile_tag(m.profile));
+                lparts.push_back(profile_tag(m.d.profile));
             }
             auto left = hstack()(std::move(lparts));
 
@@ -248,14 +248,14 @@ Element status_bar(const Model& m) {
             // Live tok/s + sparkline — most expensive section visually, so
             // gate it on wide terminals only.
             if (is_streaming && w >= 120
-                && m.stream.first_delta_at.time_since_epoch().count() != 0) {
+                && m.s.first_delta_at.time_since_epoch().count() != 0) {
                 auto now = std::chrono::steady_clock::now();
                 auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              now - m.stream.first_delta_at).count();
+                              now - m.s.first_delta_at).count();
                 if (ms >= 250) {
                     double sec = static_cast<double>(ms) / 1000.0;
                     double approx_tok = static_cast<double>(
-                        m.stream.live_delta_bytes) / 4.0;
+                        m.s.live_delta_bytes) / 4.0;
                     float  rate = static_cast<float>(approx_tok / sec);
 
                     TokenStream ts;
@@ -263,7 +263,7 @@ Element status_bar(const Model& m) {
                     ts.set_tokens_per_sec(rate);
                     ts.set_total_tokens(static_cast<int>(approx_tok));
                     ts.set_elapsed(static_cast<float>(sec));
-                    ts.set_rate_history(ordered_rate_history(m.stream));
+                    ts.set_rate_history(ordered_rate_history(m.s));
                     ts.set_color(highlight);
                     right_parts.push_back(ts.build());
                     right_parts.push_back(sep_dot());
@@ -273,7 +273,7 @@ Element status_bar(const Model& m) {
             // Model badge — always shown.
             {
                 ModelBadge mb;
-                mb.set_model(m.model_id.value);
+                mb.set_model(m.d.model_id.value);
                 mb.set_compact(true);
                 right_parts.push_back(mb.build());
             }
@@ -282,21 +282,21 @@ Element status_bar(const Model& m) {
             if (has_tokens && w >= 90) {
                 right_parts.push_back(sep_thin());
                 std::string tok_str = "\xe2\x86\x91"
-                    + format_tokens(m.stream.tokens_in) + " \xe2\x86\x93"
-                    + format_tokens(m.stream.tokens_out);
+                    + format_tokens(m.s.tokens_in) + " \xe2\x86\x93"
+                    + format_tokens(m.s.tokens_out);
                 right_parts.push_back(text(tok_str, fg_dim(muted)));
             }
 
             // Context indicator — always when we have a usage event; the
             // visual bar + absolute count drop away below 60 cols,
             // leaving just "ctx 32%".
-            if (m.stream.context_max > 0 && has_tokens) {
+            if (m.s.context_max > 0 && has_tokens) {
                 Color c = ctx_color(pct);
                 right_parts.push_back(sep_thin());
                 right_parts.push_back(text("ctx ", fg_dim(muted)));
                 if (w >= 60) {
                     std::string used_str = format_tokens(ctx_used) + "/"
-                                         + format_tokens(m.stream.context_max) + " ";
+                                         + format_tokens(m.s.context_max) + " ";
                     right_parts.push_back(text(used_str, fg_dim(muted)));
                     right_parts.push_back(
                         text(ctx_bar_glyphs(pct, kCtxBarCells), fg_of(c)));
@@ -316,9 +316,9 @@ Element status_bar(const Model& m) {
 
     // ── Error / transient status banner ──────────────────────────────────
     Element status_row;
-    bool has_status = !m.stream.status.empty() && m.stream.status != "ready";
+    bool has_status = !m.s.status.empty() && m.s.status != "ready";
     if (has_status) {
-        bool is_err = m.stream.status.rfind("error:", 0) == 0;
+        bool is_err = m.s.status.rfind("error:", 0) == 0;
         Color bc = is_err ? danger : muted;
         // Error banner: leading edge mark + italic text, no bg — same
         // reasoning as the activity row above.
@@ -326,7 +326,7 @@ Element status_bar(const Model& m) {
             text(" ", {}),
             edge_mark(bc),
             text(is_err ? " \xe2\x9a\xa0  " : "  ", fg_of(bc)),
-            text(m.stream.status, fg_of(bc).with_italic())
+            text(m.s.status, fg_of(bc).with_italic())
         ).build();
     }
 

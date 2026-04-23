@@ -32,23 +32,25 @@ struct ToolSpec {
     bool eager_input_streaming = false;
 };
 
+// Per-request output cap that matches Claude Code v2.1.113's main-loop
+// config. The binary's docs explicitly warn that `max_tokens > ~16000`
+// puts traffic on a slower path that risks SDK HTTP timeouts — an earlier
+// 64000 default was correlated with 20-30 s mid-stream pauses on long
+// write/edit calls.
+//
+// Trade-off: a single tool_use whose `content` field exceeds ~12-13k
+// tokens of file body will hit the cap and arrive truncated (model burns
+// its budget streaming input_json_delta, then stop_reason=max_tokens).
+// For most edits/writes this is fine; bump per-request for known-huge
+// generations.
+inline constexpr int kSafeMaxTokens = 16384;
+
 struct Request {
     std::string model;
     std::string system_prompt;
     std::vector<Message> messages;
     std::vector<ToolSpec> tools;
-    // Single source of truth for the per-request output cap. 16384 matches
-    // Claude Code v2.1.113's main-loop config (the binary's docs explicitly
-    // warn that `max_tokens > ~16000` puts traffic on a slower path that
-    // risks SDK HTTP timeouts). Earlier 64000 default was correlated with
-    // 20-30 s mid-stream pauses on long write/edit calls.
-    //
-    // Trade-off: a single tool_use whose `content` field exceeds ~12-13k
-    // tokens of file body will hit the cap and arrive truncated (model burns
-    // its budget streaming input_json_delta, then stop_reason=max_tokens).
-    // For most edits/writes this is fine; bump per-request for known-huge
-    // generations.
-    int max_tokens = 16384;
+    int max_tokens = kSafeMaxTokens;
 
     std::string auth_header;
     auth::Style auth_style = auth::Style::ApiKey;

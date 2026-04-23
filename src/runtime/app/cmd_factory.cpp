@@ -17,13 +17,13 @@ using maya::Cmd;
 
 Cmd<Msg> launch_stream(Model& m) {
     provider::Request req;
-    req.model         = m.model_id.value;
+    req.model         = m.d.model_id.value;
     req.system_prompt = provider::anthropic::default_system_prompt();
-    req.messages      = m.current.messages;
+    req.messages      = m.d.current.messages;
 
-    if (m.profile != Profile::Minimal) {
+    if (m.d.profile != Profile::Minimal) {
         for (const auto& t : tools::registry()) {
-            if (m.profile == Profile::Ask
+            if (m.d.profile == Profile::Ask
                 && (t.name == "write" || t.name == "edit" || t.name == "bash"))
                 continue;
             req.tools.push_back({t.name.value, t.description, t.input_schema,
@@ -35,10 +35,10 @@ Cmd<Msg> launch_stream(Model& m) {
 
     // Mint a fresh cancel token per turn and stash it on the model so the
     // Esc handler (Msg::CancelStream) can flip it. The worker thread holds
-    // its own shared_ptr via req.cancel; reassigning m.stream.cancel on the
+    // its own shared_ptr via req.cancel; reassigning m.s.cancel on the
     // UI thread is safe — both sides only ever load/store the atomic flag.
     req.cancel = std::make_shared<http::CancelToken>();
-    m.stream.cancel = req.cancel;
+    m.s.cancel = req.cancel;
 
     return Cmd<Msg>::task([req = std::move(req)](std::function<void(Msg)> dispatch) mutable {
         try {
@@ -91,8 +91,8 @@ Cmd<Msg> run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args) {
 }
 
 Cmd<Msg> kick_pending_tools(Model& m) {
-    if (m.current.messages.empty()) return Cmd<Msg>::none();
-    auto& last = m.current.messages.back();
+    if (m.d.current.messages.empty()) return Cmd<Msg>::none();
+    auto& last = m.d.current.messages.back();
     if (last.role != Role::Assistant) return Cmd<Msg>::none();
 
     std::vector<Cmd<Msg>> cmds;
@@ -100,13 +100,13 @@ Cmd<Msg> kick_pending_tools(Model& m) {
 
     for (auto& tc : last.tool_calls) {
         if (tc.is_pending()) {
-            const bool needs_perm = tool::DynamicDispatch::needs_permission(tc.name.value, m.profile);
-            if (needs_perm && !m.pending_permission) {
-                m.pending_permission = PendingPermission{
+            const bool needs_perm = tool::DynamicDispatch::needs_permission(tc.name.value, m.d.profile);
+            if (needs_perm && !m.d.pending_permission) {
+                m.d.pending_permission = PendingPermission{
                     tc.id, tc.name,
                     "Tool " + tc.name.value + " needs permission under "
-                        + std::string{ui::profile_label(m.profile)} + " profile"};
-                m.stream.phase = phase::AwaitingPermission{};
+                        + std::string{ui::profile_label(m.d.profile)} + " profile"};
+                m.s.phase = phase::AwaitingPermission{};
                 return Cmd<Msg>::none();
             }
             if (!needs_perm) {
@@ -115,12 +115,12 @@ Cmd<Msg> kick_pending_tools(Model& m) {
                 // execution). Preserve it as we move into Running.
                 tc.status = ToolUse::Running{tc.started_at(), {}};
                 cmds.push_back(run_tool(tc.id, tc.name, tc.args));
-                m.stream.phase = phase::ExecutingTool{};
+                m.s.phase = phase::ExecutingTool{};
                 // Keep the Tick subscription alive during tool execution so
                 // the spinner advances and the view can show live elapsed
                 // time — without this the UI looks frozen on long-running
                 // bash commands, and users think moha has hung.
-                m.stream.active = true;
+                m.s.active = true;
                 any_pending = true;
             }
         } else if (tc.is_running()) {
@@ -133,15 +133,15 @@ Cmd<Msg> kick_pending_tools(Model& m) {
             return tc.is_terminal();
         });
         if (has_results) {
-            m.stream.phase = phase::Streaming{};
-            m.stream.active = true;
+            m.s.phase = phase::Streaming{};
+            m.s.active = true;
             Message placeholder;
             placeholder.role = Role::Assistant;
-            m.current.messages.push_back(std::move(placeholder));
+            m.d.current.messages.push_back(std::move(placeholder));
             cmds.push_back(launch_stream(m));
         } else {
-            m.stream.phase = phase::Idle{};
-            m.stream.active = false;  // stop the Tick subscription at rest
+            m.s.phase = phase::Idle{};
+            m.s.active = false;  // stop the Tick subscription at rest
         }
     }
     return Cmd<Msg>::batch(std::move(cmds));

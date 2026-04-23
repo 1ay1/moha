@@ -165,14 +165,14 @@ std::optional<Msg> on_composer(const KeyEvent& ev) {
 } // namespace
 
 Sub<Msg> subscribe(const Model& m) {
-    const bool in_perm    = m.pending_permission.has_value();
-    const bool in_cmd     = m.command_palette.open;
-    const bool in_models  = m.model_picker.open;
-    const bool in_threads = m.thread_list.open;
-    const bool in_diff    = m.diff_review.open;
-    const bool in_todo    = m.todo.open;
-    const bool streaming  = m.stream.active
-                         && !m.stream.is_awaiting_permission();
+    const bool in_perm    = m.d.pending_permission.has_value();
+    const bool in_cmd     = m.ui.command_palette.open;
+    const bool in_models  = m.ui.model_picker.open;
+    const bool in_threads = m.ui.thread_list.open;
+    const bool in_diff    = m.ui.diff_review.open;
+    const bool in_todo    = m.ui.todo.open;
+    const bool streaming  = m.s.active
+                         && !m.s.is_awaiting_permission();
 
     auto key_sub = Sub<Msg>::on_key(
         [=](const KeyEvent& ev) -> std::optional<Msg> {
@@ -200,7 +200,7 @@ Sub<Msg> subscribe(const Model& m) {
     // Only subscribe to Tick while the spinner is visible. With fps=0 the
     // maya loop is purely event-driven; an unconditional 16ms tick would
     // force a render 60× per second even when nothing is changing.
-    if (m.stream.active) {
+    if (m.s.active) {
         auto tick = Sub<Msg>::every(std::chrono::milliseconds(33), Tick{});
         return Sub<Msg>::batch(std::move(key_sub), std::move(paste_sub), std::move(tick));
     }
