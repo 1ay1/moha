@@ -96,26 +96,25 @@ Element ctx_bar_gradient(int pct, int cells) {
     }};
 }
 
-// Full-width divider that separates the composer from the status row.
-// Uses a thin horizontal rule whose ends fade out via partial-block bleed
-// so the bar reads as "anchored" without a hard line cutting the screen.
-// The middle is a continuous ─ at half-luminance; the leading/trailing
-// few cells bleed via short ╴/╶ stubs so the eye sees a soft frame, not a
-// guillotine.
-Element divider_line() {
+// Phase-tinted accent strip — a row of half-cell blocks (▔ at top, ▁ at
+// bottom) in the current phase color, dim. Replaces the dim ─ rule with
+// something that carries app-state information without needing chrome
+// chars or a hard line. The half-block glyph reads as a "soft edge"
+// rather than a divider — modern app vibe.
+//
+// `position`: 0 = top edge (▔ upper-half block), 1 = bottom (▁ lower-half).
+Element phase_accent(Color c, int position) {
     return Element{ComponentElement{
-        .render = [](int w, int /*h*/) -> Element {
+        .render = [c, position](int w, int /*h*/) -> Element {
             if (w <= 0) return text("", {});
             std::string line;
             line.reserve(static_cast<std::size_t>(w) * 3);
-            // Fade-in/out: short stubs at each end, ─ in the middle.
-            const int fade = std::min(3, w / 8);
-            for (int i = 0; i < w; ++i) {
-                if      (i == 0 && fade > 0)               line += "\xe2\x95\xb6";   // ╶
-                else if (i == w - 1 && fade > 0)           line += "\xe2\x95\xb4";   // ╴
-                else                                       line += "\xe2\x94\x80";   // ─
-            }
-            return text(std::move(line), Style{}.with_fg(muted).with_dim());
+            const char* glyph = (position == 0)
+                ? "\xe2\x96\x94"   // ▔  upper-half block
+                : "\xe2\x96\x81";  // ▁  lower-half block
+            for (int i = 0; i < w; ++i) line += glyph;
+            return text(std::move(line),
+                        Style{}.with_fg(c).with_dim());
         },
         .layout = {},
     }};
@@ -249,35 +248,46 @@ std::vector<float> ordered_rate_history(const StreamState& s) {
     return out;
 }
 
-// Horizontal turn mini-map — one cell per turn, colored by speaker, with
-// the active/last turn glowing as a "you are here" cursor. A constant,
-// peripheral overview of the conversation: how many turns deep, what the
-// rhythm has been (long User burst then 6 fast Assistant tools, etc.).
+// Horizontal turn mini-map — a sparkline-style strip where each cell's
+// HEIGHT encodes the turn's activity (more tool calls → taller bar).
+// Result: a glance-readable density chart of the whole conversation —
+// you see "this turn was a quick exchange," "this one had a heavy
+// agentic flurry," and "this one's still cooking" without parsing.
 //
-// Compresses or elides middle when there are more turns than cells — keeps
-// the most recent N turns plus the very first one, with a `…` gap so the
-// user can still tell "we're 30 turns in" at a glance. No interactivity
-// yet — the visual pulse alone is the upgrade; jump-mode (^G) is a
-// natural follow-up but isn't required for the orientation win.
+// User turns are always short ▁ (they don't have tool calls). Assistant
+// turns rise with tool count: 0→▁, 1→▃, 2-3→▅, 4-6→▇, 7+→█. The active
+// turn pulses between full-block and lower-half so the "you are here"
+// cursor is unmistakable.
+//
+// Compresses or elides middle when there are more turns than cells —
+// keeps the most recent N turns plus the very first one, with a `…` gap
+// so the user can still tell "we're 30 turns in" at a glance.
 Element turn_minimap(const Model& m, int max_cells, int frame) {
     const auto& msgs = m.d.current.messages;
     if (msgs.size() < 2) return text("", {});
 
-    // Resolve per-assistant brand color from model id (keeps the map's
-    // dots consistent with each turn's left-rail color in thread.cpp).
+    // Resolve per-assistant brand color from model id (keeps the map
+    // consistent with each turn's left-rail color in thread.cpp).
     const auto& mid = m.d.model_id.value;
     Color asst_color = (mid.find("opus")   != std::string::npos) ? accent
                      : (mid.find("sonnet") != std::string::npos) ? info
                      : (mid.find("haiku")  != std::string::npos) ? success
                                                                  : highlight;
 
-    // Build dot list. User and Assistant get different glyphs so the
-    // rhythm of the conversation reads at a glance — hollow ◇ marks
-    // your turns, filled ● marks the model's. Active turn (last
-    // message during stream) becomes a pulsing ◉ cursor. The
-    // dual-glyph + filled-vs-hollow contrast eliminates the previous
-    // mode where two same-colored ● dots could look identical when
-    // the model brand color matched cyan (highlight).
+    // Activity-density bar: height encodes "how much work this turn did."
+    // For Assistant turns that's the tool-call count; for User turns it's
+    // a constant low (▁ = "voice in"). The active turn flickers between
+    // its natural height and a slightly taller block in sync with the
+    // spinner so the cursor pulses subtly.
+    auto bar_glyph_for = [](int activity) -> const char* {
+        // Unicode lower-block scale, 1/8 → 8/8 height. Caps at full block.
+        if (activity <= 0) return "\xe2\x96\x81";        // ▁ 1/8
+        if (activity == 1) return "\xe2\x96\x83";        // ▃ 3/8
+        if (activity <= 3) return "\xe2\x96\x85";        // ▅ 5/8
+        if (activity <= 6) return "\xe2\x96\x87";        // ▇ 7/8
+        return                    "\xe2\x96\x88";        // █ 8/8
+    };
+
     struct Dot { Color c; const char* g; bool active; bool is_user; };
     std::vector<Dot> dots;
     dots.reserve(msgs.size());
@@ -287,10 +297,16 @@ Element turn_minimap(const Model& m, int max_cells, int frame) {
         bool is_last = (i + 1 == msgs.size());
         bool is_user = (msg.role == Role::User);
         Color c = is_user ? highlight : asst_color;
-        const char* g;
-        if (is_last && stream_active) g = "\xe2\x97\x89";              // ◉ active cursor
-        else if (is_user)             g = "\xe2\x97\x87";              // ◇ User (hollow)
-        else                          g = "\xe2\x97\x8f";              // ● Assistant (filled)
+        // User turns are always the shortest bar (no tools). Assistant
+        // turns scale with tool-call count.
+        int activity = is_user ? 0 : static_cast<int>(msg.tool_calls.size());
+        const char* g = bar_glyph_for(activity);
+        // Active cursor: pulse between the natural height and full block.
+        if (is_last && stream_active) {
+            bool tall = ((frame >> 3) & 1) == 0;
+            g = tall ? "\xe2\x96\x88"   // █  full block on the up-beat
+                     : g;                // natural height on the down-beat
+        }
         dots.push_back({c, g, is_last && stream_active, is_user});
     }
 
@@ -535,6 +551,16 @@ Element status_bar(const Model& m) {
                     sep_dot()
                 ).build());
             }
+            // Leading rail: solid ▌ in phase color before the phase chip.
+            // Anchors the active state visually — same vibe as a
+            // notification badge's left edge or an OS task-bar's
+            // "this app is active" indicator. Bold when actively
+            // working, dim at rest.
+            Style rail_style = breathing
+                ? Style{}.with_fg(pcolor).with_bold()
+                : Style{}.with_fg(pcolor).with_dim();
+            lparts.push_back(text("\xe2\x96\x8c", rail_style));   // ▌
+            lparts.push_back(text(" ", {}));
             lparts.push_back(phase_pill);
             if (w >= 70) {
                 lparts.push_back(sep_thin());
@@ -651,13 +677,6 @@ Element status_bar(const Model& m) {
         ).build();
     }
 
-    // Bottom divider — twins the top one so the activity row sits
-    // bracketed between two thin rules, reading as a discrete panel
-    // without bg color trickery. The shortcut row below is then
-    // visually clear it's a *separate* hint strip, not part of the
-    // status panel.
-    auto bottom_divider = divider_line();
-
     // ── Responsive shortcut row ─────────────────────────────────────────
     // At wide widths we show key+label pairs for all 6 bindings. As space
     // shrinks we drop progressively:
@@ -728,13 +747,19 @@ Element status_bar(const Model& m) {
     }};
     bool minimap_visible = m.d.current.messages.size() >= 2;
 
+    // Compose. Phase-tinted accent strips replace the prior dim ─
+    // dividers — they read as "soft state shelves" rather than hard
+    // rules, and they carry app-state info (color = current phase)
+    // without using extra chrome characters. ▔ at the top of the
+    // status bar is the closing edge of the composer; ▁ at the bottom
+    // is the floor of the whole UI.
     std::vector<Element> rows;
-    rows.push_back(divider_line());
+    rows.push_back(phase_accent(pcolor, /*position=*/0));   // ▔ top
     rows.push_back(activity_row);
     if (minimap_visible) rows.push_back(minimap_row);
     if (has_status)      rows.push_back(status_row);
-    rows.push_back(std::move(bottom_divider));
     rows.push_back(shortcuts);
+    rows.push_back(phase_accent(pcolor, /*position=*/1));   // ▁ bottom
     return v(std::move(rows)).build();
 }
 
