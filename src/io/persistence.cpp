@@ -14,6 +14,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "moha/tool/util/utf8.hpp"
+
 namespace moha::persistence {
 
 namespace fs = std::filesystem;
@@ -90,9 +92,15 @@ static Role role_from_string(const std::string& s) {
 }
 
 static json message_to_json(const Message& m) {
+    // Belt-and-suspenders UTF-8 scrub. Tool output and freeform text can
+    // contain raw bytes from arbitrary files (Latin-1 .htm, Shift-JIS logs)
+    // that nlohmann::json::dump() refuses to serialise — it throws
+    // type_error.316 and we used to terminate(). Scrub at the boundary so
+    // bad bytes can never reach dump(). Tools that already scrub upstream
+    // pay only the validate cost here.
     json j;
     j["role"] = role_to_string(m.role);
-    j["text"] = m.text;
+    j["text"] = tools::util::to_valid_utf8(m.text);
     j["timestamp"] = std::chrono::duration_cast<std::chrono::seconds>(
         m.timestamp.time_since_epoch()).count();
     json tcs = json::array();
@@ -101,7 +109,7 @@ static json message_to_json(const Message& m) {
         t["id"] = tc.id;
         t["name"] = tc.name;
         t["args"] = tc.args;
-        t["output"] = tc.output();             // empty unless terminal
+        t["output"] = tools::util::to_valid_utf8(tc.output()); // empty unless terminal
         t["status"] = std::string{tc.status_name()};
         tcs.push_back(std::move(t));
     }
@@ -206,7 +214,15 @@ void save_thread(const Thread& t) {
     json msgs = json::array();
     for (const auto& m : t.messages) msgs.push_back(message_to_json(m));
     j["messages"] = std::move(msgs);
-    (void)write_json_atomic(threads_dir() / (t.id.value + ".json"), j.dump(2));
+    // dump() throws type_error.316 on non-UTF-8 bytes. Scrubbing in
+    // message_to_json should have caught everything, but swallow the
+    // exception as a belt-and-suspenders guard against future regressions —
+    // a silently-skipped save beats a process-terminating uncaught throw.
+    try {
+        (void)write_json_atomic(threads_dir() / (t.id.value + ".json"), j.dump(2));
+    } catch (const nlohmann::json::exception&) {
+        // caller can't react; best-effort persistence is acceptable here.
+    }
 }
 
 void delete_thread(const ThreadId& id) {

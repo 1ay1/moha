@@ -827,7 +827,19 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
         body["tools"] = std::move(tools_j);
     }
     body["metadata"] = json{{"user_id", make_user_id()}};
-    std::string body_str = body.dump();
+    // Last-line-of-defence: if any string in the request tree still carries
+    // non-UTF-8 bytes (a tool that bypassed the scrub, a new code path), the
+    // dump() below throws type_error.316. We used to terminate(); now we
+    // surface a StreamError so the reducer can recover and the user sees the
+    // turn fail instead of the process dying mid-stream.
+    std::string body_str;
+    try {
+        body_str = body.dump();
+    } catch (const nlohmann::json::exception& e) {
+        sink(StreamError{std::string{"request build failed (invalid UTF-8 in conversation): "} + e.what()});
+        sink(StreamFinished{""});
+        return;
+    }
 
     dbg("==== request ====\n%s\n==== /request ====\n", body_str.c_str());
 
