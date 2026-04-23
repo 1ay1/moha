@@ -690,7 +690,13 @@ Element status_bar(const Model& m) {
 
     // ── Error / transient status banner ──────────────────────────────────
     Element status_row;
-    bool has_status = !m.s.status.empty() && m.s.status != "ready";
+    // Treat an expired toast as absent — even if the reducer's
+    // ClearStatus cleaner hasn't fired yet (phase=Idle drops the
+    // Tick subscription, so the cleaner is the only thing that will
+    // wipe the field). Checking expiry here keeps the banner from
+    // flickering back on a resize-driven repaint.
+    bool has_status = !m.s.status.empty() && m.s.status != "ready"
+                      && m.s.status_active(std::chrono::steady_clock::now());
     if (has_status) {
         bool is_err = m.s.status.rfind("error:", 0) == 0;
         Color bc = is_err ? danger : muted;

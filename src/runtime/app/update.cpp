@@ -90,6 +90,12 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             m.s.started          = now;
             m.s.last_event_at    = now;
             m.s.stall_dispatched = false;       // fresh stream → re-arm watchdog
+            // Fresh stream is alive — wipe any leftover toast (retry
+            // countdown, "error: …", "cancelled") from the previous
+            // attempt so the status row doesn't show a stale message
+            // on top of a healthy connection.
+            m.s.status.clear();
+            m.s.status_until = {};
             // Reset the live-rate accumulator so each sub-turn (post-tool)
             // measures its own generation speed instead of polluting the
             // average with the previous turn's bytes.
@@ -296,6 +302,13 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                     delay + std::chrono::milliseconds{999}).count();
                 m.s.status = std::string{provider::to_string(klass)}
                            + " — retrying in " + std::to_string(secs) + "s…";
+                // Toast: auto-clear shortly after the retry fires so the
+                // banner doesn't linger once the new stream is healthy.
+                // The retry itself overwrites `status` on StreamStarted
+                // if it succeeds; this stamp is the fallback if it
+                // doesn't (e.g. the next stream also stalls).
+                m.s.status_until = std::chrono::steady_clock::now()
+                                 + delay + std::chrono::milliseconds{1500};
                 // Phase=Streaming keeps active() true → Tick subscription
                 // stays armed, the user sees the countdown / can Esc.
                 m.s.phase = phase::Streaming{};
@@ -342,7 +355,22 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                     std::string{}.swap(tc.args_streaming);
                 }
             }
-            return done(std::move(m));
+            // Toast: terminal banners auto-dismiss after a few seconds.
+            // The per-message `error` field keeps the detail in the
+            // transcript, so the status bar doesn't need to hold it.
+            // Schedule via Cmd::after so the banner disappears even
+            // though the Tick subscription shuts off with phase=Idle.
+            {
+                auto now = std::chrono::steady_clock::now();
+                auto ttl = std::chrono::seconds{
+                    klass == provider::ErrorClass::Cancelled ? 3 : 6};
+                m.s.status_until = now + ttl;
+                auto stamp = m.s.status_until;
+                return {std::move(m), Cmd<Msg>::after(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(ttl)
+                        + std::chrono::milliseconds{50},
+                    Msg{ClearStatus{stamp}})};
+            }
         },
         [&](RetryStream) -> Step {
             // Scheduled retry fired. Clear the pending-flag so the
@@ -369,9 +397,18 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             if (m.s.cancel) m.s.cancel->cancel();
             m.s.phase = phase::Idle{};
             m.s.status = "cancelled";
-            m.s.retry_pending = false;     // any scheduled retry is moot
-            m.s.stall_dispatched = false;  // re-arm the watchdog cleanly
-            return done(std::move(m));
+            {
+                auto now = std::chrono::steady_clock::now();
+                auto ttl = std::chrono::seconds{3};
+                m.s.status_until = now + ttl;
+                auto stamp = m.s.status_until;
+                m.s.retry_pending = false;     // any scheduled retry is moot
+                m.s.stall_dispatched = false;  // re-arm the watchdog cleanly
+                return {std::move(m), Cmd<Msg>::after(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(ttl)
+                        + std::chrono::milliseconds{50},
+                    Msg{ClearStatus{stamp}})};
+            }
         },
 
         // ── Live tool progress (streaming subprocess output) ────────────
@@ -757,7 +794,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             // every 1-2 s during active output, including thinking
             // deltas. 25 s of total silence is well outside any
             // legitimate model behaviour.
-            constexpr auto kStallSecs = std::chrono::seconds(25);
+            constexpr auto kStallSecs = std::chrono::seconds(60);
             if (m.s.is_streaming() && m.s.active()
                 && !m.s.stall_dispatched
                 && m.s.last_event_at.time_since_epoch().count() != 0
@@ -815,6 +852,16 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             return {std::move(m), Cmd<Msg>::quit()};
         },
         [&](NoOp) -> Step { return done(std::move(m)); },
+        [&](ClearStatus& e) -> Step {
+            // No-op if the user (or another handler) wrote a newer
+            // status since this cleaner was scheduled — stamps won't
+            // match, so the current banner stays.
+            if (m.s.status_until == e.stamp) {
+                m.s.status.clear();
+                m.s.status_until = {};
+            }
+            return done(std::move(m));
+        },
     }, msg);
 }
 

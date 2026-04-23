@@ -170,6 +170,11 @@ struct ToggleToolExpanded { ToolCallId id; };
 struct Tick {};
 struct Quit {};
 struct NoOp {};
+// Delayed sentinel that clears `m.s.status` iff it hasn't been
+// overwritten since the toast was scheduled. `stamp` is the value
+// `m.s.status_until` had at schedule time; if the reducer has since
+// written a newer status, stamps won't match and this Msg is a no-op.
+struct ClearStatus { std::chrono::steady_clock::time_point stamp; };
 
 using Msg = std::variant<
     ComposerCharInput, ComposerBackspace, ComposerEnter, ComposerNewline,
@@ -192,7 +197,7 @@ using Msg = std::variant<
     AcceptHunk, RejectHunk, AcceptAllChanges, RejectAllChanges,
     RestoreCheckpoint,
     ScrollThread, ToggleToolExpanded,
-    Tick, Quit, NoOp
+    Tick, Quit, NoOp, ClearStatus
 >;
 
 } // namespace moha

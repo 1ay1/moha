@@ -44,6 +44,21 @@ struct StreamState {
     int tokens_out  = 0;
     int context_max = 200000;
     std::string status;
+    // Optional expiry for `status`. When set, the status bar hides the
+    // banner once now() passes this point and the reducer treats the
+    // field as empty. Used for toast-style transient messages
+    // (retrying, cancelled, checkpoint-restore-not-implemented, …) so
+    // they don't linger forever. A default-constructed time_point
+    // (epoch=0) means "no expiry" — the status stays until something
+    // else writes over it.
+    std::chrono::steady_clock::time_point status_until{};
+
+    // True iff `status` is set AND either has no expiry or hasn't expired yet.
+    [[nodiscard]] bool status_active(std::chrono::steady_clock::time_point now) const noexcept {
+        if (status.empty()) return false;
+        if (status_until.time_since_epoch().count() == 0) return true;
+        return now < status_until;
+    }
     maya::Spinner<maya::SpinnerStyle::Dots> spinner{};
     int truncation_retries = 0;
     // Transient-error retry counter (overloaded / 429 / 5xx / network
