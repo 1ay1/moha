@@ -40,7 +40,10 @@ namespace {
 // conversation this turns an O(N) per-byte rewrite into an O(N) validate
 // — same big-O, but no per-byte std::string append and no allocation
 // per message in the request build.
-[[gnu::hot]] inline bool is_valid_utf8(std::string_view in) noexcept {
+#if defined(__GNUC__) || defined(__clang__)
+[[gnu::hot]]
+#endif
+inline bool is_valid_utf8(std::string_view in) noexcept {
     const auto* p = reinterpret_cast<const unsigned char*>(in.data());
     const auto* end = p + in.size();
     while (p < end) {

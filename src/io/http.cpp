@@ -18,6 +18,13 @@
 #include <utility>
 #include <vector>
 
+// MSVC doesn't provide ssize_t (POSIX-only). nghttp2.h uses it for the legacy
+// read callback typedef guarded by NGHTTP2_NO_SSIZE_T. Define it from BaseTsd
+// before the include so nghttp2.h compiles cleanly without skipping the typedef.
+#if defined(_MSC_VER) && !defined(__clang__)
+#  include <BaseTsd.h>
+   using ssize_t = SSIZE_T;
+#endif
 #include <nghttp2/nghttp2.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -715,7 +722,10 @@ dial_new(const Endpoint& ep, Timeouts tos, CancelTokenPtr cancel) {
     if (!fd_or) return std::unexpected(fd_or.error());
     socket_t fd = *fd_or;
 
-    tls::SSL* ssl = tls::wrap_client(fd, ep.host);
+    // SOCKET is a 64-bit handle on Win64, but OpenSSL's BIO_new_socket takes
+    // int. The kernel only ever hands out small values (well under 2^31), so
+    // the truncation is safe — make it explicit to silence C4244.
+    tls::SSL* ssl = tls::wrap_client(static_cast<int>(fd), ep.host);
     if (!ssl) { sock_close(fd); return std::unexpected("tls: SSL_new failed"); }
 
     if (auto r = tls_handshake(fd, ssl, tos, cancel.get()); !r) {

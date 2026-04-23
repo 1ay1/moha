@@ -119,17 +119,17 @@ Element composer(const Model& m) {
     // that's what made the row read as stickers. Restraint is the look.
     auto kbd = [](const char* k) { return text(k, fg_bold(fg)); };
     auto lbl = [](const char* l) { return text(l, fg_dim(muted)); };
-    auto sep = text("  \xc2\xb7  ", fg_dim(muted));                   // ·
+    auto dot = text("  \xc2\xb7  ", fg_dim(muted));                   // ·
 
     auto hint = h(
         kbd("\xe2\x86\xb5"),         lbl(" send"),                    // ↵
-        sep,
+        dot,
         // Show Shift+Enter as the primary; Alt+Enter as the fallback so
         // users on terminals that don't disambiguate Shift+Enter still
         // discover a working binding without having to read docs.
         kbd("\xe2\x87\xa7\xe2\x86\xb5 / \xe2\x8c\xa5\xe2\x86\xb5"),    // ⇧↵ / ⌥↵
                                        lbl(" newline"),
-        sep,
+        dot,
         kbd("^E"),                   lbl(" expand"),
         spacer(),
         // Live counters — words / lines / chars. Helps the user keep

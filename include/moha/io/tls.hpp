@@ -11,6 +11,7 @@
 //             push into the SSL_CTX store.
 
 #include <memory>
+#include <string>
 #include <string_view>
 
 // Forward-declare OpenSSL types so this header doesn't drag openssl/*.h into

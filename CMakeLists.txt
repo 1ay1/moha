@@ -462,6 +462,14 @@ else()
     endif()
 endif()
 
+# nghttp2.h is a C header whose multi-line function signatures trip MSVC's
+# conforming preprocessor (/Zc:preprocessor). Revert to the legacy
+# preprocessor for just this TU; the rest of the build keeps /Zc:preprocessor.
+if(MSVC)
+    set_source_files_properties(src/io/http.cpp PROPERTIES
+        COMPILE_FLAGS "/Zc:preprocessor- /DNGHTTP2_STATICLIB")
+endif()
+
 # Opt-in sanitizer build: `cmake -B build-san -DMOHA_SANITIZE=address,undefined`.
 # Separate from CMAKE_BUILD_TYPE so CI / contributors can flip it without
 # redefining the whole toolchain.

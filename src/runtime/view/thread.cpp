@@ -80,8 +80,8 @@ SpeakerStyle speaker_style_for(Role role, const Model& m) {
     for (std::size_t i = 0; i + 2 < id.size(); ++i) {
         char ch = id[i];
         if (ch >= '0' && ch <= '9') {
-            char sep = id[i + 1];
-            if ((sep == '-' || sep == '.') && id[i + 2] >= '0' && id[i + 2] <= '9') {
+            char delim = id[i + 1];
+            if ((delim == '-' || delim == '.') && id[i + 2] >= '0' && id[i + 2] <= '9') {
                 std::size_t end = i + 3;
                 while (end < id.size() && id[end] >= '0' && id[end] <= '9') ++end;
                 auto ver = id.substr(i, end - i);
