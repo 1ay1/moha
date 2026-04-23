@@ -72,6 +72,54 @@ public:
 // the model (currently just `todo`).
 inline constexpr EffectSet pure_effects{};
 
+// ── Parallel-safety rule ────────────────────────────────────────────────
+// Governs whether a tool with `want` effects may start while a set of
+// `active` effects is in flight. Expressed in terms of effect tags so
+// the scheduling policy is derived from the capability model, not
+// sprinkled through the runtime.
+//
+//   WriteFs / Exec demand *exclusive* access:
+//     * a WriteFs-tagged tool may mutate filesystem state that any
+//       sibling could be reading (ReadFs), writing (WriteFs), or
+//       shelling out against (Exec). Two edits to different files
+//       look independent until the model picks overlapping paths.
+//     * Exec is strictly more powerful — the *model* chooses what the
+//       subprocess does, so we must assume the worst and serialise.
+//
+//   Pure / ReadFs / Net compose freely. Read-read never races; Net
+//   touches neither FS nor process state; in-memory Pure tools (todo)
+//   operate on data the model cannot observe concurrently.
+//
+// Reflected in the tool spec as a compile-time invariant (see
+// moha::tools::spec::proofs::parallel_rule_is_well_founded).
+[[nodiscard]] constexpr bool is_parallel_safe(EffectSet active, EffectSet want) noexcept {
+    constexpr auto exclusive = [](EffectSet e) noexcept {
+        return e.has(Effect::WriteFs) || e.has(Effect::Exec);
+    };
+    if (exclusive(active) || exclusive(want)) {
+        // One side needs exclusive access; only safe if the other side is
+        // empty. `active == {}` covers "nothing is running yet".
+        return active.empty();
+    }
+    return true;
+}
+
+// Compile-time spot-checks of the rule — clearer than a prose comment
+// and fail the build if someone rewrites the implementation wrong.
+namespace proofs {
+static_assert( is_parallel_safe(EffectSet{}, EffectSet{{Effect::ReadFs}}));
+static_assert( is_parallel_safe(EffectSet{{Effect::ReadFs}}, EffectSet{{Effect::ReadFs}}));
+static_assert( is_parallel_safe(EffectSet{{Effect::ReadFs}}, EffectSet{{Effect::Net}}));
+static_assert( is_parallel_safe(EffectSet{{Effect::Net}},    EffectSet{{Effect::Net}}));
+static_assert( is_parallel_safe(EffectSet{},                 EffectSet{{Effect::WriteFs}}));
+static_assert( is_parallel_safe(EffectSet{},                 EffectSet{{Effect::Exec}}));
+static_assert(!is_parallel_safe(EffectSet{{Effect::WriteFs}}, EffectSet{{Effect::ReadFs}}));
+static_assert(!is_parallel_safe(EffectSet{{Effect::ReadFs}},  EffectSet{{Effect::WriteFs}}));
+static_assert(!is_parallel_safe(EffectSet{{Effect::Exec}},    EffectSet{{Effect::ReadFs}}));
+static_assert(!is_parallel_safe(EffectSet{{Effect::WriteFs}}, EffectSet{{Effect::WriteFs}}));
+static_assert(!is_parallel_safe(EffectSet{{Effect::Exec}},    EffectSet{{Effect::Exec}}));
+} // namespace proofs
+
 // "ReadFs, Net" — sorted-by-bit, comma-separated. For permission UI
 // and logging; not parsed anywhere.
 [[nodiscard]] std::string to_string(EffectSet e);

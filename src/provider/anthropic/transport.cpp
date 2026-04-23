@@ -850,7 +850,7 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
     ctx.sink = std::move(sink);
 
     http::Request hreq;
-    hreq.method  = "POST";
+    hreq.method  = http::HttpMethod::Post;
     hreq.host    = "api.anthropic.com";
     hreq.port    = 443;
     // `?beta=true` matches `beta.messages.create` in the SDK (cli.js line 393)
@@ -954,7 +954,7 @@ std::vector<ModelInfo> list_models(const std::string& auth_header,
     const bool is_oauth = (auth_style == auth::Style::Bearer);
 
     http::Request hreq;
-    hreq.method  = "GET";
+    hreq.method  = http::HttpMethod::Get;
     hreq.host    = "api.anthropic.com";
     hreq.port    = 443;
     hreq.path    = "/v1/models?limit=100";

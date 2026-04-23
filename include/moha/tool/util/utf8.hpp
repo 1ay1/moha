@@ -23,4 +23,13 @@ namespace moha::tools::util {
 // byte-level scrub. On non-Windows only the first and last steps apply.
 [[nodiscard]] std::string to_valid_utf8(std::string s);
 
+// Return the largest position `cut` in [0, max_bytes] such that `s[0, cut)`
+// does NOT split a multi-byte UTF-8 sequence. When `s.size() <= max_bytes`
+// returns `s.size()` (no truncation). Never throws, never allocates. Used
+// at every byte-granularity truncation site (size caps on file reads,
+// HTTP bodies, captured stdout, thread titles, tool output limits) so
+// the resulting prefix is still safe to hand to nlohmann::json::dump()
+// without triggering its UTF-8 type_error.316.
+[[nodiscard]] std::size_t safe_utf8_cut(std::string_view s, std::size_t max_bytes) noexcept;
+
 } // namespace moha::tools::util

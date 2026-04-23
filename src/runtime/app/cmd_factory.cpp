@@ -102,9 +102,39 @@ Cmd<Msg> kick_pending_tools(Model& m) {
     std::vector<Cmd<Msg>> cmds;
     bool any_pending = false;
 
+    // Effect-based scheduler. When the assistant emits multiple tool
+    // calls in one turn they all start Pending; maya's BG worker pool
+    // runs Task cmds on independent threads, so any set of tools we
+    // dispatch in this tick runs concurrently. `is_parallel_safe`
+    // (moha/tool/effects.hpp) encodes the capability rule: Pure /
+    // ReadFs / Net compose freely; WriteFs and Exec demand exclusive
+    // access. We accumulate `active_effects` across the sweep so each
+    // candidate is checked against *everything* already running AND
+    // the siblings we've just promoted within this same batch.
+    //
+    // Deferred (conflicted) tools stay Pending. When the blocking
+    // tool's ToolExecOutput lands, update.cpp re-fires
+    // kick_pending_tools and the now-unblocked siblings advance.
+    tools::EffectSet active_effects;
+    auto effects_of = [](const ToolName& n) -> tools::EffectSet {
+        if (const auto* sp = tools::spec::lookup(n.value)) return sp->effects;
+        // Unknown tool: treat as if it requires exclusive access so we
+        // never parallelise something whose effects we can't reason about.
+        return tools::EffectSet{{tools::Effect::Exec}};
+    };
+    for (const auto& tc : last.tool_calls)
+        if (tc.is_running()) active_effects |= effects_of(tc.name);
+
     for (auto& tc : last.tool_calls) {
-        if (tc.is_pending()) {
-            const bool needs_perm = tool::DynamicDispatch::needs_permission(tc.name.value, m.d.profile);
+        // Approved: user already granted permission; advance it exactly
+        // like a Pending-but-no-permission-needed tool, minus the
+        // permission check. Keeps the effect-parallel gate as the single
+        // source of truth for scheduling.
+        const bool ready = tc.is_pending() || tc.is_approved();
+        if (ready) {
+            const bool needs_perm = tc.is_approved()
+                ? false
+                : tool::DynamicDispatch::needs_permission(tc.name.value, m.d.profile);
             if (needs_perm && !m.d.pending_permission) {
                 m.d.pending_permission = PendingPermission{
                     tc.id, tc.name,
@@ -114,10 +144,23 @@ Cmd<Msg> kick_pending_tools(Model& m) {
                 return Cmd<Msg>::none();
             }
             if (!needs_perm) {
+                // Effect-compatibility gate. Defer this tool if another
+                // running sibling demands exclusive access or this tool
+                // itself demands exclusive access while anything is
+                // already running. kick_pending_tools re-fires on every
+                // terminal ToolExecOutput, so deferred siblings advance
+                // automatically without explicit requeueing.
+                const auto want = effects_of(tc.name);
+                if (!tools::is_parallel_safe(active_effects, want)) {
+                    any_pending = true;
+                    continue;
+                }
+
                 // started_at was stamped at StreamToolUseStart so the
                 // timer covers the full card lifetime (args streaming +
                 // execution). Preserve it as we move into Running.
                 tc.status = ToolUse::Running{tc.started_at(), {}};
+                active_effects |= want;
                 cmds.push_back(run_tool(tc.id, tc.name, tc.args));
 
                 // Wall-clock watchdog, configured per-tool from the spec
@@ -136,9 +179,9 @@ Cmd<Msg> kick_pending_tools(Model& m) {
                 // truncate legitimate long commands. The spec catalog's
                 // static_assert guarantees only those two have 0.
                 if (const auto* sp = tools::spec::lookup(tc.name.value);
-                    sp && sp->max_seconds > 0) {
+                    sp && sp->max_seconds > std::chrono::seconds{0}) {
                     cmds.push_back(Cmd<Msg>::after(
-                        std::chrono::seconds(sp->max_seconds),
+                        sp->max_seconds,
                         Msg{ToolTimeoutCheck{tc.id}}));
                 }
 

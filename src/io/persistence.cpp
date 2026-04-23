@@ -353,7 +353,15 @@ ThreadId new_id() {
 std::string title_from_first_message(std::string_view text) {
     std::string t{text};
     for (auto& c : t) if (c == '\n' || c == '\r') c = ' ';
-    if (t.size() > 60) { t.resize(57); t += "..."; }
+    if (t.size() > 60) {
+        // UTF-8-safe cut: a naive resize(57) can split a multi-byte sequence,
+        // and the partial bytes propagate into json::dump() which throws
+        // type_error.316 on any invalid UTF-8. Scrub afterward as belt-and-
+        // suspenders in case `text` itself arrived malformed.
+        t.resize(tools::util::safe_utf8_cut(t, 57));
+        t = tools::util::to_valid_utf8(std::move(t));
+        t += "...";
+    }
     if (t.empty()) t = "New thread";
     return t;
 }

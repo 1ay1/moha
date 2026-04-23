@@ -59,7 +59,7 @@ std::string url_escape(std::string_view s) {
 
 ExecResult run_web_search(const WebSearchArgs& a) {
     http::Request req;
-    req.method = "GET";
+    req.method = http::HttpMethod::Get;
     req.host   = "html.duckduckgo.com";
     req.port   = 443;
     req.path   = "/html/?q=" + url_escape(a.query);

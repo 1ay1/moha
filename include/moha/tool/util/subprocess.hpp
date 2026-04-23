@@ -37,7 +37,10 @@ struct SubprocessOptions {
     std::optional<std::vector<std::string>> argv;
 
     std::chrono::seconds timeout{120};
-    int                  max_bytes = 30'000;
+    // Unsigned because a negative cap makes no sense and every compare
+    // site was already a `size_t` on the RHS; the old `int` caused
+    // mixed-sign promotions and the occasional sign-compare warning.
+    std::size_t          max_bytes = 30'000;
 
     // Called with the full accumulated buffer (not a delta) on a best-effort
     // throttle. Passing the whole buffer each time means multi-byte UTF-8
@@ -68,29 +71,30 @@ struct Subprocess {
 
 [[nodiscard]] SubprocessResult run_command_s(
     const std::string& cmd,
-    int max_bytes = 30'000,
-    int timeout_secs = 120);
+    std::size_t          max_bytes = 30'000,
+    std::chrono::seconds timeout   = std::chrono::seconds{120});
 
 [[nodiscard]] SubprocessResult run_argv_s(
     const std::vector<std::string>& argv,
-    int max_bytes = 30'000,
-    int timeout_secs = 120);
+    std::size_t          max_bytes = 30'000,
+    std::chrono::seconds timeout   = std::chrono::seconds{120});
 
 // Flatten a SubprocessResult into the legacy suffix-marker string shape:
 //   <output>[\n[output truncated]][\n[timed out after Xs] | \n[exit code N]]
 // Tools that parse exit codes out of their captured blob (e.g. git_commit's
 // `out.find("[exit code")` guard) depend on this format — don't change it
 // without auditing every caller.
-[[nodiscard]] std::string legacy_format(const SubprocessResult& r, int timeout_secs);
+[[nodiscard]] std::string legacy_format(const SubprocessResult& r,
+                                        std::chrono::seconds timeout);
 
 [[nodiscard]] std::string run_command(
     const std::string& cmd,
-    int max_bytes = 30'000,
-    int timeout_secs = 120);
+    std::size_t          max_bytes = 30'000,
+    std::chrono::seconds timeout   = std::chrono::seconds{120});
 
 [[nodiscard]] std::string run_argv(
     const std::vector<std::string>& argv,
-    int max_bytes = 30'000,
-    int timeout_secs = 120);
+    std::size_t          max_bytes = 30'000,
+    std::chrono::seconds timeout   = std::chrono::seconds{120});
 
 } // namespace moha::tools::util

@@ -50,8 +50,22 @@ struct Header {
 };
 using Headers = std::vector<Header>;
 
+// Strongly-typed HTTP method. The wire spelling lives in one place
+// (`wire_name`) and the runtime never sees a free-form string at this
+// seam — "GET" vs "Get" vs "get" can't diverge between call sites.
+enum class HttpMethod : std::uint8_t { Get, Post, Head };
+
+[[nodiscard]] constexpr std::string_view wire_name(HttpMethod m) noexcept {
+    switch (m) {
+        case HttpMethod::Get:  return "GET";
+        case HttpMethod::Post: return "POST";
+        case HttpMethod::Head: return "HEAD";
+    }
+    return "GET";
+}
+
 struct Request {
-    std::string method;   // "GET" / "POST"
+    HttpMethod  method = HttpMethod::Get;
     std::string host;     // "api.anthropic.com"
     uint16_t    port = 443;
     std::string path;     // "/v1/messages"

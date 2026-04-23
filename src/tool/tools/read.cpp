@@ -75,9 +75,11 @@ ExecResult run_read(const ReadArgs& a) {
     // detects binary content (NUL byte) AND counts lines in one pass.
     auto content = util::read_file(p);
     std::string out;
-    // Decent upper bound on the slice — most files fit in this bucket and we
-    // avoid the realloc cascade that append-without-reserve would trigger.
-    out.reserve(content.size() < 64 * 1024 ? content.size() : 64 * 1024);
+    // Reserve the full content size on small files (one big alloc, no
+    // resize) and cap at 1 MiB on larger files where the slice is
+    // almost certainly a page of the whole thing — the realloc cascade
+    // for a million-byte append is what we're avoiding, not the peak RSS.
+    out.reserve(content.size() < 1024 * 1024 ? content.size() : 1024 * 1024);
     int total_lines = 0;
     int shown = 0;
     size_t line_start = 0;

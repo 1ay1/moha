@@ -28,6 +28,7 @@
 //    vector; the spec table lets us migrate that progressively.
 
 #include <array>
+#include <chrono>
 #include <string_view>
 
 #include "moha/tool/effects.hpp"
@@ -41,7 +42,7 @@ struct ToolSpec {
     // Wall-clock watchdog deadline. The reducer schedules
     // `Cmd::after(max_seconds, ToolTimeoutCheck{id})` when a tool of
     // this kind transitions to Running; the handler force-fails it if
-    // it's still running when the timer fires. `0` means "no overlay
+    // it's still running when the timer fires. `0s` means "no overlay
     // timeout" — used for tools that own their own timeout via the
     // subprocess runner (bash, diagnostics) so we don't double-gate.
     //
@@ -50,7 +51,11 @@ struct ToolSpec {
     // tree might take a minute. The watchdog is the safety net for
     // "the worker thread is wedged"; legitimate slow-but-progressing
     // workloads should fit comfortably under the chosen ceiling.
-    int              max_seconds;
+    //
+    // Typed as `std::chrono::seconds` so callers can't accidentally
+    // feed this to a millisecond-expecting scheduler without an
+    // explicit `duration_cast` — the unit is in the type.
+    std::chrono::seconds max_seconds;
 };
 
 // ── The full tool catalog, in the same display order as the runtime
@@ -62,24 +67,31 @@ struct ToolSpec {
 // metadata (each tool's factory composes its own help text, sometimes
 // platform-conditional like bash on Windows). Cross-validating
 // descriptions buys nothing; cross-validating effects + names matters.
+// Short-hand so the catalog reads as `20s` rather than
+// `std::chrono::seconds{20}`. Scoped to the catalog array so the UDL
+// doesn't leak to headers that include this one.
+namespace detail {
+using sec = std::chrono::seconds;
+}
+
 inline constexpr std::array kCatalog = {
-    //         name              effects                              eager   timeout(s)
-    ToolSpec{"read",            {Effect::ReadFs},                     false,    20},
-    ToolSpec{"edit",            {Effect::ReadFs, Effect::WriteFs},    true,     30},
-    ToolSpec{"write",           {Effect::WriteFs},                    true,     30},
-    ToolSpec{"bash",            {Effect::Exec},                       true,      0},  // subprocess-managed
-    ToolSpec{"grep",            {Effect::ReadFs},                     false,    90},  // tree walks can be deep
-    ToolSpec{"glob",            {Effect::ReadFs},                     false,    60},
-    ToolSpec{"list_dir",        {Effect::ReadFs},                     false,    20},
-    ToolSpec{"todo",            {} /* pure */,                        true,      5},  // in-memory only
-    ToolSpec{"web_fetch",       {Effect::Net},                        false,    30},  // matches http total-timeout
-    ToolSpec{"web_search",      {Effect::Net},                        false,    20},
-    ToolSpec{"find_definition", {Effect::ReadFs},                     false,    60},
-    ToolSpec{"diagnostics",     {Effect::Exec},                       false,     0},  // subprocess-managed
-    ToolSpec{"git_status",      {Effect::ReadFs},                     false,    20},
-    ToolSpec{"git_diff",        {Effect::ReadFs},                     false,    30},
-    ToolSpec{"git_log",         {Effect::ReadFs},                     false,    20},
-    ToolSpec{"git_commit",      {Effect::WriteFs},                    true,     30},
+    //         name              effects                              eager   timeout
+    ToolSpec{"read",            {Effect::ReadFs},                     false,   detail::sec{20}},
+    ToolSpec{"edit",            {Effect::ReadFs, Effect::WriteFs},    true,    detail::sec{30}},
+    ToolSpec{"write",           {Effect::WriteFs},                    true,    detail::sec{30}},
+    ToolSpec{"bash",            {Effect::Exec},                       true,    detail::sec{0}},   // subprocess-managed
+    ToolSpec{"grep",            {Effect::ReadFs},                     false,   detail::sec{90}},  // tree walks can be deep
+    ToolSpec{"glob",            {Effect::ReadFs},                     false,   detail::sec{60}},
+    ToolSpec{"list_dir",        {Effect::ReadFs},                     false,   detail::sec{20}},
+    ToolSpec{"todo",            {} /* pure */,                        true,    detail::sec{5}},   // in-memory only
+    ToolSpec{"web_fetch",       {Effect::Net},                        false,   detail::sec{30}},  // matches http total-timeout
+    ToolSpec{"web_search",      {Effect::Net},                        false,   detail::sec{20}},
+    ToolSpec{"find_definition", {Effect::ReadFs},                     false,   detail::sec{60}},
+    ToolSpec{"diagnostics",     {Effect::Exec},                       false,   detail::sec{0}},   // subprocess-managed
+    ToolSpec{"git_status",      {Effect::ReadFs},                     false,   detail::sec{20}},
+    ToolSpec{"git_diff",        {Effect::ReadFs},                     false,   detail::sec{30}},
+    ToolSpec{"git_log",         {Effect::ReadFs},                     false,   detail::sec{20}},
+    ToolSpec{"git_commit",      {Effect::WriteFs},                    true,    detail::sec{30}},
 };
 
 // Compile-time lookup. Returns a pointer to the spec, or nullptr if
@@ -216,7 +228,8 @@ static_assert(only_web_is_net(),
 consteval bool subprocess_tools_have_no_overlay_timeout() {
     auto* b = lookup("bash");
     auto* d = lookup("diagnostics");
-    return b && d && b->max_seconds == 0 && d->max_seconds == 0;
+    return b && d && b->max_seconds == std::chrono::seconds{0}
+                  && d->max_seconds == std::chrono::seconds{0};
 }
 static_assert(subprocess_tools_have_no_overlay_timeout(),
               "bash/diagnostics must have max_seconds=0 — they own their timeout");
@@ -226,9 +239,10 @@ static_assert(subprocess_tools_have_no_overlay_timeout(),
 // to prevent. Cap at 5 minutes so no tool can wedge the agent for
 // longer than the user's patience.
 consteval bool other_tools_have_bounded_timeout() {
+    using std::chrono::seconds;
     for (const auto& s : kCatalog) {
         if (s.name == "bash" || s.name == "diagnostics") continue;
-        if (s.max_seconds < 1 || s.max_seconds > 300) return false;
+        if (s.max_seconds < seconds{1} || s.max_seconds > seconds{300}) return false;
     }
     return true;
 }
@@ -238,7 +252,7 @@ static_assert(other_tools_have_bounded_timeout(),
 // `web_fetch` cannot wait longer than the underlying http total
 // timeout, otherwise the watchdog fires while the client is still
 // happily blocking on a slow server.
-static_assert(lookup("web_fetch")->max_seconds <= 30,
+static_assert(lookup("web_fetch")->max_seconds <= std::chrono::seconds{30},
               "web_fetch overlay timeout must be ≤ http total (30s)");
 
 } // namespace proofs

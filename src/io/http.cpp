@@ -437,6 +437,20 @@ dial_tcp(const Endpoint& ep, Timeouts tos, CancelToken* cancel) {
                      reinterpret_cast<const char*>(&one), sizeof(one));
         ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE,
                      reinterpret_cast<const char*>(&one), sizeof(one));
+        // Windows defaults to a 64 KiB receive buffer; that's cramped for
+        // Anthropic's SSE bursts, where a single content_block_delta chunk
+        // can be 8–32 KiB and the TCP window capping the receive side
+        // forces the sender to pause for round-trip ACKs mid-frame. A 1 MiB
+        // buffer lets the kernel soak up 10+ back-to-back segments without
+        // flow-control stalls; measurable on wall-clock TTFT of longer
+        // completions. Send buffer bumped similarly for request bodies
+        // (bash tool output, large Edit payloads going back to the API).
+        int rcvbuf = 1 << 20;            // 1 MiB
+        int sndbuf = 256 << 10;          // 256 KiB
+        ::setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
+                     reinterpret_cast<const char*>(&rcvbuf), sizeof(rcvbuf));
+        ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
+                     reinterpret_cast<const char*>(&sndbuf), sizeof(sndbuf));
 #endif
         sock_set_nonblock(fd);
         int r = ::connect(fd, p->ai_addr, static_cast<int>(p->ai_addrlen));
@@ -660,7 +674,7 @@ Connection::run(const Request& req, StreamCtx& sctx, Timeouts tos,
             k.size(), v.size(), NGHTTP2_NV_FLAG_NONE,
         };
     };
-    nvs.push_back(make_nv(":method",    req.method));
+    nvs.push_back(make_nv(":method",    wire_name(req.method)));
     nvs.push_back(make_nv(":scheme",    "https"));
     nvs.push_back(make_nv(":authority", authority));
     nvs.push_back(make_nv(":path",      req.path));

@@ -10,7 +10,14 @@
 namespace moha::ui {
 
 // ── Semantic palette (named ANSI only — terminal theme wins) ──────────────
-inline constexpr auto fg          = maya::Color::white();
+// `fg` is the primary body-text color. ANSI 7 ("white") renders as a mid-
+// gray in most modern terminal themes (Catppuccin, Solarized, One Dark,
+// Gruvbox) — readable, but not the brightest the terminal offers. Prose
+// that the user is actually *reading* (their own typed message, the
+// assistant's reply paragraphs) maps to ANSI 15 ("bright_white") so it
+// pops against the theme's background at maximum contrast. Chrome and
+// metadata still use `muted` / `with_dim()` to recede.
+inline constexpr auto fg          = maya::Color::bright_white();
 inline constexpr auto muted       = maya::Color::bright_black();
 inline constexpr auto accent      = maya::Color::magenta();   // brand / Write profile
 inline constexpr auto info        = maya::Color::blue();      // Ask profile / threads

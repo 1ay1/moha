@@ -389,7 +389,7 @@ FormPostResult http_post_form(const std::string& url,
     }
 
     http::Request hreq;
-    hreq.method = "POST";
+    hreq.method = http::HttpMethod::Post;
     hreq.host   = parsed->host;
     hreq.port   = parsed->port;
     hreq.path   = parsed->path;

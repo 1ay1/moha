@@ -85,6 +85,23 @@ static std::string windows_cp_to_utf8(std::string_view s, UINT cp) {
 }
 #endif
 
+std::size_t safe_utf8_cut(std::string_view s, std::size_t max_bytes) noexcept {
+    if (s.size() <= max_bytes) return s.size();
+    // We want the largest `cut <= max_bytes` such that s[0, cut) ends on a
+    // UTF-8 code-point boundary. That means s[cut] (the first excluded byte)
+    // must NOT be a continuation byte — if it were, the lead for its sequence
+    // would live in [0, cut) and we'd be splitting it.
+    //
+    // Start at max_bytes and walk back while we're *on* a continuation byte
+    // (0x80..0xBF — top bits 10xxxxxx). In valid UTF-8 at most 3 steps back
+    // (4-byte sequences are the widest). After the loop, s[cut] is either
+    // past-the-end, a lead byte, or ASCII — all safe cut points.
+    std::size_t cut = max_bytes;
+    while (cut > 0 && cut < s.size() && ((unsigned char)s[cut] & 0xC0) == 0x80)
+        --cut;
+    return cut;
+}
+
 std::string to_valid_utf8(std::string s) {
     if (is_valid_utf8(s)) return s;
 #ifdef _WIN32

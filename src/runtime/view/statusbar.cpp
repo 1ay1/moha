@@ -151,14 +151,6 @@ std::string truncate_middle(std::string_view s, std::size_t max_chars) {
     return std::string{s.substr(0, max_chars - 1)} + "\u2026";
 }
 
-// Profile indicator — plain colored text, no chip / no inverse video.
-// Pro tools surface mode/profile as a labelled fragment in the status
-// line (vim-modeline style), not as a sticker.
-Element profile_tag(Profile p) {
-    return text(std::string{profile_label(p)},
-                Style{}.with_fg(profile_color(p)).with_bold());
-}
-
 // Phase indicator — colored glyph + bold verb, no chip background.
 // Glyph carries the urgency (●/⠋/⚠), color reinforces it, weight tells
 // the eye it's a state label vs free text.
@@ -562,10 +554,10 @@ Element status_bar(const Model& m) {
             lparts.push_back(text("\xe2\x96\x8c", rail_style));   // ▌
             lparts.push_back(text(" ", {}));
             lparts.push_back(phase_pill);
-            if (w >= 70) {
-                lparts.push_back(sep_thin());
-                lparts.push_back(profile_tag(m.d.profile));
-            }
+            // Profile indicator lives in the composer's hint row (▎ + label),
+            // so we don't duplicate it here — keeps the status bar focused on
+            // transient state (phase / context / rate) that the composer chip
+            // doesn't carry.
             auto left = hstack()(std::move(lparts));
 
             // ── Right group ────────────────────────────────────────────

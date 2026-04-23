@@ -110,7 +110,7 @@ ExecResult run_bash(const BashArgs& a) {
         effective = "cd " + q + " && " + cmd_str;
 #endif
     }
-    auto r = util::run_command_s(effective, 30000, tmo_s);
+    auto r = util::run_command_s(effective, 30000, std::chrono::seconds{tmo_s});
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - t0).count();
 

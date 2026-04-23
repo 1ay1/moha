@@ -2,6 +2,7 @@
 #include "moha/tool/tools.hpp"
 #include "moha/tool/util/arg_reader.hpp"
 #include "moha/tool/util/tool_args.hpp"
+#include "moha/tool/util/utf8.hpp"
 #include "moha/io/http.hpp"
 
 #include <algorithm>
@@ -20,7 +21,7 @@ using json = nlohmann::json;
 
 namespace {
 
-enum class HttpMethod { Get, Head, Post };
+using http::HttpMethod;
 
 HttpMethod parse_method(std::string_view m) {
     if (m == "HEAD") return HttpMethod::Head;
@@ -96,8 +97,7 @@ ExecResult run_web_fetch(const WebFetchArgs& a) {
         ToolError::invalid_args("could not parse url: " + a.url + " (" + u.error() + ")"));
 
     http::Request req;
-    req.method = a.method == HttpMethod::Head ? "HEAD"
-               : a.method == HttpMethod::Post ? "POST" : "GET";
+    req.method = a.method;
     req.host = u->host;
     req.port = u->port;
     req.path = u->path;
@@ -122,9 +122,13 @@ ExecResult run_web_fetch(const WebFetchArgs& a) {
     std::string body = std::move(r->body);
     bool truncated = false;
     if (body.size() > kMaxFetchBytes) {
-        body.resize(kMaxFetchBytes);
+        // UTF-8-safe byte cap so we don't split a multi-byte sequence at the
+        // boundary, then scrub — arbitrary HTTP bodies may not even be UTF-8
+        // and json::dump() would throw on any invalid byte downstream.
+        body.resize(util::safe_utf8_cut(body, kMaxFetchBytes));
         truncated = true;
     }
+    body = util::to_valid_utf8(std::move(body));
 
     std::ostringstream out;
     out << "HTTP " << r->status;

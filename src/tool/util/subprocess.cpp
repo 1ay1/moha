@@ -3,11 +3,14 @@
 #include "moha/tool/util/utf8.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -125,7 +128,12 @@ SubprocessResult run_win32_cmdline(const std::string& cmdline,
 
     HANDLE rd = nullptr, wr = nullptr;
     SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
-    if (!::CreatePipe(&rd, &wr, &sa, 0)) {
+    // 64 KiB pipe buffer instead of the default (4 KiB). A chatty child
+    // (cmake/clang/msbuild, test runners, npm) fills a 4 KiB pipe in a
+    // single printf and blocks on write until our reader thread drains it,
+    // serializing the child's stdout with our UI loop. 64 KiB soaks a full
+    // compile-step's output so the child keeps running while we read.
+    if (!::CreatePipe(&rd, &wr, &sa, 64 * 1024)) {
         r.started = false; r.start_error = "CreatePipe failed"; return r;
     }
     ::SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
@@ -168,49 +176,88 @@ SubprocessResult run_win32_cmdline(const std::string& cmdline,
         return r;
     }
 
-    std::ostringstream out;
-    size_t total = 0;
-    char buf[4096];
-    auto  last_emit = std::chrono::steady_clock::now();
-    bool  emit_dirty = false;
+    // Reader thread drains the pipe into `shared_buf` under a mutex. The
+    // previous single-thread loop read synchronously with no deadline —
+    // a child that spawned a detached grandchild (and so kept the write
+    // end of the pipe open after its own exit) or that wedged without
+    // emitting output would pin ReadFile forever, because the outer
+    // WaitForSingleObject only ran *after* the read loop closed.
+    //
+    // With the reader split off:
+    //   • main thread does WaitForSingleObject(pi.hProcess, …) with the
+    //     full timeout in short chunks, flushing progress between chunks;
+    //   • timeout fires → TerminateProcess → child's write end closes →
+    //     reader's ReadFile returns 0 → reader thread exits cleanly;
+    //   • grandchild-keeps-pipe-alive edge case → after the terminate,
+    //     we CloseHandle(rd) to force-unblock the reader.
+    std::mutex          buf_mu;
+    std::ostringstream  shared_buf;
+    std::size_t         shared_total = 0;
+    bool                shared_truncated = false;
+    std::atomic<bool>   reader_done{false};
 
-    auto flush_progress = [&]{
-        if (!emit_dirty || !opts.on_progress) { emit_dirty = false; return; }
-        // Converting the full accumulated buffer each flush (not the delta)
-        // is the cleanest way to handle UTF-8 boundaries — a multi-byte
-        // sequence spanning two pipe reads still renders correctly once
-        // the next flush sees both halves. 30 KB / 80 ms is ~300 µs.
-        opts.on_progress(to_valid_utf8(out.str()));
-        emit_dirty = false;
+    std::thread reader([&, rd]{
+        char tmp[4096];
+        for (;;) {
+            DWORD n = 0;
+            if (!::ReadFile(rd, tmp, sizeof(tmp), &n, nullptr) || n == 0) break;
+            std::lock_guard lk(buf_mu);
+            if (shared_truncated) continue;
+            std::size_t room = (shared_total < (std::size_t)opts.max_bytes)
+                             ? (std::size_t)opts.max_bytes - shared_total : 0;
+            std::size_t w = n < room ? n : room;
+            shared_buf.write(tmp, (std::streamsize)w);
+            shared_total += w;
+            if (w < (std::size_t)n) shared_truncated = true;
+        }
+        reader_done.store(true, std::memory_order_release);
+    });
+
+    auto snapshot = [&]{
+        std::lock_guard lk(buf_mu);
+        return shared_buf.str();
     };
 
+    auto now_ms = []{
+        return std::chrono::steady_clock::now();
+    };
+
+    const bool has_deadline = opts.timeout.count() > 0;
+    const auto deadline = has_deadline
+        ? now_ms() + std::chrono::milliseconds(opts.timeout.count() * 1000)
+        : std::chrono::steady_clock::time_point::max();
+    auto last_emit = now_ms();
+
+    bool timed_out = false;
     for (;;) {
-        DWORD n = 0;
-        if (!::ReadFile(rd, buf, sizeof(buf), &n, nullptr) || n == 0) break;
-        if (!r.truncated) {
-            size_t room = (total < (size_t)opts.max_bytes)
-                        ? (size_t)opts.max_bytes - total : 0;
-            size_t write = n < room ? n : room;
-            out.write(buf, (std::streamsize)write);
-            total += write;
-            emit_dirty = true;
-            if (write < (size_t)n) r.truncated = true;
+        auto now = now_ms();
+        auto remaining_deadline = has_deadline
+            ? std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
+            : std::chrono::milliseconds::max();
+        if (has_deadline && remaining_deadline.count() <= 0) {
+            timed_out = true;
+            break;
         }
-        auto now = std::chrono::steady_clock::now();
-        if (now - last_emit >= kEmitGap) {
-            flush_progress();
-            last_emit = now;
+        auto to_emit = kEmitGap - std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - last_emit);
+        if (to_emit.count() < 0) to_emit = std::chrono::milliseconds{0};
+        auto sleep_ms = std::min<std::chrono::milliseconds>(
+            to_emit, has_deadline ? remaining_deadline : std::chrono::milliseconds{1000});
+
+        DWORD w = ::WaitForSingleObject(
+            pi.hProcess,
+            (DWORD)std::max<std::chrono::milliseconds::rep>(sleep_ms.count(), 0));
+        if (w == WAIT_OBJECT_0) break;   // child exited
+
+        auto after = now_ms();
+        if (opts.on_progress && (after - last_emit) >= kEmitGap) {
+            opts.on_progress(to_valid_utf8(snapshot()));
+            last_emit = after;
         }
     }
-    flush_progress();  // final snapshot before the Result comes back
-    ::CloseHandle(rd);
 
-    DWORD timeout_ms = opts.timeout.count() > 0
-                     ? (DWORD)opts.timeout.count() * 1000u
-                     : INFINITE;
-    DWORD wait = ::WaitForSingleObject(pi.hProcess, timeout_ms);
     DWORD exit_code = 0;
-    if (wait == WAIT_TIMEOUT) {
+    if (timed_out) {
         ::TerminateProcess(pi.hProcess, 1);
         ::WaitForSingleObject(pi.hProcess, 2000);
         r.timed_out = true;
@@ -218,9 +265,29 @@ SubprocessResult run_win32_cmdline(const std::string& cmdline,
         ::GetExitCodeProcess(pi.hProcess, &exit_code);
         r.exit_code = (int)exit_code;
     }
+
+    // Give the reader a grace window to drain the remaining pipe bytes
+    // after the child exited (its write end closed → ReadFile is returning).
+    // Grandchildren that inherited the pipe can hold it open past the
+    // parent's death — if the reader is still blocked, force-close rd.
+    const auto grace_deadline = now_ms() + std::chrono::milliseconds(500);
+    while (!reader_done.load(std::memory_order_acquire)
+           && now_ms() < grace_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ::CloseHandle(rd);   // safe: even if reader is mid-ReadFile, it returns false
+    reader.join();
+
+    if (opts.on_progress) {
+        opts.on_progress(to_valid_utf8(snapshot()));
+    }
     ::CloseHandle(pi.hProcess);
     ::CloseHandle(pi.hThread);
-    r.output = to_valid_utf8(out.str());
+    {
+        std::lock_guard lk(buf_mu);
+        r.truncated = shared_truncated;
+        r.output    = to_valid_utf8(shared_buf.str());
+    }
     return r;
 }
 
@@ -343,39 +410,47 @@ SubprocessResult Subprocess::run(SubprocessOptions opts) {
 // inside Subprocess::run) keeps the core runner free of app-specific state
 // — other callers can skip the sink by going direct to Subprocess::run.
 
-SubprocessResult run_command_s(const std::string& cmd, int max_bytes, int timeout_secs) {
+SubprocessResult run_command_s(const std::string& cmd,
+                               std::size_t max_bytes,
+                               std::chrono::seconds timeout) {
     SubprocessOptions opts;
     opts.shell_command = cmd;
     opts.max_bytes   = max_bytes;
-    opts.timeout     = std::chrono::seconds{timeout_secs};
+    opts.timeout     = timeout;
     opts.on_progress = [](std::string_view snap) { progress::emit(snap); };
     return Subprocess::run(std::move(opts));
 }
 
-SubprocessResult run_argv_s(const std::vector<std::string>& argv, int max_bytes, int timeout_secs) {
+SubprocessResult run_argv_s(const std::vector<std::string>& argv,
+                            std::size_t max_bytes,
+                            std::chrono::seconds timeout) {
     SubprocessOptions opts;
     opts.argv        = argv;
     opts.max_bytes   = max_bytes;
-    opts.timeout     = std::chrono::seconds{timeout_secs};
+    opts.timeout     = timeout;
     opts.on_progress = [](std::string_view snap) { progress::emit(snap); };
     return Subprocess::run(std::move(opts));
 }
 
-std::string legacy_format(const SubprocessResult& r, int timeout_secs) {
+std::string legacy_format(const SubprocessResult& r, std::chrono::seconds timeout) {
     if (!r.started) return "[" + r.start_error + "]";
     std::string o = r.output;
     if (r.truncated) o += "\n[output truncated]";
-    if (r.timed_out) o += "\n[timed out after " + std::to_string(timeout_secs) + "s]";
+    if (r.timed_out) o += "\n[timed out after " + std::to_string(timeout.count()) + "s]";
     else if (r.exit_code != 0) o += "\n[exit code " + std::to_string(r.exit_code) + "]";
     return o;
 }
 
-std::string run_command(const std::string& cmd, int max_bytes, int timeout_secs) {
-    return legacy_format(run_command_s(cmd, max_bytes, timeout_secs), timeout_secs);
+std::string run_command(const std::string& cmd,
+                        std::size_t max_bytes,
+                        std::chrono::seconds timeout) {
+    return legacy_format(run_command_s(cmd, max_bytes, timeout), timeout);
 }
 
-std::string run_argv(const std::vector<std::string>& argv, int max_bytes, int timeout_secs) {
-    return legacy_format(run_argv_s(argv, max_bytes, timeout_secs), timeout_secs);
+std::string run_argv(const std::vector<std::string>& argv,
+                     std::size_t max_bytes,
+                     std::chrono::seconds timeout) {
+    return legacy_format(run_argv_s(argv, max_bytes, timeout), timeout);
 }
 
 } // namespace moha::tools::util

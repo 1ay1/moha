@@ -23,6 +23,7 @@
 // in classify(HttpError); the string-sniff list grows only when
 // Anthropic ships a new error_type.
 
+#include <chrono>
 #include <string>
 #include <string_view>
 
@@ -140,19 +141,29 @@ enum class ErrorClass {
     return ErrorClass::Terminal;
 }
 
-// Backoff in milliseconds for the Nth retry attempt (0-indexed). Caps
-// at 5 attempts; longer schedules for RateLimit since Anthropic's
-// per-minute window doesn't reset on demand.
-[[nodiscard]] inline int backoff_ms(ErrorClass kind, int attempt) noexcept {
+// Backoff duration for the Nth retry attempt (0-indexed). Caps at 5
+// attempts; longer schedules for RateLimit since Anthropic's per-minute
+// window doesn't reset on demand. Returning `std::chrono::milliseconds`
+// so the unit is in the type — callers scheduling with `Cmd::after(d)`
+// can't accidentally feed seconds where ms were expected.
+[[nodiscard]] constexpr std::chrono::milliseconds
+backoff(ErrorClass kind, int attempt) noexcept {
+    using std::chrono::milliseconds;
     if (attempt < 0) attempt = 0;
     if (attempt > 4) attempt = 4;
     if (kind == ErrorClass::RateLimit) {
-        static constexpr int ms[5] = {3000, 8000, 20000, 40000, 60000};
-        return ms[attempt];
+        constexpr milliseconds table[5] = {
+            milliseconds{3000},  milliseconds{8000},  milliseconds{20000},
+            milliseconds{40000}, milliseconds{60000},
+        };
+        return table[attempt];
     }
     // Transient / Auth retry — fast first, then linger.
-    static constexpr int ms[5] = {1000, 3000, 7000, 15000, 30000};
-    return ms[attempt];
+    constexpr milliseconds table[5] = {
+        milliseconds{1000},  milliseconds{3000},  milliseconds{7000},
+        milliseconds{15000}, milliseconds{30000},
+    };
+    return table[attempt];
 }
 
 // Hard cap on automatic retries. Past this, surface as terminal.

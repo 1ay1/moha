@@ -15,6 +15,18 @@
 #  include <mimalloc-new-delete.h>
 #endif
 
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#  include <mmsystem.h>          // timeBeginPeriod / timeEndPeriod
+#  pragma comment(lib, "winmm.lib")
+#endif
+
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -75,8 +87,36 @@ Args parse_args(int argc, char** argv) {
 
 } // namespace
 
+#if defined(_WIN32)
+// RAII guard for Windows-specific tuning that must be undone at process exit:
+//   - timeBeginPeriod(1): bumps the system-wide timer interrupt from the
+//     default 15.625 ms down to 1 ms. Every Sleep, WaitForSingleObject
+//     timeout, and std::this_thread::sleep_for respects this floor, so
+//     spinner ticks / streaming frame pacing / input-poll cadence become
+//     smooth instead of stepping on a ~16 ms grid. The effect is global,
+//     so we must pair it with timeEndPeriod(1) on teardown.
+//   - SetPriorityClass(ABOVE_NORMAL): interactive TUI — we want our
+//     render/input loop to preempt background compilation or Slack over
+//     the user's CPU. Doesn't affect a quiescent process; only buys
+//     contention-time responsiveness.
+struct Win32PerfTuning {
+    bool hi_res_timer = false;
+    Win32PerfTuning() {
+        if (::timeBeginPeriod(1) == TIMERR_NOERROR) hi_res_timer = true;
+        ::SetPriorityClass(::GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    }
+    ~Win32PerfTuning() {
+        if (hi_res_timer) ::timeEndPeriod(1);
+    }
+};
+#endif
+
 int main(int argc, char** argv) {
     using namespace moha;
+
+#if defined(_WIN32)
+    Win32PerfTuning win32_perf;
+#endif
 
     auto args = parse_args(argc, argv);
     if (args.bad)                    { print_usage(); return 2; }

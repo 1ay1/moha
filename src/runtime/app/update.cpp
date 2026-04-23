@@ -290,8 +290,10 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
 
             if (can_retry) {
                 int attempt = m.s.transient_retries++;
-                int delay = provider::backoff_ms(klass, attempt);
-                int secs = (delay + 999) / 1000;
+                auto delay = provider::backoff(klass, attempt);
+                // Round up to whole seconds for the user-visible countdown.
+                auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                    delay + std::chrono::milliseconds{999}).count();
                 m.s.status = std::string{provider::to_string(klass)}
                            + " — retrying in " + std::to_string(secs) + "s…";
                 // Phase=Streaming keeps active() true → Tick subscription
@@ -310,8 +312,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 placeholder.role = Role::Assistant;
                 m.d.current.messages.push_back(std::move(placeholder));
                 return {std::move(m),
-                    Cmd<Msg>::after(std::chrono::milliseconds(delay),
-                                    Msg{RetryStream{}})};
+                    Cmd<Msg>::after(delay, Msg{RetryStream{}})};
             }
 
             // Terminal path — phase=Idle drops active() to false.
@@ -406,10 +407,10 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                     if (tc.id == e.id && tc.is_running()) {
                         auto now = std::chrono::steady_clock::now();
                         const auto* sp = tools::spec::lookup(tc.name.value);
-                        int secs = sp ? sp->max_seconds : 0;
+                        auto secs = sp ? sp->max_seconds : std::chrono::seconds{0};
                         tc.status = ToolUse::Failed{
                             tc.started_at(), now,
-                            "tool execution exceeded " + std::to_string(secs)
+                            "tool execution exceeded " + std::to_string(secs.count())
                             + " s wall-clock — likely hung on a blocking "
                             "syscall (slow/dead filesystem mount, network "
                             "freeze, or worker deadlock). The tool's worker "
@@ -459,21 +460,20 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
         [&](PermissionApprove) -> Step {
             if (!m.d.pending_permission) return done(std::move(m));
             auto id = m.d.pending_permission->id;
-            std::vector<Cmd<Msg>> cmds;
             for (auto& msg_ : m.d.current.messages)
                 for (auto& tc : msg_.tool_calls)
                     if (tc.id == id) {
-                        // started_at stays at StreamToolUseStart time — the
-                        // card shows total lifetime including the permission
-                        // wait, which is exactly what the user cares about.
-                        tc.status = ToolUse::Running{tc.started_at(), {}};
-                        cmds.push_back(cmd::run_tool(tc.id, tc.name, tc.args));
+                        // Mark the approval as type state: Pending → Approved.
+                        // kick_pending_tools then treats Approved as "permission
+                        // already granted" and routes it through the same
+                        // effect-parallel gate as a non-permissioned tool —
+                        // so if a sibling ReadFs is still running, a freshly
+                        // approved WriteFs/Exec waits for it to finish instead
+                        // of racing.
+                        tc.status = ToolUse::Approved{tc.started_at()};
                     }
             m.d.pending_permission.reset();
-            // ExecutingTool is non-Idle, so active() flips on automatically
-            // and the Tick subscription stays armed for the live timer.
-            m.s.phase = phase::ExecutingTool{};
-            return {std::move(m), Cmd<Msg>::batch(std::move(cmds))};
+            return {std::move(m), cmd::kick_pending_tools(m)};
         },
         [&](PermissionReject) -> Step {
             if (!m.d.pending_permission) return done(std::move(m));
