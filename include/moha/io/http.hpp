@@ -74,13 +74,29 @@ struct StreamHandler {
 };
 
 // ---------------------------------------------------------------------------
-// Timeouts. All durations are absolute per-operation caps, not idle guards.
+// Timeouts.
 // ---------------------------------------------------------------------------
-// Matches Zed's choice: connect timeout is strict, the streaming phase is
-// unbounded (rely on cancellation for hung servers).
+// `connect` / `total` are absolute per-operation caps. `idle` and `ping` are
+// liveness guardrails for long-lived streams, because a silent peer (half-
+// dead TCP, proxy stall) produces no frames and no error — poll() just
+// returns 0 forever. We need an inter-event idle clock + HTTP/2 PINGs to
+// detect that case and fail fast so the caller can retry or surface an error
+// rather than hang.
+//
+//   connect  strict — time to complete TCP + TLS + h2 preamble.
+//   total    absolute cap for the whole request; 0 = unbounded (streams).
+//   idle     error out if no bytes received for this long; 0 = disabled.
+//   ping     send an HTTP/2 PING after this long without inbound bytes, to
+//            probe the peer and coax a reply (PING ACK resets the idle
+//            clock if the connection is still alive). 0 = disabled.
+//
+// For unary requests we leave idle/ping at 0 and rely on `total`. For
+// streams we set both so a silent peer trips `idle` within a known bound.
 struct Timeouts {
     std::chrono::milliseconds connect{10'000};
-    std::chrono::milliseconds total  {0};  // 0 = unbounded (streams only).
+    std::chrono::milliseconds total  {0};
+    std::chrono::milliseconds idle   {0};
+    std::chrono::milliseconds ping   {0};
 };
 
 // ---------------------------------------------------------------------------

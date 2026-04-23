@@ -876,6 +876,13 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
     http::Timeouts tos;
     tos.connect = std::chrono::milliseconds(10'000);
     tos.total   = std::chrono::milliseconds(0);  // streaming phase unbounded
+    // A healthy Anthropic stream emits SSE heartbeats / data every few seconds
+    // even during long thinking blocks. 30 s without a single byte means the
+    // transport is dead (silent peer, proxy stall, half-open TCP). 90 s is a
+    // generous hard floor that still fails fast enough for the UI to retry
+    // within a user's patience budget.
+    tos.ping    = std::chrono::milliseconds(30'000);
+    tos.idle    = std::chrono::milliseconds(90'000);
 
     auto result = http::default_client().stream(hreq, std::move(handler),
                                                 tos, std::move(cancel));

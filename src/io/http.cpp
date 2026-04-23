@@ -488,14 +488,18 @@ static PumpOut pump_send_impl(tls::SSL* ssl, nghttp2_session* session,
 }
 
 // Pump incoming bytes: read from TLS, feed to nghttp2.  Returns WANT_* when
-// TLS has nothing more buffered.
+// TLS has nothing more buffered. `bytes_in` accumulates the total number of
+// plaintext bytes successfully delivered to nghttp2 — the caller uses this
+// to refresh the idle-timeout clock so *any* inbound activity (DATA, PING
+// ACK, WINDOW_UPDATE) counts as liveness.
 enum class PumpIn { Idle, WantRead, WantWrite, Closed, Error };
 static PumpIn pump_recv(tls::SSL* ssl, nghttp2_session* session,
-                        std::string* err) {
+                        std::string* err, size_t* bytes_in) {
     uint8_t buf[16 * 1024];
     while (true) {
         int r = SSL_read(ssl, buf, sizeof(buf));
         if (r > 0) {
+            if (bytes_in) *bytes_in += static_cast<size_t>(r);
             ssize_t rv = nghttp2_session_mem_recv(session, buf, static_cast<size_t>(r));
             if (rv < 0) {
                 if (err) *err = std::string{"nghttp2_session_mem_recv: "}
@@ -584,6 +588,14 @@ Connection::run(const Request& req, StreamCtx& sctx, Timeouts tos,
     std::optional<clock_t_::time_point> deadline;
     if (tos.total.count() > 0) deadline = clock_t_::now() + tos.total;
 
+    // Liveness clocks. `last_rx` is refreshed whenever SSL_read returns
+    // plaintext bytes (DATA, PING ACK, WINDOW_UPDATE — any frame counts as
+    // proof the connection is alive). `last_ping` throttles how often we
+    // probe a silent peer.
+    const auto start_at = clock_t_::now();
+    auto last_rx   = start_at;
+    auto last_ping = start_at;
+
     std::string err;
     while (!sctx.completed) {
         if (cancel && cancel->is_cancelled()) {
@@ -591,11 +603,26 @@ Connection::run(const Request& req, StreamCtx& sctx, Timeouts tos,
                                       NGHTTP2_CANCEL);
             sctx.error = "cancelled";
         }
+
+        // If we've been silent long enough, poke the peer with a PING. The
+        // ACK (or an SSL_write failure on a dead socket) tells us whether
+        // the connection is actually alive. Opaque data is nghttp2-supplied.
+        if (tos.ping.count() > 0) {
+            auto since_rx = clock_t_::now() - last_rx;
+            auto since_ping = clock_t_::now() - last_ping;
+            if (since_rx >= tos.ping && since_ping >= tos.ping) {
+                nghttp2_submit_ping(session_, NGHTTP2_FLAG_NONE, nullptr);
+                last_ping = clock_t_::now();
+            }
+        }
+
         auto out = pump_send_impl(ssl_, session_, pend_buf_, pend_off_,
                                   pend_len_, &err);
         if (out == PumpOut::Error) return std::unexpected(err);
-        auto in = pump_recv(ssl_, session_, &err);
+        size_t bytes_in = 0;
+        auto in = pump_recv(ssl_, session_, &err, &bytes_in);
         if (in == PumpIn::Error)   return std::unexpected(err);
+        if (bytes_in > 0) last_rx = clock_t_::now();
         if (in == PumpIn::Closed) {
             // Peer closed the TLS session.  If the stream also closed,
             // we're done; otherwise surface as an error.
@@ -604,6 +631,20 @@ Connection::run(const Request& req, StreamCtx& sctx, Timeouts tos,
         }
 
         if (sctx.completed) break;
+
+        // Enforce the idle guardrail *after* draining whatever arrived this
+        // iteration — a chatty peer shouldn't be killed by a clock that ran
+        // past the deadline while we were processing its bytes.
+        if (tos.idle.count() > 0) {
+            auto since_rx = clock_t_::now() - last_rx;
+            if (since_rx >= tos.idle) {
+                nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, sid,
+                                          NGHTTP2_CANCEL);
+                auto secs = std::chrono::duration_cast<std::chrono::seconds>(since_rx).count();
+                return std::unexpected("h2: idle timeout (no bytes for "
+                                       + std::to_string(secs) + "s)");
+            }
+        }
 
         // Decide the poll mask.  Always want POLLIN so we can catch
         // unsolicited frames (WINDOW_UPDATE, PING) promptly.  Add POLLOUT
@@ -615,15 +656,29 @@ Connection::run(const Request& req, StreamCtx& sctx, Timeouts tos,
             && !nghttp2_session_want_write(session_))
             break;
 
-        // Cap the poll wait so cancellation tokens land quickly and so
-        // we honor an overall deadline if one was set.  200 ms matches
-        // Zed's own cancellation-latency profile closely enough.
+        // Cap the poll wait so cancellation tokens land quickly, so we honor
+        // the overall deadline if set, and so we re-check the idle/ping
+        // clocks on schedule. 200 ms matches Zed's cancellation-latency
+        // profile; we further clamp to the nearest liveness deadline so a
+        // 90 s idle guard actually fires at t=90 s, not t=90 s+200 ms*N.
         int rem = remaining_ms(deadline, 200);
         if (rem == 0 && deadline) {
             nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, sid,
                                       NGHTTP2_CANCEL);
             return std::unexpected("request timed out");
         }
+        auto clamp_to = [&](std::chrono::milliseconds budget,
+                            clock_t_::time_point marker) {
+            if (budget.count() <= 0) return;
+            auto now = clock_t_::now();
+            auto until = marker + budget;
+            if (until <= now) { rem = 0; return; }
+            auto left = std::chrono::duration_cast<ms_t>(until - now).count();
+            if (left < rem) rem = static_cast<int>(left);
+        };
+        clamp_to(tos.idle, last_rx);
+        clamp_to(tos.ping, last_rx);
+        if (rem < 1) rem = 1;  // always give poll something to chew on
         pollfd pfd{ fd_, mask, 0 };
         int pr = sock_poll(&pfd, 1, rem);
         if (pr < 0) {
