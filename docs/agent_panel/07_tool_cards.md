@@ -254,16 +254,30 @@ Body: `- ` lines in `error` color, `+ ` lines in `success` color. The
 prefix has its own dim style so the +/- doesn't shout. Wraps long
 lines. **Default: expanded** (overrides the global default).
 
-For multi-hunk edits (when we later support them), render hunks as
-separate `- / +` blocks separated by `…` lines:
+**Multi-edit (live).** When the model emits the canonical
+`edits: [{old_text, new_text}, ...]` shape, the card renders **every**
+hunk during streaming, not just the first. Each edit gets its own
+`- / +` block with an `edit N/M` separator between them:
 
 ```
+│ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈ edit 1/3 ┈┈┈┈┈┈┈┈┈┈┈┈┈┈        │
 │ -  damage_ = {0, 0, width_, height_};          │
 │ +  damage_ = {0, 0, 0, 0};                     │
-│   …                                            │
+│ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈ edit 2/3 ┈┈┈┈┈┈┈┈┈┈┈┈┈┈        │
 │ -  region.invalidate();                        │
 │ +  region.clear();                             │
+│ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈ edit 3/3 ┈┈┈┈┈┈┈┈┈┈┈┈┈┈        │
+│ -  return ok;                                  │
+│ +  return Ok(());                              │
 ```
+
+This works because Anthropic's fine-grained tool streaming
+(`eager_input_streaming: true`, see `04_architecture.md` § 7) emits
+`edits[i].old_text` and `edits[i].new_text` chunk-by-chunk on the
+wire, so the reducer can mirror the entire `edits[]` array into
+`tc.args["edits"]` as it grows. The widget API is
+`et.set_edits(vector<EditPair>)` (multi) or the single-edit
+`set_old_text`/`set_new_text` for legacy / top-level shapes.
 
 For full diff review (multi-file, hunk navigation, accept/reject),
 see `10_diff_review.md` — that's a separate UI surface, not an

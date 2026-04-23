@@ -12,6 +12,7 @@
 #include <maya/widget/git_status.hpp>
 #include <maya/widget/markdown.hpp>
 #include <maya/widget/message.hpp>
+#include <maya/widget/model_badge.hpp>
 #include <maya/widget/read_tool.hpp>
 #include <maya/widget/search_result.hpp>
 #include <maya/widget/todo_list.hpp>
@@ -436,28 +437,47 @@ Element render_tool_call_uncached(const ToolUse& tc) {
         //   1. canonical:  edits: [{old_text, new_text, ...}, ...]
         //   2. Zed-legacy: old_text / new_text at top level
         //   3. moha-orig:  old_string / new_string at top level
-        // The system prompt + tool description steer the model toward (1),
-        // so reading only `old_string`/`new_string` left the diff section
-        // empty and the card looked collapsed. Probe in priority order.
-        auto pick_edit_field = [&](const char* canonical_key,
-                                   const char* legacy_key,
-                                   const char* orig_key) -> std::string {
-            if (tc.args.is_object()) {
-                if (auto it = tc.args.find("edits");
-                    it != tc.args.end() && it->is_array() && !it->empty()
-                    && it->front().is_object())
-                {
-                    const auto& e0 = it->front();
-                    if (auto v = e0.find(canonical_key);
-                        v != e0.end() && v->is_string()) return v->get<std::string>();
+        // For (1) we want to surface EVERY edit in the card — the streaming
+        // preview now mirrors the full array into tc.args["edits"], so the
+        // user can see all hunks land live instead of just the first.
+        bool rendered_array = false;
+        if (tc.args.is_object()) {
+            if (auto it = tc.args.find("edits");
+                it != tc.args.end() && it->is_array() && !it->empty())
+            {
+                std::vector<EditTool::EditPair> pairs;
+                pairs.reserve(it->size());
+                for (const auto& e : *it) {
+                    if (!e.is_object()) continue;
+                    std::string ot, nt;
+                    if (auto v = e.find("old_text"); v != e.end() && v->is_string())
+                        ot = v->get<std::string>();
+                    else if (auto v2 = e.find("old_string"); v2 != e.end() && v2->is_string())
+                        ot = v2->get<std::string>();
+                    if (auto v = e.find("new_text"); v != e.end() && v->is_string())
+                        nt = v->get<std::string>();
+                    else if (auto v2 = e.find("new_string"); v2 != e.end() && v2->is_string())
+                        nt = v2->get<std::string>();
+                    pairs.push_back({std::move(ot), std::move(nt)});
+                }
+                if (!pairs.empty()) {
+                    et.set_edits(std::move(pairs));
+                    rendered_array = true;
                 }
             }
-            auto v = safe_arg(tc.args, legacy_key);
-            if (!v.empty()) return v;
-            return safe_arg(tc.args, orig_key);
-        };
-        et.set_old_text(pick_edit_field("old_text", "old_text", "old_string"));
-        et.set_new_text(pick_edit_field("new_text", "new_text", "new_string"));
+        }
+        if (!rendered_array) {
+            // Legacy single-edit shape: top-level old_text/old_string and
+            // their new_ counterparts. Only consulted when no edits array
+            // is present so the renderer never double-shows the same diff.
+            auto pick = [&](const char* legacy_key, const char* orig_key) -> std::string {
+                auto v = safe_arg(tc.args, legacy_key);
+                if (!v.empty()) return v;
+                return safe_arg(tc.args, orig_key);
+            };
+            et.set_old_text(pick("old_text", "old_string"));
+            et.set_new_text(pick("new_text", "new_string"));
+        }
         et.set_status(map_status<EditTool>(tc.status,
             EditStatus::Applying, EditStatus::Failed, EditStatus::Applied));
         et.set_elapsed(elapsed);
@@ -752,24 +772,147 @@ Element render_tool_call_uncached(const ToolUse& tc) {
 
 // ════════════════════════════════════════════════════════════════════════
 
+// Turn header: thin colored edge bar + role badge on the left, dim
+// metadata trailing right. Replaces the generic `─── ❯ You #3 ───`
+// TurnDivider with something quieter and more useful — the eye finds
+// turn boundaries via the colored ▎ bar, not via heavy hr lines.
+//
+// Layout:
+//   ▎ ✦ Opus 4.7                          09:42 · turn 3
+//   ▎ ❯ You                               09:42 · turn 3
+//
+// Color of the bar + role glyph encodes the speaker; the trailing
+// metadata stays dim so it doesn't compete for attention with the
+// content below.
+Element turn_header(Role role, int turn_num, const Message& msg,
+                    const Model& m, std::optional<float> elapsed_secs) {
+    Color edge_color;
+    std::string glyph;
+    std::string label;
+
+    if (role == Role::User) {
+        // Cyan — chosen because it doesn't collide with any model
+        // brand color (Opus magenta, Sonnet blue, Haiku green) and
+        // reads cleanly as the "you" voice across light + dark themes.
+        // Using `accent` here was clashing with Opus's edge color.
+        edge_color = highlight;
+        glyph      = "\xe2\x9d\xaf";                            // ❯
+        label      = "You";
+    } else {
+        // Assistant: pick the model's brand color so the bar visually
+        // ties to the ModelBadge in the activity bar — Opus magenta,
+        // Sonnet blue, Haiku green. We resolve via ModelBadge's logic
+        // by sniffing the model id.
+        const auto& id = m.model_id.value;
+        if      (id.find("opus")   != std::string::npos) edge_color = accent;       // magenta
+        else if (id.find("sonnet") != std::string::npos) edge_color = info;         // blue
+        else if (id.find("haiku")  != std::string::npos) edge_color = success;      // green
+        else                                              edge_color = highlight;
+        glyph = "\xe2\x9c\xa6";                                 // ✦
+        // Pretty model name: "Opus 4.7", not the raw id.
+        if      (id.find("opus")   != std::string::npos) label = "Opus";
+        else if (id.find("sonnet") != std::string::npos) label = "Sonnet";
+        else if (id.find("haiku")  != std::string::npos) label = "Haiku";
+        else                                              label = id;
+        // Append a version like "4.7" if present.
+        for (std::size_t i = 0; i + 2 < id.size(); ++i) {
+            char c = id[i];
+            if (c >= '0' && c <= '9') {
+                char sep = id[i + 1];
+                if ((sep == '-' || sep == '.') && id[i + 2] >= '0' && id[i + 2] <= '9') {
+                    std::size_t end = i + 3;
+                    while (end < id.size() && id[end] >= '0' && id[end] <= '9') ++end;
+                    auto ver = id.substr(i, end - i);
+                    for (auto& ch : ver) if (ch == '-') ch = '.';
+                    label += " " + ver;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Trailing metadata: timestamp · elapsed · turn N (in that order so
+    // the most-frequently-glanced datum — when — is leftmost).
+    std::string meta = timestamp_hh_mm(msg.timestamp);
+    if (elapsed_secs && *elapsed_secs > 0.0f) {
+        char buf[24];
+        if      (*elapsed_secs < 1.0f)  std::snprintf(buf, sizeof(buf), " \xc2\xb7 %.0fms", *elapsed_secs * 1000.0);
+        else if (*elapsed_secs < 60.0f) std::snprintf(buf, sizeof(buf), " \xc2\xb7 %.1fs", static_cast<double>(*elapsed_secs));
+        else {
+            int mins = static_cast<int>(*elapsed_secs) / 60;
+            float secs = *elapsed_secs - static_cast<float>(mins * 60);
+            std::snprintf(buf, sizeof(buf), " \xc2\xb7 %dm%.0fs", mins, static_cast<double>(secs));
+        }
+        meta += buf;
+    }
+    if (turn_num > 0) {
+        meta += " \xc2\xb7 turn " + std::to_string(turn_num);
+    }
+
+    return h(
+        text("\xe2\x96\x8e", fg_of(edge_color)),                // ▎
+        text(" ", {}),
+        text(glyph, fg_of(edge_color)),
+        text(" ", {}),
+        text(std::move(label), Style{}.with_fg(edge_color).with_bold()),
+        spacer(),
+        text(std::move(meta), fg_dim(muted)),
+        text(" ", {})
+    ).build();
+}
+
+// User message body: just the text indented under the header. We do
+// NOT use a bordered box anymore — the colored edge mark in the header
+// already says "this is the user", and a border around plain text
+// makes it look like a chip when it's actually the dominant content.
+// Indenting by 3 cells aligns the text under the role label, so the
+// "▎ ❯ You" header reads as the prefix of the content.
+Element user_message_body(const std::string& body) {
+    return (v(text(body, fg_of(fg))) | padding(0, 1, 0, 3)).build();
+}
+
 Element render_message(const Message& msg, int turn_num, const Model& m) {
     std::vector<Element> rows;
+
+    // Compute elapsed wall-clock for assistant turns: from the previous
+    // user message's timestamp to this one. Skipped for the first turn
+    // (nothing to compare against).
+    std::optional<float> assistant_elapsed;
+    if (msg.role == Role::Assistant) {
+        // Walk back to the most recent user message timestamp.
+        for (std::size_t i = m.current.messages.size(); i-- > 0;) {
+            if (&m.current.messages[i] == &msg) continue;
+            if (m.current.messages[i].role == Role::User) {
+                auto dt = std::chrono::duration<float>(
+                    msg.timestamp - m.current.messages[i].timestamp).count();
+                if (dt > 0.0f && dt < 3600.0f) assistant_elapsed = dt;
+                break;
+            }
+        }
+    }
+
     if (msg.role == Role::User) {
         if (msg.checkpoint_id) rows.push_back(render_checkpoint_divider());
-        rows.push_back(TurnDivider(TurnRole::User, turn_num).build());
+        rows.push_back(turn_header(Role::User, turn_num, msg, m, std::nullopt));
         rows.push_back(text(""));
-        rows.push_back((v(UserMessage::build(msg.text)) | grow(1.0f)).build());
+        rows.push_back(user_message_body(msg.text));
         rows.push_back(text(""));
     } else if (msg.role == Role::Assistant) {
-        rows.push_back(TurnDivider(TurnRole::Assistant, turn_num).build());
+        rows.push_back(turn_header(Role::Assistant, turn_num, msg, m,
+                                   assistant_elapsed));
         rows.push_back(text(""));
         bool has_body = !msg.text.empty() || !msg.streaming_text.empty();
         if (has_body) {
-            rows.push_back((v(cached_markdown_for(msg)) | padding(0, 0, 0, 2)).build());
+            // Same 3-cell indent as the user body so headers and content
+            // live on the same vertical column. Reads as a coherent
+            // turn block instead of zigzagging between roles.
+            rows.push_back((v(cached_markdown_for(msg)) | padding(0, 1, 0, 3)).build());
             rows.push_back(text(""));
         }
         for (const auto& tc : msg.tool_calls) {
-            rows.push_back((v(render_tool_call(tc)) | grow(1.0f)).build());
+            // Tool cards keep a slightly smaller indent (2) so their
+            // bordered chrome doesn't disappear into the message indent.
+            rows.push_back((v(render_tool_call(tc)) | padding(0, 1, 0, 2) | grow(1.0f)).build());
             if (m.pending_permission && m.pending_permission->id == tc.id)
                 rows.push_back(render_inline_permission(*m.pending_permission, tc));
             rows.push_back(text(""));
@@ -798,51 +941,124 @@ Element thread_panel(const Model& m) {
     }
     if (m.stream.active && !m.current.messages.empty()
         && m.current.messages.back().role == Role::Assistant) {
+        // Match the assistant turn header's left-edge bar so the
+        // spinner reads as "still typing" inline with the message
+        // above, not as a detached notification floating at the bottom.
+        const auto& mid = m.model_id.value;
+        Color edge_color = (mid.find("opus")   != std::string::npos) ? accent
+                         : (mid.find("sonnet") != std::string::npos) ? info
+                         : (mid.find("haiku")  != std::string::npos) ? success
+                                                                     : highlight;
         auto spin = m.stream.spinner;
-        spin.set_style(fg_bold(phase_color(m.stream.phase)));
+        spin.set_style(Style{}.with_fg(edge_color).with_bold());
         std::string verb{phase_verb(m.stream.phase)};
         rows.push_back((h(
+            text("\xe2\x96\x8e", fg_of(edge_color)),                // ▎
+            text(" ", {}),
             spin.build(),
             text(" " + verb + "\u2026", fg_italic(muted))
-        ) | padding(0, 0, 0, 2)).build());
+        ) | padding(0, 0, 0, 1)).build());
     }
     if (rows.empty()) {
-        // Wordmark-style welcome — quiet brand presence + the one detail
-        // that orients the user (which model they're talking to). A blank
-        // thread is the loneliest screen in the app; give it a focal point.
-        auto brand = h(spacer(),
-            text("\u2726  ", fg_bold(accent)),
-            text("moha", fg_bold(fg)),
-            text("  \u2726", fg_dim(accent)),
-            spacer()).build();
+        // Wordmark-style welcome — quiet brand presence + the details that
+        // orient the user (which model, which profile, what to do next).
+        // A blank thread is the loneliest screen in the app; give it a
+        // focal point with real visual weight.
+        //
+        // The wordmark is built from box-drawing characters so it scales
+        // with the user's font and renders in any UTF-8 terminal — no
+        // image bitmap, no font dependency, no broken glyph fallbacks.
 
-        auto subtitle = h(spacer(),
-            text("a calm middleware between you and the model",
-                 fg_italic(muted)),
-            spacer()).build();
+        auto centered_text = [](std::string s, Style st) {
+            return h(spacer(), text(std::move(s), st), spacer()).build();
+        };
 
-        auto model_line = h(spacer(),
-            text("model  ", fg_dim(muted)),
-            text(m.model_id.value, fg_of(fg)),
-            spacer()).build();
+        // ── Wordmark: m o h a ────────────────────────────────────────
+        // 3 rows × ~26 cells. Spacing between letters chosen so each glyph
+        // reads as a discrete shape; using outline (┌┐└┘) instead of solid
+        // blocks keeps it elegant rather than chunky.
+        auto mark_style = fg_bold(accent);
+        std::vector<Element> mark_rows;
+        mark_rows.push_back(centered_text(
+            "\u250c\u252c\u2510\u250c\u2500\u2510\u252c\u0020\u252c\u250c\u2500\u2510",
+            mark_style));  // ┌┬┐┌─┐┬ ┬┌─┐
+        mark_rows.push_back(centered_text(
+            "\u2502\u2502\u2502\u2502\u0020\u2502\u251c\u2500\u2524\u251c\u2500\u2524",
+            mark_style));  // │││││ │├─┤├─┤
+        mark_rows.push_back(centered_text(
+            "\u2534\u0020\u2534\u2514\u2500\u2518\u2534\u0020\u2534\u2534\u0020\u2534",
+            fg_dim(accent)));  // ┴ ┴└─┘┴ ┴┴ ┴
 
-        auto prompt_hint = h(spacer(),
-            text("press  ", fg_dim(muted)),
-            text("Enter", fg_bold(fg)),
-            text("  to send  \u00B7  ", fg_dim(muted)),
-            text("^K", fg_bold(fg)),
-            text("  for the palette", fg_dim(muted)),
+        // ── Tagline ──────────────────────────────────────────────────
+        auto tagline = centered_text(
+            "a calm middleware between you and the model",
+            fg_italic(muted));
+
+        // ── Model + profile chip row ─────────────────────────────────
+        ModelBadge mb;
+        mb.set_model(m.model_id.value);
+        mb.set_compact(true);
+        auto profile_color_v = profile_color(m.profile);
+        auto profile_chip = h(
+            text("\u258c", fg_of(profile_color_v)),                  // ▌
+            text(" " + std::string{profile_label(m.profile)} + " ",
+                 Style{}.with_fg(profile_color_v).with_inverse().with_bold()),
+            text("\u2590", fg_of(profile_color_v))                   // ▐
+        ).build();
+        auto chips_row = h(
+            spacer(),
+            mb.build(),
+            text("    ", {}),
+            std::move(profile_chip),
+            spacer()
+        ).build();
+
+        // ── Starter prompts ──────────────────────────────────────────
+        // Three example asks framed as a quiet bordered card so the user
+        // sees concrete affordances, not "type something". Each is dim so
+        // the eye doesn't read them as already-typed input.
+        auto starter = [](std::string text_) {
+            return h(
+                text("\u2022 ", fg_dim(accent)),                      // •
+                text(std::move(text_), fg_dim(fg))
+            ).build();
+        };
+        auto starters_card = (v(
+            text(" Try ", fg_bold(muted)),
+            text("", {}),
+            starter("Implement a small feature"),
+            starter("Refactor or clean up this file"),
+            starter("Explain what this code does"),
+            starter("Write tests for ...")
+        ) | padding(0, 2, 0, 2)
+          | border(BorderStyle::Round)
+          | bcolor(muted)
+        ).build();
+
+        auto starters_row = h(spacer(), starters_card, spacer()).build();
+
+        // ── Bottom hint row ──────────────────────────────────────────
+        auto hint = h(spacer(),
+            text("type to begin  \u00B7  ", fg_dim(muted)),
+            text("^K", fg_bold(highlight)),
+            text(" palette  \u00B7  ", fg_dim(muted)),
+            text("^J", fg_bold(highlight)),
+            text(" threads  \u00B7  ", fg_dim(muted)),
+            text("^N", fg_bold(success)),
+            text(" new", fg_dim(muted)),
             spacer()).build();
 
         rows.push_back((v(
-            text(""), text(""), text(""),
-            brand,
+            text(""), text(""),
+            mark_rows[0], mark_rows[1], mark_rows[2],
             text(""),
-            subtitle,
+            tagline,
             text(""), text(""),
-            model_line,
+            chips_row,
             text(""), text(""),
-            prompt_hint
+            starters_row,
+            text(""), text(""),
+            hint
         )).build());
     }
     return (v(std::move(rows)) | padding(0, 1) | grow(1.0f)).build();

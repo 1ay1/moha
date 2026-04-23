@@ -161,6 +161,11 @@ ToolDef tool_bash() {
                 "Alternative timeout in milliseconds (rounded up to seconds)."}}},
         }},
     };
+    // Eager input streaming — multi-line shell scripts and long pipelines
+    // (heredocs, awk one-liners, sed scripts) regularly cross the threshold
+    // where the edge buffers tool input. Cheap to enable; saves the spinner
+    // freeze on any non-trivial command.
+    t.eager_input_streaming = true;
     t.needs_permission = [](Profile p){ return p != Profile::Write; };
     t.execute = util::adapt<BashArgs>(parse_bash_args, run_bash);
     return t;

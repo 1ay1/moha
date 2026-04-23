@@ -7,6 +7,7 @@
 // its own header so editors and view-layer code that only need Thread /
 // Message don't transitively pull in the http:: forward-decl.
 
+#include <array>
 #include <chrono>
 #include <concepts>
 #include <cstddef>
@@ -72,6 +73,20 @@ struct StreamState {
     // StreamStarted so each sub-turn after a tool exec measures cleanly.
     std::size_t live_delta_bytes = 0;
     std::chrono::steady_clock::time_point first_delta_at{};
+
+    // ── Mini tok/s sparkline (last 12 samples @ ~500 ms each) ───────────
+    // Cheap ring buffer the Tick handler appends to; the status bar
+    // renders the samples as a row of ▁▂▃▄▅▆▇█ glyphs next to the
+    // numeric rate. Gives the user a visual "wire is alive" cue and a
+    // glance-readable trend (rising / steady / falling) without parsing
+    // numbers. Reset on every StreamStarted so each sub-turn measures
+    // its own pace.
+    static constexpr std::size_t kRateSamples = 12;
+    std::array<float, kRateSamples> rate_history{};
+    std::size_t rate_history_pos = 0;
+    bool rate_history_full = false;
+    std::chrono::steady_clock::time_point rate_last_sample_at{};
+    std::size_t rate_last_sample_bytes = 0;
     // Cancel handle for the in-flight HTTP/2 stream. Set when launch_stream
     // dispatches the worker; nulled when the terminal Msg lands. Tripping it
     // from the UI thread (Msg::CancelStream) tears the stream down within a

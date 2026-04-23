@@ -162,10 +162,17 @@ SSL_CTX* build_ctx(bool insecure) {
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
     SSL_CTX_set_max_proto_version(ctx, TLS1_3_VERSION);
 
-    // Session cache + tickets.  This is the fat perf win: turn N+1 to
-    // api.anthropic.com skips the full handshake and does a 1-RTT resume.
-    SSL_CTX_set_session_cache_mode(
-        ctx, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
+    // Session cache + tickets. This is the fat perf win: a fresh dial after
+    // the connection-pool TTL (90 s) skips the full TLS handshake and does
+    // a 1-RTT resume — saving one RTT to api.anthropic.com (~30-150 ms).
+    //
+    // Critical: don't combine with SSL_SESS_CACHE_NO_INTERNAL_STORE unless
+    // you also install SSL_CTX_sess_set_new_cb + sess_get_cb to do your own
+    // bookkeeping. The earlier code did the former without the latter, which
+    // silently disabled session caching entirely. SSL_SESS_CACHE_CLIENT
+    // alone is enough — OpenSSL stores tickets per SSL_CTX automatically,
+    // and we share one SSL_CTX process-wide so all reconnects benefit.
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
     // Advertise ALPN so the server negotiates h2 on our behalf.
     SSL_CTX_set_alpn_protos(ctx, kAlpn, sizeof(kAlpn));
 

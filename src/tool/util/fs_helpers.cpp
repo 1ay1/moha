@@ -19,6 +19,35 @@
 
 namespace moha::tools::util {
 
+namespace {
+// Translate the most common filesystem errno values to a sentence the
+// model can act on. Raw `strerror` reads as "Permission denied" /
+// "No such file or directory" — fine for humans, but the LLM responds
+// better to the longer form ("you don't have write permission to X")
+// when it's deciding whether to retry as a different path or surface a
+// human ask. The caller appends the path/operation context.
+std::string explain_errno(int e) {
+    switch (e) {
+        case EACCES:        return "permission denied";
+        case EPERM:         return "operation not permitted (privileged op)";
+        case ENOENT:        return "path not found";
+        case ENOTDIR:       return "expected a directory but found a file";
+        case EISDIR:        return "expected a file but found a directory";
+        case ENOSPC:        return "out of disk space";
+        case EROFS:         return "filesystem is read-only";
+        case EMFILE:
+        case ENFILE:        return "too many open files (process FD limit hit)";
+        case ELOOP:         return "symlink loop";
+        case ENAMETOOLONG:  return "path is too long";
+        case EBUSY:         return "file is busy / locked by another process";
+#ifdef EDQUOT
+        case EDQUOT:        return "disk quota exceeded";
+#endif
+        default:            return std::strerror(e);
+    }
+}
+} // namespace
+
 std::string read_file(const fs::path& p) {
     // Size-then-read: avoid the ifstream→ostringstream→.str() chain, which
     // double-allocates and copies through the streambuf. One stat, one
@@ -63,7 +92,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
                     O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0)
         return std::string("cannot open '") + p.string() + "' for writing: "
-             + std::strerror(errno);
+             + explain_errno(errno);
 #endif
     const char* data = content.data();
     size_t remaining = content.size();
@@ -77,7 +106,7 @@ std::string write_file(const fs::path& p, std::string_view content) {
 #endif
         if (n <= 0) {
             std::string err = std::string("write to '") + p.string()
-                + "' failed: " + std::strerror(errno);
+                + "' failed: " + explain_errno(errno);
 #ifdef _WIN32
             _close(fd);
 #else

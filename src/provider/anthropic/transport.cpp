@@ -32,7 +32,42 @@ namespace {
 // guards future call sites that assemble tool output from multiple pieces
 // (e.g. error suffix + partial output) where a byte boundary could split a
 // UTF-8 sequence. Replaces invalid byte runs with U+FFFD.
+//
+// Fast path: validate in a single pass with no allocation. Almost all
+// strings reaching this function are already valid UTF-8 (model output,
+// user typed input, well-behaved tool stdout), so the slow rewriter only
+// ever runs when there's actually something to fix. On a 100-message
+// conversation this turns an O(N) per-byte rewrite into an O(N) validate
+// — same big-O, but no per-byte std::string append and no allocation
+// per message in the request build.
+[[gnu::hot]] inline bool is_valid_utf8(std::string_view in) noexcept {
+    const auto* p = reinterpret_cast<const unsigned char*>(in.data());
+    const auto* end = p + in.size();
+    while (p < end) {
+        unsigned char c = *p;
+        if (c < 0x80) { ++p; continue; }
+        int extra; unsigned char mask; std::uint32_t min_cp;
+        if      ((c & 0xE0) == 0xC0) { extra = 1; mask = 0x1F; min_cp = 0x80; }
+        else if ((c & 0xF0) == 0xE0) { extra = 2; mask = 0x0F; min_cp = 0x800; }
+        else if ((c & 0xF8) == 0xF0) { extra = 3; mask = 0x07; min_cp = 0x10000; }
+        else return false;
+        if (p + extra >= end) return false;
+        std::uint32_t cp = c & mask;
+        for (int k = 1; k <= extra; ++k) {
+            unsigned char d = p[k];
+            if ((d & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (d & 0x3F);
+        }
+        if (cp < min_cp || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF))
+            return false;
+        p += extra + 1;
+    }
+    return true;
+}
+
 std::string scrub_utf8(std::string_view in) {
+    if (is_valid_utf8(in)) return std::string{in};
+
     std::string out;
     out.reserve(in.size());
     auto repl = [&]{ out.append("\xEF\xBF\xBD"); };
@@ -141,11 +176,24 @@ namespace {
 struct SseState {
     // Pre-reserve so typical chunk sizes don't force a cascade of reallocations
     // during a fast stream.
-    SseState() { buf.reserve(32 * 1024); data_accum.reserve(8 * 1024); }
+    SseState() { buf.reserve(64 * 1024); data_accum.reserve(8 * 1024); }
     std::string buf;
+    // Offset of the next byte in `buf` to parse. Lets feed_sse() drain
+    // already-parsed lines without an O(n) `erase(0, pos)` memmove on every
+    // chunk — we only compact `buf` once the read offset crosses a fairly
+    // large threshold (kCompactThreshold below). On a hot stream this turns
+    // the per-chunk drain cost from O(buffered bytes) to amortized O(1).
+    std::size_t read_pos = 0;
     std::string event_name;
     std::string data_accum;
 };
+// Compact the SSE buffer when the read cursor has consumed at least this
+// many bytes. A larger threshold means more memory held at the high-water
+// mark, but fewer memmove passes. 64 KiB sits a couple chunk-sizes ahead
+// of typical Anthropic SSE frames; the buffer never grows unbounded
+// because the total in-flight tail (current event boundary → end of buf)
+// is small even on busy streams.
+constexpr std::size_t kSseCompactThreshold = 64 * 1024;
 
 struct StreamCtx {
     EventSink sink;
@@ -217,9 +265,16 @@ bool dispatch_content_block_delta_fast(StreamCtx& ctx, const std::string& data) 
     return false;
 }
 
-void dispatch_event(StreamCtx& ctx, const std::string& name, const std::string& data) {
+void dispatch_event(StreamCtx& ctx, std::string_view name, const std::string& data) {
     if (data.empty() || data == "[DONE]") return;
-    dbg("<< event=%s data=%s\n", name.c_str(), data.c_str());
+    // dbg() format string is %s — copy through a small stack buffer only
+    // when the debug log is actually enabled (debug_log() returns nullptr
+    // otherwise, in which case dbg() short-circuits and `name` is never
+    // touched). Avoids constructing a std::string per event in the hot path.
+    if (debug_log()) {
+        std::string name_owned{name};
+        dbg("<< event=%s data=%s\n", name_owned.c_str(), data.c_str());
+    }
 
     // Hot path first — ~95% of events during a streaming turn.
     if (name == "content_block_delta"
@@ -311,28 +366,45 @@ void dispatch_event(StreamCtx& ctx, const std::string& name, const std::string& 
 
 void feed_sse(StreamCtx& ctx, const char* data, size_t len) {
     ctx.sse.buf.append(data, len);
-    size_t pos = 0;
+    auto& read_pos = ctx.sse.read_pos;
+    // Treat the buffer as a string_view so per-line work doesn't allocate.
+    // We only own state in `ctx.sse.event_name` and `data_accum`; lines
+    // are walked as views into `ctx.sse.buf` directly.
+    std::string_view buf{ctx.sse.buf};
     while (true) {
-        size_t nl = ctx.sse.buf.find('\n', pos);
-        if (nl == std::string::npos) break;
-        std::string line = ctx.sse.buf.substr(pos, nl - pos);
-        pos = nl + 1;
-        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto nl = buf.find('\n', read_pos);
+        if (nl == std::string_view::npos) break;
+        std::string_view line = buf.substr(read_pos, nl - read_pos);
+        read_pos = nl + 1;
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+
         if (line.empty()) {
             if (!ctx.sse.data_accum.empty() || !ctx.sse.event_name.empty())
                 dispatch_event(ctx, ctx.sse.event_name, ctx.sse.data_accum);
             ctx.sse.event_name.clear();
             ctx.sse.data_accum.clear();
-        } else if (line.rfind("event:", 0) == 0) {
-            size_t s = 6; while (s < line.size() && line[s] == ' ') ++s;
-            ctx.sse.event_name = line.substr(s);
-        } else if (line.rfind("data:", 0) == 0) {
-            size_t s = 5; while (s < line.size() && line[s] == ' ') ++s;
-            if (!ctx.sse.data_accum.empty()) ctx.sse.data_accum += "\n";
-            ctx.sse.data_accum += line.substr(s);
+        } else if (line.starts_with("event:")) {
+            std::size_t s = 6;
+            while (s < line.size() && line[s] == ' ') ++s;
+            // Reuse storage in event_name to avoid the per-event std::string
+            // allocation that the previous substr() path forced.
+            ctx.sse.event_name.assign(line.data() + s, line.size() - s);
+        } else if (line.starts_with("data:")) {
+            std::size_t s = 5;
+            while (s < line.size() && line[s] == ' ') ++s;
+            if (!ctx.sse.data_accum.empty()) ctx.sse.data_accum.push_back('\n');
+            ctx.sse.data_accum.append(line.data() + s, line.size() - s);
         }
+        // Anything else (`:` comments, unknown fields) is silently dropped
+        // — matches the SSE spec and Claude's transport.
     }
-    ctx.sse.buf.erase(0, pos);
+    // Amortized drain: only compact the buffer when the read cursor has
+    // consumed enough bytes that the cost of memmove is paid back. Until
+    // then, leave already-parsed bytes in place.
+    if (read_pos >= kSseCompactThreshold) {
+        ctx.sse.buf.erase(0, read_pos);
+        read_pos = 0;
+    }
 }
 
 json tool_spec_to_json(const ToolSpec& s) {
@@ -534,16 +606,26 @@ json build_messages(const Thread& t) {
         }
         for (const auto& tc : m.tool_calls) {
             if (m.role == Role::Assistant) {
-                json input = tc.args.is_object() ? tc.args : json::object();
+                // tc.args is stably owned by the Message and survives the
+                // request build, so a copy here is only needed because
+                // nlohmann::json doesn't model references. For multi-KB
+                // write/edit args this is a real cost — leave as-is for
+                // now (clean fix would be a string_view-keyed json shim
+                // or building the request body without nlohmann), but we
+                // at least avoid the redundant intermediate copy from the
+                // previous `json input = ...; std::move(input)` shape.
                 content.push_back({
                     {"type", "tool_use"},
                     {"id", tc.id.value},
                     {"name", tc.name.value},
-                    {"input", std::move(input)},
+                    {"input", tc.args.is_object() ? tc.args : json::object()},
                 });
             }
         }
-        if (!content.empty()) { jm["content"] = content; msgs.push_back(jm); }
+        if (!content.empty()) {
+            jm["content"] = std::move(content);
+            msgs.push_back(std::move(jm));
+        }
 
         if (m.role == Role::Assistant && !m.tool_calls.empty()) {
             json user_msg;
@@ -562,8 +644,8 @@ json build_messages(const Thread& t) {
                 }
             }
             if (!results.empty()) {
-                user_msg["content"] = results;
-                msgs.push_back(user_msg);
+                user_msg["content"] = std::move(results);
+                msgs.push_back(std::move(user_msg));
             }
         }
     }
@@ -660,6 +742,19 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
 
     auto emit_terminal = [&](StreamCtx& ctx, std::optional<std::string> err) {
         if (ctx.terminated) return;
+        // If the stream is dying mid-tool-use (peer closed before the SSE
+        // event sequence reached `content_block_stop`), synthesize a
+        // StreamToolUseEnd so the reducer's salvage path runs on whatever
+        // partial JSON we've buffered. Without this, args_streaming
+        // accumulates with no terminal handler; the next StreamToolUseStart
+        // (after a retry) may overwrite it before it's parsed, dropping the
+        // diagnostic raw input we'd want to surface.
+        if (ctx.in_tool_use) {
+            sink(StreamToolUseEnd{});
+            ctx.in_tool_use = false;
+            ctx.current_tool_id.clear();
+            ctx.current_tool_name.clear();
+        }
         if (err) sink(StreamError{*err});
         else     sink(StreamFinished{ctx.stop_reason});
         ctx.terminated = true;

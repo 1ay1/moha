@@ -245,6 +245,9 @@ ToolDef tool_git_commit() {
             {"stage_all", {{"type","boolean"}, {"description","Stage all changes (default: false)"}}},
         }},
     };
+    // Multi-paragraph commit messages can be multi-KB (especially the
+    // PR-description style). Same eager-streaming rationale as todo/bash.
+    t.eager_input_streaming = true;
     t.needs_permission = [](Profile){ return true; };
     t.execute = util::adapt<GitCommitArgs>(parse_git_commit_args, run_git_commit);
     return t;

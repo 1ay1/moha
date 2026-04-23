@@ -25,6 +25,15 @@ namespace {
 using Step = std::pair<Model, Cmd<Msg>>;
 inline Step done(Model m) { return {std::move(m), Cmd<Msg>::none()}; }
 
+// Hard cap on per-message live buffers. A misbehaving server (or an
+// adversarial proxy) emitting unbounded `text_delta`/`input_json_delta`
+// would otherwise grow `streaming_text` / `args_streaming` until the
+// process OOMs. 8 MiB is well above any realistic single-message body
+// — a 16 K-token response is ~64 KB, and even multi-MB write tools
+// stay under 1 MB per content block. Hitting this cap means something
+// genuinely broken upstream, not a real workload.
+constexpr std::size_t kMaxStreamingBytes = 8 * 1024 * 1024;
+
 // Partial-JSON scalar sniffer. The Anthropic SSE stream delivers tool args as
 // `input_json_delta` chunks that form incomplete JSON until the tool_use block
 // closes. We want the widget to show the path/command/pattern live, not after
@@ -291,12 +300,68 @@ void update_stream_preview(ToolUse& tc) {
     else if (n == "edit") {
         if (!try_struct("path", kPathAliases)) try_set("path", kPathAliases);
         pull_desc();
-        // Prefer the nested edits[0] shape (new canonical); fall back to
-        // top-level old_string/new_string (legacy).
-        if (!try_struct_first_edit("old_string", "old_text"))
-            try_set_partial("old_string", kOldStrAliases);
-        if (!try_struct_first_edit("new_string", "new_text"))
-            try_set_partial("new_string", kNewStrAliases);
+        // Mirror the FULL edits array into tc.args["edits"] as it grows so
+        // the card can render every edit during streaming, not just the
+        // first. Each entry is a partial object — old_text may be present
+        // before new_text starts arriving — and we keep them in order so
+        // the renderer's "edit N/M" labels stay stable as more edits land.
+        bool wrote_edits_array = false;
+        if (parsed) {
+            if (auto it = parsed->find("edits");
+                it != parsed->end() && it->is_array() && !it->empty())
+            {
+                json arr = json::array();
+                for (const auto& e : *it) {
+                    if (!e.is_object()) continue;
+                    json out = json::object();
+                    if (auto o = e.find("old_text"); o != e.end() && o->is_string())
+                        out["old_text"] = o->get<std::string>();
+                    else if (auto o2 = e.find("old_string"); o2 != e.end() && o2->is_string())
+                        out["old_text"] = o2->get<std::string>();
+                    if (auto nv = e.find("new_text"); nv != e.end() && nv->is_string())
+                        out["new_text"] = nv->get<std::string>();
+                    else if (auto nv2 = e.find("new_string"); nv2 != e.end() && nv2->is_string())
+                        out["new_text"] = nv2->get<std::string>();
+                    arr.push_back(std::move(out));
+                }
+                if (!arr.empty()) {
+                    if (!tc.args.is_object()) tc.args = json::object();
+                    auto& cur = tc.args["edits"];
+                    // Cheap change check: same length + same first/last
+                    // old_text size pair → assume unchanged. Bookend check
+                    // the same way set_arg does for content.
+                    bool changed = !cur.is_array() || cur.size() != arr.size();
+                    if (!changed) {
+                        for (std::size_t i = 0; i < arr.size(); ++i) {
+                            const auto& a = arr[i];
+                            const auto& b = cur[i];
+                            auto a_old = a.value("old_text", std::string{});
+                            auto b_old = b.value("old_text", std::string{});
+                            auto a_new = a.value("new_text", std::string{});
+                            auto b_new = b.value("new_text", std::string{});
+                            if (a_old.size() != b_old.size() || a_new.size() != b_new.size()) {
+                                changed = true; break;
+                            }
+                        }
+                    }
+                    if (changed) {
+                        cur = std::move(arr);
+                        tc.mark_args_dirty();
+                    }
+                    wrote_edits_array = true;
+                }
+            }
+        }
+        // Legacy single-edit shape (top-level old_string/new_string or
+        // old_text/new_text). Only used when no edits array was visible —
+        // these top-level fields and the array are mutually exclusive in
+        // practice and showing both would double-render the diff.
+        if (!wrote_edits_array) {
+            if (!try_struct_first_edit("old_string", "old_text"))
+                try_set_partial("old_string", kOldStrAliases);
+            if (!try_struct_first_edit("new_string", "new_text"))
+                try_set_partial("new_string", kNewStrAliases);
+        }
     }
     else if (n == "bash")  { try_set("command"); pull_desc(); }
     else if (n == "grep")  { try_set("pattern"); try_set("path", kPathAliases); pull_desc(); }
@@ -745,12 +810,28 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             // average with the previous turn's bytes.
             m.stream.live_delta_bytes = 0;
             m.stream.first_delta_at = {};
+            // Wipe the sparkline ring buffer so each fresh stream starts
+            // with an empty bar instead of inheriting the previous turn's
+            // tail. The Tick handler refills it as bytes arrive.
+            m.stream.rate_history.fill(0.0f);
+            m.stream.rate_history_pos = 0;
+            m.stream.rate_history_full = false;
+            m.stream.rate_last_sample_at = {};
+            m.stream.rate_last_sample_bytes = 0;
             return done(std::move(m));
         },
         [&](StreamTextDelta& e) -> Step {
             if (!m.current.messages.empty()
-                && m.current.messages.back().role == Role::Assistant)
-                m.current.messages.back().streaming_text += e.text;
+                && m.current.messages.back().role == Role::Assistant) {
+                auto& st = m.current.messages.back().streaming_text;
+                if (st.size() < kMaxStreamingBytes) {
+                    const auto room = kMaxStreamingBytes - st.size();
+                    if (e.text.size() <= room) st += e.text;
+                    else                       st.append(e.text, 0, room);
+                }
+                // Beyond the cap we silently drop further text — the visible
+                // truncation message is appended once on the cap boundary.
+            }
             if (!e.text.empty()) {
                 if (m.stream.first_delta_at.time_since_epoch().count() == 0)
                     m.stream.first_delta_at = std::chrono::steady_clock::now();
@@ -784,7 +865,16 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 && m.current.messages.back().role == Role::Assistant
                 && !m.current.messages.back().tool_calls.empty()) {
                 auto& tc = m.current.messages.back().tool_calls.back();
-                tc.args_streaming += e.partial_json;
+                // Bounded append — see kMaxStreamingBytes. Going past the cap
+                // would never produce a parseable JSON object anyway (the
+                // unmatched braces grow without bound), so dropping further
+                // bytes lets the salvage path at StreamToolUseEnd run on
+                // whatever scalars sniffed cleanly.
+                if (tc.args_streaming.size() < kMaxStreamingBytes) {
+                    const auto room = kMaxStreamingBytes - tc.args_streaming.size();
+                    if (e.partial_json.size() <= room) tc.args_streaming += e.partial_json;
+                    else tc.args_streaming.append(e.partial_json, 0, room);
+                }
                 // Throttle the live preview. update_stream_preview() closes
                 // the partial JSON and parses the entire growing buffer on
                 // every call — fine for a 200-byte read/grep, ~quadratic for
@@ -849,8 +939,21 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             return done(std::move(m));
         },
         [&](StreamUsage& e) -> Step {
-            if (e.input_tokens)  m.stream.tokens_in  += e.input_tokens;
-            if (e.output_tokens) m.stream.tokens_out  = e.output_tokens;
+            // `input_tokens` from Anthropic is the FULL prefix for this
+            // request (system + history + tools + current user message),
+            // NOT the delta. Accumulating across turns triple-counted by
+            // turn 5 — the ctx bar would silently overshoot 100 % even on
+            // a small conversation. Replace, don't add. Also fold in the
+            // cache fields: cached read/creation tokens are excluded from
+            // `input_tokens` per the API but still occupy the context
+            // window, so the true "tokens in context" is the sum.
+            if (e.input_tokens || e.cache_read_input_tokens
+                || e.cache_creation_input_tokens) {
+                m.stream.tokens_in = e.input_tokens
+                                   + e.cache_read_input_tokens
+                                   + e.cache_creation_input_tokens;
+            }
+            if (e.output_tokens) m.stream.tokens_out = e.output_tokens;
             return done(std::move(m));
         },
         [&](StreamFinished e) -> Step {
@@ -1015,6 +1118,12 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
         [&](ModelPickerSelect) -> Step {
             if (!m.available_models.empty()) {
                 m.model_id = m.available_models[m.model_picker.index].id;
+                // Update the per-model context cap so the status-bar ctx
+                // % bar reflects the right denominator for the new model
+                // (1 M for `[1m]` variants, 200 K otherwise). Without
+                // this, switching to a 1 M model and sending 600 K of
+                // input would read as 300 % full.
+                m.stream.context_max = ui::context_max_for_model(m.model_id.value);
                 persist_settings(m);
             }
             m.model_picker.open = false;
@@ -1216,6 +1325,39 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             float dt = std::chrono::duration<float>(now - m.stream.last_tick).count();
             m.stream.last_tick = now;
             if (m.stream.active) m.stream.spinner.advance(dt);
+
+            // Sample tok/s into the sparkline ring buffer every ~500 ms
+            // while the stream is actively producing bytes. Sampling slower
+            // than the spinner tick keeps the bar reading as "trend" rather
+            // than "noise"; sampling faster would show every transient
+            // edge-batching artifact. Skip until the first delta arrives
+            // so the leading bar isn't an artificial zero-stretch.
+            if (m.stream.is_streaming() && m.stream.active
+                && m.stream.first_delta_at.time_since_epoch().count() != 0) {
+                using clock = std::chrono::steady_clock;
+                constexpr auto kSampleInterval = std::chrono::milliseconds{500};
+                if (m.stream.rate_last_sample_at.time_since_epoch().count() == 0) {
+                    m.stream.rate_last_sample_at    = now;
+                    m.stream.rate_last_sample_bytes = m.stream.live_delta_bytes;
+                } else if (now - m.stream.rate_last_sample_at >= kSampleInterval) {
+                    auto window_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         now - m.stream.rate_last_sample_at).count();
+                    auto bytes_delta = (m.stream.live_delta_bytes >= m.stream.rate_last_sample_bytes)
+                                       ? (m.stream.live_delta_bytes - m.stream.rate_last_sample_bytes)
+                                       : 0;
+                    // ~4 B/token (Claude tokenizer avg) and convert ms to s.
+                    float rate = window_ms > 0
+                               ? (static_cast<float>(bytes_delta) / 4.0f)
+                                 * (1000.0f / static_cast<float>(window_ms))
+                               : 0.0f;
+                    m.stream.rate_history[m.stream.rate_history_pos] = rate;
+                    m.stream.rate_history_pos =
+                        (m.stream.rate_history_pos + 1) % StreamState::kRateSamples;
+                    if (m.stream.rate_history_pos == 0) m.stream.rate_history_full = true;
+                    m.stream.rate_last_sample_at    = now;
+                    m.stream.rate_last_sample_bytes = m.stream.live_delta_bytes;
+                }
+            }
             return done(std::move(m));
         },
         [&](Quit) -> Step {

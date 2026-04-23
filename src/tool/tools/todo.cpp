@@ -87,6 +87,12 @@ ToolDef tool_todo() {
             }},
         }},
     };
+    // Without fine-grained tool streaming, Anthropic's edge buffers the
+    // whole `todos: [...]` array before delivering. A 10-item plan with
+    // multi-line `content` strings is multi-KB; the card looks frozen
+    // ("stuck") for 10–30 s while the wire trickles. Same fix as write/edit
+    // — see write.cpp for the full story.
+    t.eager_input_streaming = true;
     t.needs_permission = [](Profile){ return false; };
     t.execute = util::adapt<TodoArgs>(parse_todo_args, run_todo);
     return t;

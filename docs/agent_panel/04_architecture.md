@@ -537,6 +537,86 @@ In `src/anthropic.cpp:37-82`:
 | `message_stop` | `StreamFinished{}` |
 | 4xx body / curl error | `StreamError{msg, kind}` |
 
+### Fine-grained tool streaming (CRITICAL — `eager_input_streaming`)
+
+Anthropic's API does **not** stream `input_json_delta` events eagerly by
+default. Without an explicit opt-in, the edge buffers tool input
+server-side and trickles it down in coarse chunks. For prose this is
+invisible — `text_delta` events stream at the model's emission rate
+(~60 tok/s on opus). For tool input it is catastrophic: a multi-KB
+`write` `content` body or a multi-edit `edits[].new_text` array drops
+the visible cadence to ~0–1 tok/s while the model is generating at
+full speed. The user sees a frozen card and assumes the network is
+broken; the wire is healthy and bytes simply aren't being released.
+
+The opt-in is **per-tool**, on the request body's tool definition:
+
+```json
+{
+  "name": "write",
+  "description": "...",
+  "input_schema": { ... },
+  "eager_input_streaming": true
+}
+```
+
+GA on Claude 4.6 (sonnet-4-6, opus-4-7). For older models — including
+haiku-4-5 — the API requires the beta header
+`fine-grained-tool-streaming-2025-05-14` in the `anthropic-beta`
+cocktail. Sending the header on 4.6+ is a no-op, so we always include
+it whenever any tool in the request opts in.
+
+In moha:
+
+- `ToolDef::eager_input_streaming` (registry.hpp) — set `true` on tools
+  whose input field can be large enough that batching would be
+  visible. Currently `tool_write()` and `tool_edit()`.
+- `ToolSpec::eager_input_streaming` (provider.hpp + anthropic
+  transport.hpp) — mirrored through the abstract → concrete request
+  translation (`AnthropicProvider::stream`).
+- `tool_spec_to_json()` (transport.cpp) — emits
+  `"eager_input_streaming": true` only when set, so cache-key shape for
+  non-streaming tools stays identical to Claude Code's wire layout.
+- `select_betas(model, is_oauth, any_eager_streaming)` — appends
+  `fine-grained-tool-streaming-2025-05-14` to the beta cocktail when
+  any tool in the request opts in. The call site in `run_stream_sync`
+  computes `any_eager` via a single `std::ranges::any_of` over
+  `req.tools`.
+
+### Cross-references
+
+This is what Zed and Claude Code both do; verifying against either is
+the fastest way to check moha's wire shape if streaming feels off:
+
+- **Zed**: `crates/agent/src/tools/streaming_edit_file_tool.rs` — the
+  `StreamingEditFileTool` opts in via the trait method
+  `fn supports_input_streaming() -> bool { true }`. The Anthropic
+  adapter at `crates/anthropic/src/completion.rs:196` maps that to
+  `eager_input_streaming` on each `Tool` it serializes.
+- **Claude Code (v2.1.113)**: the deobfuscated `do$()` tool serializer
+  sets `_.eager_input_streaming = true` when the auth context is
+  `firstParty` and either the `tengu_fgts` statsig flag or the
+  `CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING` env var is on.
+  The serialized output spreads it conditionally:
+  `..._.eager_input_streaming && {eager_input_streaming:!0}`.
+
+### Why this matters for the UI
+
+Eager streaming is what enables the **incremental edit/write card**:
+the model emits `partial_json` deltas containing the file body or each
+`edits[i].old_text`/`new_text` chunk-by-chunk, and the reducer can
+update the card preview as bytes arrive. Without FGTS the card sits
+empty until the entire tool input has been buffered server-side, and
+no amount of client-side throttling or partial-JSON parsing can make
+the card feel alive — the bytes simply aren't there yet.
+
+This is also why moha's edit card renders **all** edits during
+streaming, not just the first: with FGTS on, `edits[1].old_text` is
+already arriving on the wire while `edits[0].new_text` is still
+filling in. The streaming reducer mirrors the entire `edits[]` array
+into `tc.args["edits"]` and the EditTool widget paints one diff
+section per entry, so every hunk lands live.
+
 ### update reactions
 
 ```cpp

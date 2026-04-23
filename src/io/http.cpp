@@ -690,6 +690,41 @@ struct PooledConn {
     clock_t_::time_point                  released_at;
 };
 
+// Cap entries-per-endpoint so a misbehaving caller (e.g. an auto-retry
+// loop) can't grow the pool unboundedly and exhaust file descriptors.
+// 16 covers any realistic concurrency for a single CLI session — moha
+// currently never has more than one in-flight request to api.anthropic.com.
+constexpr std::size_t kMaxPoolEntriesPerEndpoint = 16;
+
+// Detect a TCP-level closed/reset socket without consuming any bytes.
+// nghttp2's `want_read/write` flags only reflect the protocol-state machine —
+// a peer FIN that hasn't been processed yet would still report "alive".
+// We non-blocking poll() for POLLHUP/POLLERR/POLLNVAL/POLLIN; a POLLIN with
+// a 0-byte MSG_PEEK recv means peer closed cleanly. No data consumed.
+[[nodiscard]] bool socket_is_alive(socket_t fd) {
+    if (fd == kBadSocket) return false;
+    pollfd pfd{ fd, POLLIN, 0 };
+    int r = sock_poll(&pfd, 1, 0);
+    if (r < 0) {
+        if (sock_intr(sock_last_err())) return true;  // EINTR — assume alive
+        return false;
+    }
+    if (r == 0) return true;  // nothing happening — fine
+    if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) return false;
+    if (pfd.revents & POLLIN) {
+        // Peek 1 byte. EOF (0) → peer closed; data → fine; EAGAIN → fine.
+        char b;
+#if defined(_WIN32)
+        int n = ::recv(fd, &b, 1, MSG_PEEK);
+#else
+        ssize_t n = ::recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+#endif
+        if (n == 0) return false;
+        if (n < 0 && !sock_in_progress(sock_last_err())) return false;
+    }
+    return true;
+}
+
 class Pool {
 public:
     std::unique_ptr<Connection> acquire(const Endpoint& ep) {
@@ -701,8 +736,12 @@ public:
         while (!stack.empty()) {
             auto p = std::move(stack.back());
             stack.pop_back();
-            if (!p.conn->is_alive()) continue;
+            // Three-stage liveness check: idle TTL → nghttp2 protocol state →
+            // socket-level FIN/RST. Each stage is cheap and catches a class
+            // of stale connections the previous one misses.
             if (now - p.released_at > kIdleTtl) continue;
+            if (!p.conn->is_alive())            continue;
+            if (!socket_is_alive(p.conn->fd())) continue;
             return std::move(p.conn);
         }
         return nullptr;
@@ -711,7 +750,15 @@ public:
     void release(std::unique_ptr<Connection> c) {
         if (!c || !c->is_alive()) return;
         std::lock_guard<std::mutex> lk(mu_);
-        map_[c->endpoint()].push_back({std::move(c), clock_t_::now()});
+        auto& stack = map_[c->endpoint()];
+        if (stack.size() >= kMaxPoolEntriesPerEndpoint) {
+            // Drop the oldest (front) — its idle clock is most advanced and
+            // it's the most likely candidate for the peer to have closed by
+            // the time we'd next reach for it. Keeping the freshest 16 also
+            // matches stdio LRU intuition for a small fixed-size pool.
+            stack.erase(stack.begin());
+        }
+        stack.push_back({std::move(c), clock_t_::now()});
     }
 
 private:

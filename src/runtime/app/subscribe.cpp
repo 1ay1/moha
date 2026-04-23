@@ -137,7 +137,14 @@ std::optional<Msg> on_composer(const KeyEvent& ev) {
         auto sk = std::get<SpecialKey>(ev.key);
         switch (sk) {
             case SpecialKey::Enter:
-                return ev.mods.alt ? Msg{ComposerNewline{}} : Msg{ComposerEnter{}};
+                // Newline on Shift+Enter (the muscle-memory binding most
+                // chat UIs use — Slack, Discord, ChatGPT, Claude.ai) AND
+                // on Alt+Enter (the legacy binding moha started with;
+                // kept for terminals that swallow Shift+Enter via raw
+                // mode quirks). Plain Enter still submits.
+                return (ev.mods.shift || ev.mods.alt)
+                       ? Msg{ComposerNewline{}}
+                       : Msg{ComposerEnter{}};
             case SpecialKey::Backspace: return ComposerBackspace{};
             case SpecialKey::Left:      return ComposerCursorLeft{};
             case SpecialKey::Right:     return ComposerCursorRight{};
