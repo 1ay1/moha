@@ -152,18 +152,31 @@ Element composer(const Model& m) {
     // counter (words / tokens) for long prompts.
     auto kbd = [](const char* k) { return text(k, fg_bold(fg)); };
     auto lbl = [](const char* l) { return text(l, fg_dim(muted)); };
-    auto dot = text("  \xc2\xb7  ", fg_dim(muted));                   // ·
+    auto dot = []() { return text("  \xc2\xb7  ", fg_dim(muted)); };   // ·
 
-    std::vector<Element> hint_left;
-    hint_left.push_back(kbd("\xe2\x86\xb5"));         hint_left.push_back(lbl(" send"));
-    hint_left.push_back(dot);
-    // Show Shift+Enter as the primary; Alt+Enter as the fallback so
-    // users on terminals that don't disambiguate Shift+Enter still
-    // discover a working binding without having to read docs.
-    hint_left.push_back(kbd("\xe2\x87\xa7\xe2\x86\xb5 / \xe2\x8c\xa5\xe2\x86\xb5"));
-    hint_left.push_back(lbl(" newline"));
-    hint_left.push_back(dot);
-    hint_left.push_back(kbd("^E"));                   hint_left.push_back(lbl(" expand"));
+    // Build the hint row as a ComponentElement so we can measure
+    // available width and drop lower-priority items on narrow terminals.
+    // Priority order (highest first): send, profile chip, counters,
+    // newline, expand. On very narrow widths (< 60 cols) we keep only
+    // send + profile; medium (< 90) drops expand; full shows everything.
+    auto hint_left_builder = [&](int avail_width) {
+        std::vector<Element> out;
+        out.push_back(kbd("\xe2\x86\xb5"));           // ↵
+        out.push_back(lbl(" send"));
+        // Show newline + expand hints only when there's room.
+        // ~60 cols is the threshold below which the row feels cramped.
+        if (avail_width >= 60) {
+            out.push_back(dot());
+            out.push_back(kbd("\xe2\x87\xa7\xe2\x86\xb5 / \xe2\x8c\xa5\xe2\x86\xb5"));
+            out.push_back(lbl(" newline"));
+        }
+        if (avail_width >= 90) {
+            out.push_back(dot());
+            out.push_back(kbd("^E"));
+            out.push_back(lbl(" expand"));
+        }
+        return out;
+    };
 
     // ── Right-side ambient indicators ────────────────────────────────
     // Order: queue (only if non-zero), counters (only if has_text),
@@ -180,7 +193,7 @@ Element composer(const Model& m) {
         hint_right.push_back(text(
             std::to_string(queued) + (queued == 1 ? " queued" : " queued"),
             Style{}.with_fg(highlight).with_bold()));
-        hint_right.push_back(dot);
+        hint_right.push_back(dot());
     }
 
     // Live counters — words + tokens. Words for "how long is this
@@ -196,7 +209,7 @@ Element composer(const Model& m) {
         hint_right.push_back(text(
             "~" + std::to_string(toks) + " tok",
             fg_dim(muted)));
-        hint_right.push_back(dot);
+        hint_right.push_back(dot());
     }
 
     // Profile chip — always-on so the user always knows their
@@ -209,12 +222,21 @@ Element composer(const Model& m) {
     hint_right.push_back(text(small_caps(profile_label(m.d.profile)),
                               Style{}.with_fg(prof_c).with_bold()));
 
-    auto hint = h(
-        h(std::move(hint_left)),
-        spacer(),
-        h(std::move(hint_right)),
-        text(" ", {})
-    );
+    // Wrap the hint row in a ComponentElement so we can measure available
+    // width and drop lower-priority items on narrow terminals.
+    auto hint_element = Element{ComponentElement{
+        .render = [hint_left_builder = std::move(hint_left_builder),
+                   hint_right = std::move(hint_right)](
+                      int w, int /*h*/) mutable -> Element {
+            auto left = hint_left_builder(w);
+            return h(
+                h(std::move(left)),
+                spacer(),
+                h(std::move(hint_right)),
+                text(" ", {})
+            ).build();
+        }
+    }};
 
     // ── Box composition ──────────────────────────────────────────────
     // Round border in state color. Bottom-right caption surfaces line
@@ -224,7 +246,7 @@ Element composer(const Model& m) {
     // up without scanning the hint row.
     int line_count = static_cast<int>(split_lines(display).size());
 
-    auto box = v(inner, hint.build())
+    auto box = v(inner, std::move(hint_element))
                | border(BorderStyle::Round)
                | bcolor(box_color);
 
