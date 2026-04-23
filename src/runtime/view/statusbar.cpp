@@ -571,35 +571,51 @@ Element status_bar(const Model& m) {
             // ── Right group ────────────────────────────────────────────
             std::vector<Element> right_parts;
 
-            // Live tok/s + sparkline — fixed-width slot. Visibility is
-            // tied to the *active session* (m.s.active), not just the
-            // Streaming phase, so the slot doesn't pop in/out as the
-            // turn cycles Streaming → ExecutingTool → Streaming. When
-            // not streaming live (e.g. mid-tool), the displayed rate
-            // freezes at the most recent sample and renders dimmed —
-            // signalling "this is the last value, not live" without
-            // making the whole element disappear.
+            // Live tok/s + sparkline — fixed-width slot, always visible
+            // during the active session. Three things to coordinate:
             //
-            // Width-stable from the inside (compact_token_stream pads
-            // every segment) AND from the outside (right group's
-            // right edge stays pinned by spacer; this slot grows
-            // leftward into the spacer and items to its right stay
-            // put). No more horizontal dance.
-            bool ever_streamed =
-                m.s.first_delta_at.time_since_epoch().count() != 0;
-            if (ever_streamed && m.s.active() && w >= 130) {
+            // (a) Visibility gates on `m.s.active()` ALONE (not on
+            //     "have we received text deltas yet" — that timestamp
+            //     stays unset if the model opens with a tool_use and
+            //     stalls before emitting any args, which made the slot
+            //     disappear right when the user most wanted to see
+            //     the tok cadence). The graph "is alive" the moment a
+            //     stream is in flight; before any data, it's just a
+            //     baseline track of zeros — that's the right reading.
+            //
+            // (b) Width threshold dropped from 130 → 110 so the slot
+            //     appears on standard 120-col terminals, not just very
+            //     wide ones. The slot itself is ~37 cells; with phase
+            //     chip + profile + model badge + ctx bar it fits at 110
+            //     with some margin. Below 110 we keep the slot hidden
+            //     to avoid wrapping.
+            //
+            // (c) Width-stable: the compact_token_stream renderer pads
+            //     every internal segment to a fixed display width;
+            //     the right group's right edge stays pinned by the
+            //     parent spacer; this slot grows leftward into the
+            //     spacer and items to its right stay put. Together
+            //     these eliminate horizontal jitter even as numbers
+            //     tick up and the sparkline scrolls.
+            if (m.s.active() && w >= 110) {
                 auto now = std::chrono::steady_clock::now();
-                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              now - m.s.first_delta_at).count();
+                bool ever_streamed =
+                    m.s.first_delta_at.time_since_epoch().count() != 0;
+                long long ms = ever_streamed
+                    ? std::chrono::duration_cast<std::chrono::milliseconds>(
+                          now - m.s.first_delta_at).count()
+                    : 0;
                 double sec = std::max(0.001, static_cast<double>(ms) / 1000.0);
                 double approx_tok = static_cast<double>(
                     m.s.live_delta_bytes) / 4.0;
                 auto hist = ordered_rate_history(m.s);
 
-                // Pick the rate to display: live computation while
-                // streaming (smooth); freeze on last sample otherwise
-                // so the number doesn't decay as wall-clock keeps
-                // ticking past the last delta.
+                // Pick the displayed rate: live computation while
+                // streaming (after a 250 ms warm-up so the first frame
+                // doesn't read as a divide-by-tiny-time spike); freeze
+                // on the most recent sample otherwise (so the number
+                // doesn't decay as wall-clock ticks past the last
+                // delta during tool execution); 0 before any data.
                 float disp_rate;
                 if (is_streaming && ms >= 250) {
                     disp_rate = static_cast<float>(approx_tok / sec);
