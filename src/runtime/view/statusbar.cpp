@@ -293,12 +293,11 @@ Element turn_minimap(const Model& m, int max_cells, int frame) {
         // turns scale with tool-call count.
         int activity = is_user ? 0 : static_cast<int>(msg.tool_calls.size());
         const char* g = bar_glyph_for(activity);
-        // Active cursor: pulse between the natural height and full block.
-        if (is_last && stream_active) {
-            bool tall = ((frame >> 3) & 1) == 0;
-            g = tall ? "\xe2\x96\x88"   // █  full block on the up-beat
-                     : g;                // natural height on the down-beat
-        }
+        // The active cursor is signalled by a STYLE pulse (bold ↔ dim)
+        // below — we used to also swap glyph heights here every 8
+        // frames, but a changing glyph shape (▃ ↔ █) reads as vertical
+        // jitter on the row, not a "live indicator". Keep the height
+        // stable; let the color breath carry the aliveness cue.
         dots.push_back({c, g, is_last && stream_active, is_user});
     }
 
@@ -637,28 +636,48 @@ Element status_bar(const Model& m) {
             // duplicated the live "N tokens" in the compact tok-stream
             // slot to the left. Both signals already covered.)
 
-            // Context indicator — always when we have a usage event; the
-            // visual gradient bar + absolute count drop away below 55
-            // cols, leaving just "CTX  32%". Small-caps label (CTX)
-            // separates it visually from the variable-width tokens
-            // numbers preceding it.
-            if (m.s.context_max > 0 && has_tokens) {
-                Color c = ctx_color(pct);
+            // Context indicator — always present as a fixed-width slot
+            // during an active session so the model badge / tok-stream
+            // slot don't shove leftward when the first usage event
+            // arrives mid-stream. When we don't have numbers yet we
+            // render a dim placeholder that occupies the same columns
+            // as the live version: "CTX  ──────────  ──%".
+            //
+            // Layout columns (w >= 55):
+            //    " · " + "CTX " + "12.3k/123.4k " + bar(10) + " nn%"
+            // At narrower widths we only reserve "CTX " + " nn%".
+            if (m.s.context_max > 0) {
+                Color c = has_tokens ? ctx_color(pct) : muted;
                 right_parts.push_back(sep_thin());
                 right_parts.push_back(text("CTX ", fg_dim(muted).with_bold()));
                 if (w >= 55) {
-                    std::string used_str = format_tokens(ctx_used) + "/"
-                                         + format_tokens(m.s.context_max) + " ";
-                    right_parts.push_back(text(used_str, fg_dim(muted)));
-                    // Per-cell green→amber→red gradient: cells get their
-                    // own color based on threshold, not the whole-bar
-                    // single hue. Reads as a real fuel gauge.
-                    right_parts.push_back(ctx_bar_gradient(pct, kCtxBarCells));
+                    if (has_tokens) {
+                        std::string used_str = format_tokens(ctx_used) + "/"
+                                             + format_tokens(m.s.context_max) + " ";
+                        right_parts.push_back(text(used_str, fg_dim(muted)));
+                        right_parts.push_back(ctx_bar_gradient(pct, kCtxBarCells));
+                    } else {
+                        // Placeholder numbers (same 13 cols: "  — — /   — —   ")
+                        // — using dim em-dashes so the slot reads as
+                        // "waiting for usage" rather than blank.
+                        right_parts.push_back(text(
+                            "  \xe2\x80\x94\xe2\x80\x94/  \xe2\x80\x94\xe2\x80\x94  ",
+                            fg_dim(muted)));
+                        // Track-only bar (all dim light-shade cells).
+                        right_parts.push_back(ctx_bar_gradient(0, kCtxBarCells));
+                    }
                 }
                 // Tabular pct so the bar's right-edge label doesn't
                 // shift left/right as the value crosses 9 → 10 → 100.
-                right_parts.push_back(text(" " + tabular_int(pct, 3) + "%",
-                                           fg_of(c).with_bold()));
+                // Placeholder shows " ––%" (em-dash pad, same 4 cells).
+                if (has_tokens) {
+                    right_parts.push_back(text(" " + tabular_int(pct, 3) + "%",
+                                               fg_of(c).with_bold()));
+                } else {
+                    right_parts.push_back(text(
+                        " \xe2\x80\x94\xe2\x80\x94\xe2\x80\x94%",
+                        fg_of(c).with_dim()));
+                }
             }
 
             right_parts.push_back(text(" ", {}));

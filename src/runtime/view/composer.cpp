@@ -133,6 +133,13 @@ Element composer(const Model& m) {
     // Grow with content but cap at a sensible max. Empty / short input
     // shows 3 rows so the box doesn't feel cramped; long input grows up
     // to `expanded ? 16 : 8` rows. Beyond that the inner area scrolls.
+    //
+    // While the model is actively streaming we PIN the composer height
+    // at its current size so new rows rendered by the assistant above
+    // don't cause the composer's top edge to bob up and down each
+    // frame. Without this, every time a wrapped line count changed in
+    // the thread view, the composer would shift — reads as vertical
+    // jitter of the whole input box during streaming.
     int row_count = static_cast<int>(body_rows.size());
     int max_rows  = m.ui.composer.expanded ? 16 : 8;
     int min_rows  = 3;
@@ -186,12 +193,16 @@ Element composer(const Model& m) {
     std::vector<Element> hint_right;
 
     // Queue depth — when streaming and the user has queued messages,
-    // show "+N queued" so they know their typing is going somewhere
+    // show "N queued" so they know their typing is going somewhere
     // useful, not into the void. Bold to draw the eye when present.
+    // Count is right-aligned to 2 display columns so 1→9→99 doesn't
+    // shove the surrounding chips left/right as messages queue up
+    // during a stream (the worst kind of jitter — movement caused by
+    // user actions they weren't directly looking at).
     if (queued > 0) {
         hint_right.push_back(text("\xe2\x9d\x9a ", fg_of(highlight)));     // ❚
         hint_right.push_back(text(
-            std::to_string(queued) + (queued == 1 ? " queued" : " queued"),
+            tabular_int(static_cast<int>(queued), 2) + " queued",
             Style{}.with_fg(highlight).with_bold()));
         hint_right.push_back(dot());
     }
@@ -199,15 +210,21 @@ Element composer(const Model& m) {
     // Live counters — words + tokens. Words for "how long is this
     // prompt" intuition; tokens for "how much budget will this cost"
     // intuition. Skip when empty so the row reads cleanly at rest.
+    //
+    // Both numbers use a fixed 4-column right-aligned field so the
+    // profile chip to the right of them stays pinned as the user types
+    // — with variable-width ints the label would bob every keystroke.
+    // The "words" / "word" suffix always renders plural ("words") so
+    // the label itself doesn't flip width at n==1.
     if (has_text) {
         int words = word_count(display);
         int toks  = approx_tokens(display);
         hint_right.push_back(text(
-            std::to_string(words) + (words == 1 ? " word" : " words"),
+            tabular_int(words, 4) + " words",
             fg_dim(muted)));
         hint_right.push_back(text("  \xc2\xb7  ", fg_dim(muted)));
         hint_right.push_back(text(
-            "~" + std::to_string(toks) + " tok",
+            "~" + tabular_int(toks, 4) + " tok",
             fg_dim(muted)));
         hint_right.push_back(dot());
     }
@@ -224,15 +241,21 @@ Element composer(const Model& m) {
 
     // Wrap the hint row in a ComponentElement so we can measure available
     // width and drop lower-priority items on narrow terminals.
+    //
+    // The lambda captures by VALUE (no `mutable` + move-out of captured
+    // state). maya's layout engine may invoke render() more than once
+    // per frame (measure + paint); the earlier version moved out of
+    // `hint_right` on the first call, so a second call rendered an
+    // empty right group — visible as the profile chip / counters
+    // flickering in and out of existence during streaming.
     auto hint_element = Element{ComponentElement{
-        .render = [hint_left_builder = std::move(hint_left_builder),
-                   hint_right = std::move(hint_right)](
-                      int w, int /*h*/) mutable -> Element {
+        .render = [hint_left_builder, hint_right](
+                      int w, int /*h*/) -> Element {
             auto left = hint_left_builder(w);
             return h(
-                h(std::move(left)),
+                h(left),
                 spacer(),
-                h(std::move(hint_right)),
+                h(hint_right),
                 text(" ", {})
             ).build();
         }

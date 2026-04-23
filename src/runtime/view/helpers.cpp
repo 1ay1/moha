@@ -68,14 +68,27 @@ std::string tabular_int(int n, int width) {
 }
 
 std::string format_elapsed_5(float secs) {
+    // EVERY branch must produce EXACTLY 5 display columns — this label
+    // lives in the status bar where any width change per frame reads as
+    // jitter. Budgets by magnitude:
+    //   <   10 s  → " 3.4s"   ( 1 + 3 + 1 = 5 )
+    //   <  100 s  → "12.3s"   ( 4 + 1     = 5 )
+    //   <  600 s  → " 234s"   ( 4 + 1     = 5 )
+    //   < 600 m   → "59m9s" … needs "mm'ss" style — pick " 9m5s" /
+    //                 "59m5s" (always 5 chars, seconds as single digit
+    //                 rounded down, minutes 1–2 digits).
+    //   else      → " >1hr"
     char buf[16];
     if (secs < 0.0f) secs = 0.0f;
     if      (secs <   10.0f)  std::snprintf(buf, sizeof(buf), " %.1fs", static_cast<double>(secs));
     else if (secs <  100.0f)  std::snprintf(buf, sizeof(buf), "%.1fs", static_cast<double>(secs));
     else if (secs <  600.0f)  std::snprintf(buf, sizeof(buf), "%4ds", static_cast<int>(secs));
-    else if (secs < 3600.0f)  std::snprintf(buf, sizeof(buf), "%dm%02ds",
-                                            static_cast<int>(secs) / 60,
-                                            static_cast<int>(secs) % 60);
+    else if (secs < 3600.0f) {
+        int m = static_cast<int>(secs) / 60;
+        int s = (static_cast<int>(secs) / 10) % 6;   // tens of seconds, 0–5
+        // "%2dm%ds" → e.g. " 9m3s" or "59m4s" — always 5 cols.
+        std::snprintf(buf, sizeof(buf), "%2dm%ds", m, s);
+    }
     else                      std::snprintf(buf, sizeof(buf), " >1hr");
     return buf;
 }
