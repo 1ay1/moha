@@ -592,6 +592,53 @@ Element compact_tool_body(const ToolUse& tc) {
         return preview_block(out, fg_dim(fg));
     }
 
+    // ── Todo: list each item with its status icon ─────────────────
+    // The Timeline header already shows "N items"; this body lists
+    // them so the user can read the actual plan inline without
+    // popping the dedicated todo modal. Cap the visible list so a
+    // 30-item plan doesn't blow out the panel; surplus collapses to
+    // a "… N more" footer.
+    if (n == "todo" && tc.args.is_object()) {
+        auto it = tc.args.find("todos");
+        if (it == tc.args.end() || !it->is_array() || it->empty())
+            return text("");
+        constexpr int kMaxRows = 8;
+        std::vector<Element> rows;
+        int total = static_cast<int>(it->size());
+        int shown = 0;
+        for (const auto& td : *it) {
+            if (shown >= kMaxRows) break;
+            if (!td.is_object()) continue;
+            std::string body = td.value("content", "");
+            std::string st   = td.value("status", std::string{"pending"});
+            const char* glyph;
+            Style icon_st, body_st;
+            if (st == "completed") {
+                glyph   = "\xe2\x9c\x93";   // ✓
+                icon_st = Style{}.with_fg(success).with_bold();
+                body_st = fg_dim(muted);    // crossed-out feel via dim
+            } else if (st == "in_progress") {
+                glyph   = "\xe2\x97\x8d";   // ◍
+                icon_st = Style{}.with_fg(info).with_bold();
+                body_st = Style{}.with_fg(fg);
+            } else {
+                glyph   = "\xe2\x97\x8b";   // ○
+                icon_st = fg_dim(muted);
+                body_st = fg_dim(fg);
+            }
+            rows.push_back(h(
+                text(std::string{glyph} + " ", icon_st),
+                text(std::move(body), body_st)
+            ).build());
+            ++shown;
+        }
+        if (total > shown) {
+            rows.push_back(text("\xe2\x80\xa6 " + std::to_string(total - shown)
+                                + " more", fg_dim(muted)));
+        }
+        return v(std::move(rows)).build();
+    }
+
     // ── Failure: surface the error message inline so it isn't hidden
     if (tc.is_failed() && !tc.output().empty()) {
         // Failures use the danger color so the error stands out, but
@@ -777,27 +824,38 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
             ? Style{}.with_fg(muted).with_italic()
             : Style{}.with_fg(muted).with_dim().with_italic();
 
-        std::vector<Element> hdr;
         // Tree-glyph in category color: light strokes for the pipeline
         // structure, brighter on the active event so the eye lands
         // there. Settled events stay dim so the running step pops.
         Style tree_style = is_active
             ? Style{}.with_fg(cat)
             : Style{}.with_fg(cat).with_dim();
-        hdr.push_back(text(tree_glyph(i), tree_style));
-        hdr.push_back(text(" ", {}));
-        hdr.push_back(icon);
-        hdr.push_back(text("  ", {}));
-        hdr.push_back(text(std::move(name), name_style));
-        hdr.push_back(text("  ", {}));
-        hdr.push_back(text(std::move(detail), detail_style));
-        hdr.push_back(spacer());
+
+        // Build the left-side run as one h(), then compose with
+        // spacer + elapsed at the outer level. This mirrors the
+        // turn_header pattern — passing a vector of children to
+        // h() in one shot doesn't propagate spacer-grow the same
+        // way an explicit variadic does, so the elapsed used to
+        // snap left against the detail instead of pinning the
+        // right edge.
+        std::vector<Element> left_parts;
+        left_parts.push_back(text(tree_glyph(i), tree_style));
+        left_parts.push_back(text(" ", {}));
+        left_parts.push_back(icon);
+        left_parts.push_back(text("  ", {}));
+        left_parts.push_back(text(std::move(name), name_style));
+        left_parts.push_back(text("  ", {}));
+        left_parts.push_back(text(std::move(detail), detail_style));
+        Element left = h(std::move(left_parts)).build();
+
         if (tc.is_terminal()) {
             float secs = tool_elapsed(tc);
-            hdr.push_back(text(format_duration(secs),
-                               Style{}.with_fg(duration_color(secs))));
+            Element elapsed = text(format_duration(secs),
+                                   Style{}.with_fg(duration_color(secs)));
+            rows.push_back((h(left, spacer(), elapsed) | grow(1.0f)).build());
+        } else {
+            rows.push_back((h(left, spacer()) | grow(1.0f)).build());
         }
-        rows.push_back((h(std::move(hdr)) | grow(1.0f)).build());
 
         // ── Body content under a light │ stripe ─────────────────────
         // Body content (file preview, command output, diff hunks) is
