@@ -234,7 +234,12 @@ bool dispatch_content_block_delta_fast(StreamCtx& ctx, const std::string& data) 
         ctx.simd_scratch = simdjson::padded_string(need);
     }
     std::memcpy(ctx.simd_scratch.data(), data.data(), data.size());
-    std::memset(ctx.simd_scratch.data() + data.size(), 0, simdjson::SIMDJSON_PADDING);
+    // simdjson only requires the padding bytes be *readable*, not zeroed
+    // — padded_string's ctor already zero-fills on allocation, and we
+    // only ever read past `data.size()` from within simdjson's SIMD
+    // loads, which tolerate junk. Skipping the per-frame memset saves
+    // ~64 B of writes on every content_block_delta (~95% of stream
+    // volume) for no observable behavior change.
 
     simdjson::ondemand::document doc;
     if (ctx.simd_parser.iterate(ctx.simd_scratch.data(), data.size(), need).get(doc))
@@ -261,10 +266,16 @@ bool dispatch_content_block_delta_fast(StreamCtx& ctx, const std::string& data) 
         ctx.sink(StreamToolUseDelta{std::string{partial}});
         return true;
     }
-    // Thinking blocks have nothing to render but we still want to count them
-    // so the dbg log can distinguish "model reasoning" from "wire stalled".
+    // Thinking blocks have nothing to render but they ARE proof that the
+    // model is actively working. Bump the reducer's liveness clock via a
+    // StreamHeartbeat — without this, a long reasoning pass (extended-
+    // thinking models can go 60-120 s between visible deltas) trips the
+    // reducer's stall watchdog and fires a spurious "stream stalled"
+    // error even though the wire is healthy and the model is producing
+    // thinking tokens we've chosen not to render.
     if (delta_type == "thinking_delta" || delta_type == "signature_delta") {
         ++ctx.thinking_deltas;
+        ctx.sink(StreamHeartbeat{});
         return true;
     }
     return false;
@@ -288,9 +299,11 @@ void dispatch_event(StreamCtx& ctx, std::string_view name, const std::string& da
     }
 
     // ping events are heartbeat keepalives — Anthropic interleaves them so
-    // proxies don't kill the long-poll. Acknowledge silently; emitting a Msg
-    // would just spam the reducer.
-    if (name == "ping") return;
+    // proxies don't kill the long-poll (typically every 10-15 s). Forward
+    // as a StreamHeartbeat so the reducer's stall watchdog can tell
+    // "wire is silent but alive" from "wire is wedged." The reducer's
+    // handler only bumps last_event_at — no render, no state change.
+    if (name == "ping") { ctx.sink(StreamHeartbeat{}); return; }
 
     json j;
     try { j = json::parse(data); } catch (...) { return; }
@@ -325,12 +338,13 @@ void dispatch_event(StreamCtx& ctx, std::string_view name, const std::string& da
             // Extended-thinking models can emit thinking_delta blocks even
             // when we don't enable thinking via the request body — Anthropic
             // routes some opus turns through an implicit reasoning pass. We
-            // don't render thinking content in the UI yet, but bumping the
-            // stream's byte counter via a zero-length text delta keeps the
-            // tok/s display from showing 0 while the model is actually
-            // working. Without this, a long reasoning pass looks identical
-            // to a stalled stream and the user just cancels.
+            // don't render thinking content in the UI yet, but emitting a
+            // StreamHeartbeat here is what keeps the reducer's stall
+            // watchdog from tripping: the model can reason silently for
+            // minutes at a time, and without a liveness signal the
+            // reducer can't distinguish that from a wedged transport.
             ++ctx.thinking_deltas;
+            ctx.sink(StreamHeartbeat{});
         }
     } else if (name == "content_block_stop") {
         if (ctx.in_tool_use) {
@@ -894,15 +908,27 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
     http::Timeouts tos;
     tos.connect = std::chrono::milliseconds(10'000);
     tos.total   = std::chrono::milliseconds(0);  // streaming phase unbounded
-    // A healthy Anthropic stream emits SSE heartbeats / data every few seconds
-    // even during long thinking blocks. 45 s without a single byte means the
-    // transport is dead (silent peer, proxy stall, half-open TCP). The error
-    // surfaces as "h2: idle timeout (no bytes for Ns)" and is classified as
-    // Transient by provider::error_class — auto-retried with backoff. 15 s
-    // PING probe interval keeps a half-open TCP from going undetected for
-    // long; the PING ACK bumps last_rx, so a healthy peer never trips idle.
+    // A healthy Anthropic stream emits SSE `ping` heartbeats every 10-15 s
+    // even during long thinking blocks. 90 s without a single byte means
+    // the transport is dead (silent peer, proxy stall, half-open TCP).
+    // The error surfaces as "h2: idle timeout (no bytes for Ns)" and is
+    // classified as Transient by provider::error_class — auto-retried
+    // with backoff.
+    //
+    // The 90 s value is deliberately more patient than the historical
+    // 45 s: on heavily-loaded Anthropic edge pops we've observed
+    // legitimate 30-60 s ping intervals before the connection recovers,
+    // and an aggressive HTTP idle timer converted those brown-outs into
+    // user-visible "stream stalled" errors. The reducer has its own
+    // 120 s stall watchdog that catches the case where PING ACKs keep
+    // this clock happy but the application layer never advances — the
+    // two watchdogs together cover both failure modes without racing.
+    //
+    // 15 s PING probe interval keeps a half-open TCP from going
+    // undetected for long; the PING ACK bumps last_rx so a healthy peer
+    // never trips idle.
     tos.ping    = std::chrono::milliseconds(15'000);
-    tos.idle    = std::chrono::milliseconds(45'000);
+    tos.idle    = std::chrono::milliseconds(90'000);
 
     auto result = http::default_client().stream(hreq, std::move(handler),
                                                 tos, std::move(cancel));

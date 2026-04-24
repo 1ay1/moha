@@ -232,6 +232,17 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             if (e.output_tokens) m.s.tokens_out = e.output_tokens;
             return done(std::move(m));
         },
+        [&](StreamHeartbeat) -> Step {
+            // Wire-alive signal from the transport (SSE `ping` or
+            // `thinking_delta`). No payload, no UI effect — we just
+            // bump last_event_at so the stall watchdog knows the
+            // connection is healthy. Critical during extended-thinking
+            // passes where the model reasons silently for 60-120 s
+            // between visible deltas; without this the watchdog would
+            // fire on every non-trivial opus turn.
+            m.s.last_event_at = std::chrono::steady_clock::now();
+            return done(std::move(m));
+        },
         [&](StreamFinished e) -> Step {
             auto cmd = detail::finalize_turn(m, e.stop_reason);
             return {std::move(m), std::move(cmd)};
@@ -775,24 +786,48 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
         [&](Tick) -> Step {
             auto now = std::chrono::steady_clock::now();
             if (m.s.last_tick.time_since_epoch().count() == 0) m.s.last_tick = now;
-            float dt = std::chrono::duration<float>(now - m.s.last_tick).count();
+            auto tick_gap = now - m.s.last_tick;
+            float dt = std::chrono::duration<float>(tick_gap).count();
             m.s.last_tick = now;
             if (m.s.active()) m.s.spinner.advance(dt);
 
             // ── Stream-stall watchdog ──────────────────────────────────
-            // If we've been streaming for kStallSecs without a single
-            // SSE event, the upstream is wedged. The HTTP idle timer
-            // doesn't catch this because PING ACKs reset its byte
-            // counter — the wire is alive, the model isn't. Trip the
-            // cancel token (worker unwinds within ~200 ms) and dispatch
-            // a synthetic StreamError that the classifier sees as
-            // Transient → automatic retry with backoff.
+            // The transport now emits `StreamHeartbeat` on SSE `ping`
+            // frames (every 10-15 s while the connection is up) and on
+            // `thinking_delta` blocks (fired continuously while the
+            // model reasons silently). So a healthy stream bumps
+            // last_event_at at least every ~15 s regardless of what
+            // the model is doing. 120 s of total silence is
+            // overwhelmingly likely to be a wedged transport (silent
+            // peer, proxy stall, half-open TCP) rather than legitimate
+            // model behaviour.
             //
-            // Threshold is conservative: Anthropic emits something
-            // every 1-2 s during active output, including thinking
-            // deltas. 25 s of total silence is well outside any
-            // legitimate model behaviour.
-            constexpr auto kStallSecs = std::chrono::seconds(60);
+            // We still pair this with the HTTP layer's 90 s idle +
+            // 15 s PING probe: the HTTP watchdog catches dead sockets
+            // even when the reducer's Tick subscription is quiet (e.g.
+            // an AwaitingPermission detour), the reducer watchdog
+            // catches the case where PING ACKs keep the HTTP clock
+            // happy but the application layer never advances.
+            //
+            // Clock-skew guard: Tick is scheduled every 33 ms, but on
+            // long threads a render pass can block the UI thread for
+            // hundreds of ms — sometimes multiple seconds on pathological
+            // transcripts with many tool cards. When that happens the
+            // stream looks "silent" from our clock's perspective even
+            // though the worker thread has been pushing deltas into the
+            // background queue the whole time (they just haven't been
+            // drained yet). If we see a Tick gap well above the nominal
+            // interval, rebase `last_event_at` forward by the observed
+            // stall so one slow frame can't synthesize a spurious
+            // stream-stalled error. The HTTP idle watchdog still catches
+            // a genuinely dead wire — this is strictly about not blaming
+            // the network for our own render backpressure.
+            constexpr auto kTickRebaseThreshold = std::chrono::seconds(2);
+            if (tick_gap >= kTickRebaseThreshold
+                && m.s.last_event_at.time_since_epoch().count() != 0) {
+                m.s.last_event_at += tick_gap;
+            }
+            constexpr auto kStallSecs = std::chrono::seconds(120);
             if (m.s.is_streaming() && m.s.active()
                 && m.s.in_fresh()
                 && m.s.last_event_at.time_since_epoch().count() != 0
@@ -801,6 +836,10 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 if (m.s.cancel) m.s.cancel->cancel();
                 auto since = std::chrono::duration_cast<std::chrono::seconds>(
                                  now - m.s.last_event_at).count();
+                // User-facing message kept generic — they see a "retrying
+                // in Ns…" toast seconds later, which tells the useful
+                // story. Internal detail is in the StreamError payload
+                // which the classifier reads.
                 std::string msg = "stream stalled — no events for "
                                 + std::to_string(since) + "s";
                 // Schedule via Cmd::after(0) so the StreamError flows

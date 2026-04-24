@@ -249,7 +249,7 @@ Element render_tool_call_uncached(const ToolUse& tc) {
         else                    base = "(streaming\xe2\x80\xa6)";
         auto header = (!path.empty() && !desc.empty())
                           ? with_desc(base, desc) : base;
-        if (tc.is_failed() || tc.is_rejected()) {
+        if (tc.is_rejected()) {
             return tool_card("edit", ToolCallKind::Edit,
                 header, tc.status, tc.expanded, tc.output(), elapsed);
         }
@@ -302,6 +302,17 @@ Element render_tool_call_uncached(const ToolUse& tc) {
         et.set_status(map_status<EditTool>(tc.status,
             EditStatus::Applying, EditStatus::Failed, EditStatus::Applied));
         et.set_elapsed(elapsed);
+        // On failure, stack the error text *below* the attempted edits so
+        // the user sees which edit missed AND why in the same card. The
+        // previous behavior (fall through to generic tool_card) hid the
+        // edit content entirely, leaving only a red error block — which
+        // made it hard to tell whether the model's `old_text` was close
+        // enough to retry or genuinely wrong.
+        if (tc.is_failed() && !tc.output().empty()) {
+            auto err_row = text("✗ " + tc.output(),
+                                Style{}.with_fg(Color::red()));
+            return v(et.build(), err_row).build();
+        }
         return et.build();
     }
 

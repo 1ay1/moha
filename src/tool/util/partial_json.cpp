@@ -1,5 +1,6 @@
 #include "moha/tool/util/partial_json.hpp"
 
+#include <cstring>
 #include <vector>
 
 namespace moha::tools::util {
@@ -127,21 +128,35 @@ namespace {
 // Shared prefix walk for sniff_*: advance past `"key"` followed by `:` and
 // the opening `"` of its value. Returns the index just past the opening
 // quote, or std::string_view::npos if the expected prefix isn't there yet.
+//
+// Perf note: this runs on the streaming hot path (called per alias per
+// preview tick, ~8x/sec during a turn). The previous implementation built
+// a `"key"` needle as a heap-allocated std::string and handed it to
+// std::string_view::find — O(N) scan per call, plus a malloc+free every
+// call. We now scan the buffer once looking for the opening `"`, then
+// memcmp against the key. Zero allocations; the inner loop is a single
+// byte compare that usually fails on the first char.
 std::size_t sniff_prefix(std::string_view raw, std::string_view key) {
-    std::string needle;
-    needle.reserve(key.size() + 2);
-    needle.push_back('"');
-    needle.append(key);
-    needle.push_back('"');
-    std::size_t p = raw.find(needle);
-    if (p == std::string_view::npos) return std::string_view::npos;
-    p += needle.size();
-    while (p < raw.size() && (raw[p] == ' ' || raw[p] == '\t' || raw[p] == '\n')) ++p;
-    if (p >= raw.size() || raw[p] != ':') return std::string_view::npos;
-    ++p;
-    while (p < raw.size() && (raw[p] == ' ' || raw[p] == '\t' || raw[p] == '\n')) ++p;
-    if (p >= raw.size() || raw[p] != '"') return std::string_view::npos;
-    return p + 1;
+    if (key.empty() || raw.size() < key.size() + 4) return std::string_view::npos;
+    const char* const base = raw.data();
+    const std::size_t n    = raw.size();
+    const std::size_t klen = key.size();
+    // Last index where `"key"` could still begin: need klen+2 bytes
+    // for the quoted key plus at least `:` `"` after it.
+    const std::size_t last_start = n - (klen + 3);
+    for (std::size_t i = 0; i <= last_start; ++i) {
+        if (base[i] != '"') continue;
+        if (base[i + klen + 1] != '"') continue;
+        if (std::memcmp(base + i + 1, key.data(), klen) != 0) continue;
+        std::size_t p = i + klen + 2;
+        while (p < n && (base[p] == ' ' || base[p] == '\t' || base[p] == '\n')) ++p;
+        if (p >= n || base[p] != ':') continue;
+        ++p;
+        while (p < n && (base[p] == ' ' || base[p] == '\t' || base[p] == '\n')) ++p;
+        if (p >= n || base[p] != '"') continue;
+        return p + 1;
+    }
+    return std::string_view::npos;
 }
 
 // Apply a JSON escape (`\X`) onto the output buffer. Unknown escapes

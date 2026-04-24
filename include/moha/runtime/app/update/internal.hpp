@@ -31,9 +31,15 @@ inline constexpr std::size_t kMaxStreamingBytes = 8 * 1024 * 1024;
 
 // View virtualization thresholds — when the transcript exceeds kViewWindow
 // messages, slice kSliceChunk of the oldest into terminal scrollback so Yoga
-// paint stays bounded.
-inline constexpr int kViewWindow = 60;
-inline constexpr int kSliceChunk = 20;
+// paint stays bounded. The old 60/20 pair let tool-heavy turns (e.g. a
+// coding session with 40+ bash/read/edit calls inside a single assistant
+// message) push the live canvas past ~3000 rows, at which point render
+// latency spiked enough to visibly stall the status bar & composer even
+// though the worker thread was still pumping deltas. 40/15 keeps the hot
+// set small enough that one render pass fits comfortably inside a Tick
+// interval on modest hardware.
+inline constexpr int kViewWindow = 40;
+inline constexpr int kSliceChunk = 15;
 
 // ── update_stream.cpp ────────────────────────────────────────────────────
 void update_stream_preview(ToolUse& tc);

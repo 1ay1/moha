@@ -141,33 +141,45 @@ enum class ErrorClass {
     return ErrorClass::Terminal;
 }
 
-// Backoff duration for the Nth retry attempt (0-indexed). Caps at 5
+// Backoff duration for the Nth retry attempt (0-indexed). Caps at 6
 // attempts; longer schedules for RateLimit since Anthropic's per-minute
 // window doesn't reset on demand. Returning `std::chrono::milliseconds`
 // so the unit is in the type — callers scheduling with `Cmd::after(d)`
 // can't accidentally feed seconds where ms were expected.
+//
+// The Transient schedule starts aggressive (500 ms): the overwhelming
+// majority of stalls/brown-outs are a single wedged h2 stream on the
+// Anthropic edge, and a fresh connection almost always succeeds. We
+// only linger on later attempts, by which point the outage is either
+// real or we're about to surface it as terminal.
 [[nodiscard]] constexpr std::chrono::milliseconds
 backoff(ErrorClass kind, int attempt) noexcept {
     using std::chrono::milliseconds;
     if (attempt < 0) attempt = 0;
-    if (attempt > 4) attempt = 4;
+    if (attempt > 5) attempt = 5;
     if (kind == ErrorClass::RateLimit) {
-        constexpr milliseconds table[5] = {
+        constexpr milliseconds table[6] = {
             milliseconds{3000},  milliseconds{8000},  milliseconds{20000},
-            milliseconds{40000}, milliseconds{60000},
+            milliseconds{40000}, milliseconds{60000}, milliseconds{90000},
         };
         return table[attempt];
     }
-    // Transient / Auth retry — fast first, then linger.
-    constexpr milliseconds table[5] = {
-        milliseconds{1000},  milliseconds{3000},  milliseconds{7000},
-        milliseconds{15000}, milliseconds{30000},
+    // Transient / Auth retry — fast first to recover from a single-
+    // stream wedge, then back off progressively.
+    constexpr milliseconds table[6] = {
+        milliseconds{500},   milliseconds{2000},  milliseconds{5000},
+        milliseconds{12000}, milliseconds{25000}, milliseconds{45000},
     };
     return table[attempt];
 }
 
 // Hard cap on automatic retries. Past this, surface as terminal.
-inline constexpr int kMaxRetries = 4;
+// Raised from 4 to 6: streams can wedge for several minutes during
+// regional Anthropic incidents, and the exponential tail (25 s +
+// 45 s) means attempts 5+6 cost little latency but convert
+// user-visible "error: stream stalled" into transparent recovery on
+// long outages. Esc still breaks the loop at any point.
+inline constexpr int kMaxRetries = 6;
 
 [[nodiscard]] constexpr std::string_view to_string(ErrorClass k) noexcept {
     switch (k) {

@@ -78,6 +78,17 @@ enum class StopReason : std::uint8_t {
 
 struct StreamFinished { StopReason stop_reason = StopReason::Unspecified; };
 struct StreamError { std::string message; };
+// Wire-alive heartbeat. Emitted by the transport for SSE frames that
+// carry no reducer-visible payload but prove the connection is healthy
+// and the model is still working: SSE `ping` events (Anthropic's proxy
+// keepalive, every 10-15 s), and `thinking_delta` blocks (extended-
+// thinking models emit these while reasoning silently — no `text` /
+// `input_json` for seconds or minutes at a time). Without this Msg the
+// reducer's stall watchdog can't distinguish "model is thinking" from
+// "transport is wedged" and fires spurious "stream stalled" errors.
+// The handler does nothing but bump `last_event_at` — no render
+// churn, no state transitions, no visible UI effect.
+struct StreamHeartbeat {};
 // User-driven cancel of the in-flight stream (Esc while streaming). The
 // reducer trips the StreamState cancel token; the http layer notices within
 // ~200 ms and the worker thread eventually emits a StreamError("cancelled").
@@ -183,7 +194,8 @@ using Msg = std::variant<
     ComposerPaste,
     StreamStarted, StreamTextDelta,
     StreamToolUseStart, StreamToolUseDelta, StreamToolUseEnd,
-    StreamUsage, StreamFinished, StreamError, CancelStream, RetryStream,
+    StreamUsage, StreamFinished, StreamError, StreamHeartbeat,
+    CancelStream, RetryStream,
     ToolExecOutput, ToolExecProgress, ToolTimeoutCheck,
     PermissionApprove, PermissionReject, PermissionApproveAlways,
     OpenModelPicker, CloseModelPicker, ModelPickerMove, ModelPickerSelect, ModelPickerToggleFavorite, ModelsLoaded,

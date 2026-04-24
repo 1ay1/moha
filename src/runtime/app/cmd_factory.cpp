@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "moha/runtime/app/deps.hpp"
+#include "moha/runtime/app/update/internal.hpp"
 #include "moha/io/http.hpp"
 #include "moha/provider/anthropic/transport.hpp"
 #include "moha/tool/registry.hpp"
@@ -211,10 +212,19 @@ Cmd<Msg> kick_pending_tools(Model& m) {
             return tc.is_terminal();
         });
         if (has_results) {
+            // Tool results are going back to the model — a fresh sub-turn
+            // is about to start on the same assistant message. This is a
+            // natural slice point: tool-heavy turns can grow the transcript
+            // several messages in one logical "turn" from the user's POV,
+            // and the submit_message virtualization hook never sees those.
+            // Slicing here keeps the live canvas bounded even inside a
+            // single long multi-tool assistant turn.
+            auto virt = detail::maybe_virtualize(m);
             m.s.phase = phase::Streaming{};
             Message placeholder;
             placeholder.role = Role::Assistant;
             m.d.current.messages.push_back(std::move(placeholder));
+            if (!virt.is_none()) cmds.push_back(std::move(virt));
             cmds.push_back(launch_stream(m));
         } else {
             // Idle drops active() to false, stopping the Tick subscription.
