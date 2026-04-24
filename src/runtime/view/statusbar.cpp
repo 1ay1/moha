@@ -562,33 +562,14 @@ Element status_bar(const Model& m) {
             // ── Right group ────────────────────────────────────────────
             std::vector<Element> right_parts;
 
-            // Live tok/s + sparkline — fixed-width slot, always visible
-            // during the active session. Three things to coordinate:
-            //
-            // (a) Visibility gates on `m.s.active()` ALONE (not on
-            //     "have we received text deltas yet" — that timestamp
-            //     stays unset if the model opens with a tool_use and
-            //     stalls before emitting any args, which made the slot
-            //     disappear right when the user most wanted to see
-            //     the tok cadence). The graph "is alive" the moment a
-            //     stream is in flight; before any data, it's just a
-            //     baseline track of zeros — that's the right reading.
-            //
-            // (b) Width threshold dropped from 130 → 110 so the slot
-            //     appears on standard 120-col terminals, not just very
-            //     wide ones. The slot itself is ~37 cells; with phase
-            //     chip + profile + model badge + ctx bar it fits at 110
-            //     with some margin. Below 110 we keep the slot hidden
-            //     to avoid wrapping.
-            //
-            // (c) Width-stable: the compact_token_stream renderer pads
-            //     every internal segment to a fixed display width;
-            //     the right group's right edge stays pinned by the
-            //     parent spacer; this slot grows leftward into the
-            //     spacer and items to its right stay put. Together
-            //     these eliminate horizontal jitter even as numbers
-            //     tick up and the sparkline scrolls.
-            if (m.s.active() && w >= 110) {
+            // Live tok/s + sparkline — fixed-width slot. Rendered as a
+            // DIM PLACEHOLDER when the session is idle and as the real
+            // thing when active, so the slot occupies the same ~37
+            // cells either way — the model badge / CTX gauge to its
+            // right don't shove leftward when a stream starts or ends.
+            // Width threshold 110 so standard 120-col terminals still
+            // get the slot; below that it's suppressed entirely.
+            if (w >= 110) {
                 auto now = std::chrono::steady_clock::now();
                 bool ever_streamed =
                     m.s.first_delta_at.time_since_epoch().count() != 0;
@@ -619,7 +600,8 @@ Element status_bar(const Model& m) {
                 right_parts.push_back(compact_token_stream(
                     disp_rate, static_cast<int>(approx_tok),
                     std::span<const float>{hist.data(), hist.size()},
-                    highlight, /*live=*/is_streaming));
+                    highlight,
+                    /*live=*/is_streaming));
                 right_parts.push_back(sep_dot());
             }
 
@@ -708,6 +690,12 @@ Element status_bar(const Model& m) {
             text(is_err ? " \xe2\x9a\xa0  " : "  ", fg_of(bc)),
             text(m.s.status, fg_of(bc).with_italic())
         ).build();
+    } else {
+        // Empty-but-present slot. A bare blank text element occupies
+        // exactly one row with no content — keeps the status bar's
+        // row count fixed so the composer above doesn't bob up/down
+        // when a toast appears or disappears.
+        status_row = text(" ", {});
     }
 
     // ── Responsive shortcut row ─────────────────────────────────────────
@@ -764,21 +752,21 @@ Element status_bar(const Model& m) {
         .layout = {},
     }};
 
-    // Horizontal turn mini-map — rendered inline only when there are
-    // ≥2 turns AND width is wide enough to show a meaningful map. Below
-    // 50 cols the row is dropped to free vertical space (those terminals
-    // get an extra usable row in the thread panel instead).
+    // Horizontal turn mini-map — always renders as a fixed-height
+    // slot so the status bar's row count never changes at runtime.
+    // The minimap itself renders a blank line when there's only 1
+    // turn or when width < 50 cols; the slot stays 1 row either way.
     int frame_for_map = m.s.spinner.frame_index();
     auto minimap_row = Element{ComponentElement{
         .render = [&m, frame_for_map](int w, int /*h*/) -> Element {
-            if (w < 50) return text("", {});
+            if (w < 50) return text(" ", {});
+            if (m.d.current.messages.size() < 2) return text(" ", {});
             // Budget scales with width: ~14 turns on wide, fewer on narrow.
             int budget = (w >= 100) ? 14 : (w >= 70 ? 10 : 7);
             return turn_minimap(m, budget, frame_for_map);
         },
         .layout = {},
     }};
-    bool minimap_visible = m.d.current.messages.size() >= 2;
 
     // Compose. Phase-tinted accent strips replace the prior dim ─
     // dividers — they read as "soft state shelves" rather than hard
@@ -789,8 +777,12 @@ Element status_bar(const Model& m) {
     std::vector<Element> rows;
     rows.push_back(phase_accent(pcolor, /*position=*/0));   // ▔ top
     rows.push_back(activity_row);
-    if (minimap_visible) rows.push_back(minimap_row);
-    if (has_status)      rows.push_back(status_row);
+    // Minimap + status rows are ALWAYS appended — their inner content
+    // fades in/out, but the row count of the status bar is fixed so
+    // the composer above never bobs vertically when a toast appears
+    // or the first assistant turn lands.
+    rows.push_back(minimap_row);
+    rows.push_back(status_row);
     rows.push_back(shortcuts);
     rows.push_back(phase_accent(pcolor, /*position=*/1));   // ▁ bottom
     return v(std::move(rows)).build();

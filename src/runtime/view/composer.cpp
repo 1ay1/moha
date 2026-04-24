@@ -143,7 +143,12 @@ Element composer(const Model& m) {
     int row_count = static_cast<int>(body_rows.size());
     int max_rows  = m.ui.composer.expanded ? 16 : 8;
     int min_rows  = 3;
-    int rows      = std::clamp(row_count, min_rows, max_rows);
+    // When the model is streaming/executing, pin the composer height
+    // to `min_rows` (3) so the box can't bounce as the user types
+    // queued messages or as layout re-measures mid-frame. At rest the
+    // box still grows with content up to `max_rows`.
+    int rows      = active ? min_rows
+                           : std::clamp(row_count, min_rows, max_rows);
 
     auto inner = (v(std::move(body_rows)) | padding(0, 1) | height(rows)).build();
 
@@ -166,7 +171,14 @@ Element composer(const Model& m) {
     // Priority order (highest first): send, profile chip, counters,
     // newline, expand. On very narrow widths (< 60 cols) we keep only
     // send + profile; medium (< 90) drops expand; full shows everything.
-    auto hint_left_builder = [&](int avail_width) {
+    //
+    // Capture BY VALUE ([=]): kbd/lbl/dot are stateless lambdas
+    // (empty closures); the ComponentElement outlives composer()'s
+    // stack frame, so a reference capture [&] would dangle when maya
+    // re-invokes the render callback on a later frame — visible as
+    // the hint row going blank or corrupting intermittently. Copies
+    // of stateless lambdas are zero-size and free.
+    auto hint_left_builder = [=](int avail_width) {
         std::vector<Element> out;
         out.push_back(kbd("\xe2\x86\xb5"));           // ↵
         out.push_back(lbl(" send"));
