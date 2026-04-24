@@ -494,52 +494,102 @@ Element compact_tool_body(const ToolUse& tc) {
         return text(std::string{ln}, st);
     };
 
-    // ── Edit: compact diff (one - / + pair per hunk, capped) ───────
+    // ── Edit: unified-diff-style preview, per-hunk head+tail ───
+    // Replaces the previous "first line per side" rendering, which lost
+    // every multi-line edit beyond row 1 — the user saw `- foo {` /
+    // `+ bar {` without any clue what the actual change was. Now each
+    // hunk gets up to ~4 lines per side with head+tail elision, plus a
+    // −N/+M line-count tag so the user can see scope at a glance.
     if (n == "edit" && tc.args.is_object()) {
         std::vector<Element> rows;
-        auto rem = Style{}.with_fg(danger);
-        auto add = Style{}.with_fg(success);
-        auto rem_pre = Style{}.with_fg(danger).with_dim();
-        auto add_pre = Style{}.with_fg(success).with_dim();
+        auto rem      = Style{}.with_fg(danger);
+        auto add      = Style{}.with_fg(success);
+        auto rem_pre  = Style{}.with_fg(danger).with_dim();
+        auto add_pre  = Style{}.with_fg(success).with_dim();
 
-        auto push_hunk = [&](std::string_view old_text, std::string_view new_text) {
-            // Show first line of each side; "…" suffix when multi-line.
-            auto first_line = [](std::string_view s) {
-                auto nl = s.find('\n');
-                bool more = (nl != std::string_view::npos);
-                std::string ln = std::string{nl == std::string_view::npos ? s : s.substr(0, nl)};
-                if (more) ln += "  \xe2\x80\xa6";   // …
-                return ln;
-            };
-            if (!old_text.empty()) rows.push_back(h(
-                text("- ", rem_pre), code_line(first_line(old_text), rem)
-            ).build());
-            if (!new_text.empty()) rows.push_back(h(
-                text("+ ", add_pre), code_line(first_line(new_text), add)
-            ).build());
+        // Per-side cap. 3 head + 1 tail is enough to recognize "this is
+        // the function I'm editing" without letting a 200-line replacement
+        // dominate the timeline; head+tail keeps the closing brace / last
+        // logical line visible so the diff frames the change.
+        constexpr int kHeadPerSide = 3;
+        constexpr int kTailPerSide = 1;
+
+        auto count_lines_in = [](std::string_view s) {
+            if (s.empty()) return 0;
+            int n_ = 1;
+            for (char c : s) if (c == '\n') ++n_;
+            // Trailing newline shouldn't count as an extra empty line.
+            if (s.back() == '\n') --n_;
+            return std::max(0, n_);
+        };
+
+        auto push_side = [&](std::string_view body, char marker,
+                             Style mark_style, Style line_style) {
+            if (body.empty()) return;
+            auto p = head_tail_lines(std::string{body},
+                                     kHeadPerSide, kTailPerSide);
+            for (int i = 0; i < static_cast<int>(p.lines.size()); ++i) {
+                if (p.elided > 0 && i == kHeadPerSide) {
+                    rows.push_back(h(
+                        text(std::string{marker} + " ", mark_style),
+                        text("\xe2\x80\xa6 " + std::to_string(p.elided)
+                             + " hidden", fg_dim(muted))
+                    ).build());
+                }
+                rows.push_back(h(
+                    text(std::string{marker} + " ", mark_style),
+                    code_line(p.lines[static_cast<std::size_t>(i)], line_style)
+                ).build());
+            }
+        };
+
+        auto push_hunk = [&](int hunk_idx, int hunk_total,
+                             std::string_view old_text,
+                             std::string_view new_text) {
+            int minus = count_lines_in(old_text);
+            int plus  = count_lines_in(new_text);
+            // Per-hunk header: `edit i/N  ·  −k / +m`. Skipped on
+            // single-edit calls where the decoration would be noise.
+            if (hunk_total > 1) {
+                std::string tag = "edit " + std::to_string(hunk_idx + 1)
+                                + "/" + std::to_string(hunk_total)
+                                + "  \xc2\xb7  ";
+                std::string stat = "\xe2\x88\x92" + std::to_string(minus)
+                                 + " / +" + std::to_string(plus);
+                rows.push_back(h(
+                    text(std::move(tag),  fg_dim(muted)),
+                    text(std::move(stat), fg_dim(muted))
+                ).build());
+            }
+            push_side(old_text, '-', rem_pre, rem);
+            push_side(new_text, '+', add_pre, add);
         };
 
         if (auto it = tc.args.find("edits");
             it != tc.args.end() && it->is_array() && !it->empty())
         {
+            constexpr int kMaxHunksShown = 3;
+            int total = static_cast<int>(it->size());
             int shown = 0;
             for (const auto& e : *it) {
-                if (shown >= 3) {
-                    rows.push_back(text("\xe2\x80\xa6 " + std::to_string(static_cast<int>(it->size()) - shown)
-                                        + " more edits", fg_dim(muted)));
+                if (shown >= kMaxHunksShown) {
+                    rows.push_back(text(
+                        "\xe2\x80\xa6 "
+                            + std::to_string(total - shown) + " more edits",
+                        fg_dim(muted)));
                     break;
                 }
                 if (!e.is_object()) continue;
                 auto ot = e.value("old_text", e.value("old_string", std::string{}));
                 auto nt = e.value("new_text", e.value("new_string", std::string{}));
-                push_hunk(ot, nt);
+                push_hunk(shown, total, ot, nt);
                 ++shown;
             }
         } else {
             // Top-level legacy single-edit shape.
             auto ot = safe_arg(tc.args, "old_text"); if (ot.empty()) ot = safe_arg(tc.args, "old_string");
             auto nt = safe_arg(tc.args, "new_text"); if (nt.empty()) nt = safe_arg(tc.args, "new_string");
-            if (!ot.empty() || !nt.empty()) push_hunk(ot, nt);
+            if (!ot.empty() || !nt.empty()) push_hunk(0, 1, ot, nt);
         }
         if (rows.empty()) return text("");
         return v(std::move(rows)).build();
