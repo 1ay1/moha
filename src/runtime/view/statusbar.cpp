@@ -240,126 +240,6 @@ std::vector<float> ordered_rate_history(const StreamState& s) {
     return out;
 }
 
-// Horizontal turn mini-map — a sparkline-style strip where each cell's
-// HEIGHT encodes the turn's activity (more tool calls → taller bar).
-// Result: a glance-readable density chart of the whole conversation —
-// you see "this turn was a quick exchange," "this one had a heavy
-// agentic flurry," and "this one's still cooking" without parsing.
-//
-// User turns are always short ▁ (they don't have tool calls). Assistant
-// turns rise with tool count: 0→▁, 1→▃, 2-3→▅, 4-6→▇, 7+→█. The active
-// turn pulses between full-block and lower-half so the "you are here"
-// cursor is unmistakable.
-//
-// Compresses or elides middle when there are more turns than cells —
-// keeps the most recent N turns plus the very first one, with a `…` gap
-// so the user can still tell "we're 30 turns in" at a glance.
-Element turn_minimap(const Model& m, int max_cells, int frame) {
-    const auto& msgs = m.d.current.messages;
-    if (msgs.size() < 2) return text("", {});
-
-    // Resolve per-assistant brand color from model id (keeps the map
-    // consistent with each turn's left-rail color in thread.cpp).
-    const auto& mid = m.d.model_id.value;
-    Color asst_color = (mid.find("opus")   != std::string::npos) ? accent
-                     : (mid.find("sonnet") != std::string::npos) ? info
-                     : (mid.find("haiku")  != std::string::npos) ? success
-                                                                 : highlight;
-
-    // Activity-density bar: height encodes "how much work this turn did."
-    // For Assistant turns that's the tool-call count; for User turns it's
-    // a constant low (▁ = "voice in"). The active turn flickers between
-    // its natural height and a slightly taller block in sync with the
-    // spinner so the cursor pulses subtly.
-    auto bar_glyph_for = [](int activity) -> const char* {
-        // Unicode lower-block scale, 1/8 → 8/8 height. Caps at full block.
-        if (activity <= 0) return "\xe2\x96\x81";        // ▁ 1/8
-        if (activity == 1) return "\xe2\x96\x83";        // ▃ 3/8
-        if (activity <= 3) return "\xe2\x96\x85";        // ▅ 5/8
-        if (activity <= 6) return "\xe2\x96\x87";        // ▇ 7/8
-        return                    "\xe2\x96\x88";        // █ 8/8
-    };
-
-    struct Dot { Color c; const char* g; bool active; bool is_user; };
-    std::vector<Dot> dots;
-    dots.reserve(msgs.size());
-    bool stream_active = m.s.is_streaming() || m.s.is_executing_tool();
-    for (std::size_t i = 0; i < msgs.size(); ++i) {
-        const auto& msg = msgs[i];
-        bool is_last = (i + 1 == msgs.size());
-        bool is_user = (msg.role == Role::User);
-        Color c = is_user ? highlight : asst_color;
-        // User turns are always the shortest bar (no tools). Assistant
-        // turns scale with tool-call count.
-        int activity = is_user ? 0 : static_cast<int>(msg.tool_calls.size());
-        const char* g = bar_glyph_for(activity);
-        // The active cursor is signalled by a STYLE pulse (bold ↔ dim)
-        // below — we used to also swap glyph heights here every 8
-        // frames, but a changing glyph shape (▃ ↔ █) reads as vertical
-        // jitter on the row, not a "live indicator". Keep the height
-        // stable; let the color breath carry the aliveness cue.
-        dots.push_back({c, g, is_last && stream_active, is_user});
-    }
-
-    // Elide the middle when over budget: keep first + last (max-1) so the
-    // most recent turns stay visible and the very first turn anchors
-    // "where we started".
-    bool elided = false;
-    int orig_total = static_cast<int>(dots.size());
-    int orig_skipped_at_front = 0;
-    if (orig_total > max_cells) {
-        std::vector<Dot> kept;
-        kept.reserve(static_cast<std::size_t>(max_cells));
-        kept.push_back(dots.front());
-        // Reserve one slot for the elision marker; fill the rest from
-        // the tail.
-        int tail = max_cells - 2;
-        orig_skipped_at_front = orig_total - tail - 1;   // for recency math
-        for (std::size_t i = static_cast<std::size_t>(orig_total - tail);
-             i < dots.size(); ++i)
-            kept.push_back(dots[i]);
-        dots = std::move(kept);
-        elided = true;
-    }
-
-    std::vector<Element> parts;
-    parts.reserve(dots.size() * 2 + 4);
-    parts.push_back(text(" ", {}));
-    int n = static_cast<int>(dots.size());
-    for (int i = 0; i < n; ++i) {
-        const auto& d = dots[i];
-        if (elided && i == 1) {
-            parts.push_back(text("\xe2\x80\xa6 ", fg_dim(muted)));   // …
-        }
-        // Recency tier — turns near the right (most recent) stay full
-        // color; older turns dim progressively. Active turn always
-        // brightest. Tiers map to original-message indices so the
-        // "recent N" stays consistent across width changes.
-        //
-        // orig_idx = original index of this dot (re-derive after
-        // elision: i==0 → 0, i>=1 → orig_skipped_at_front + i - (elided ? 1 : 0))
-        int orig_idx = i;
-        if (elided) orig_idx = (i == 0) ? 0 : (orig_skipped_at_front + i);
-        int recency = orig_total - 1 - orig_idx;     // 0 = most recent
-        Style st;
-        if (d.active) {
-            // Active turn pulses with the spinner so it reads as "live".
-            bool bright = ((frame >> 4) & 1) == 0;
-            st = bright ? Style{}.with_fg(d.c).with_bold()
-                        : Style{}.with_fg(d.c);
-        } else if (recency == 0) {
-            st = Style{}.with_fg(d.c).with_bold();   // newest (no stream)
-        } else if (recency <= 3) {
-            st = Style{}.with_fg(d.c);               // recent — full color
-        } else {
-            st = Style{}.with_fg(d.c).with_dim();    // older — fade
-        }
-        parts.push_back(text(d.g, st));
-        if (i + 1 < n) parts.push_back(text(" ", {}));
-    }
-    return h(std::move(parts)).build();
-}
-
 // Stable-width compact tok/s + sparkline. Replaces maya::TokenStream's
 // compact mode, which uses %.1f for the rate (3–6 chars) and
 // format_with_commas for the total (1–9 chars) — both variable-width,
@@ -752,22 +632,6 @@ Element status_bar(const Model& m) {
         .layout = {},
     }};
 
-    // Horizontal turn mini-map — always renders as a fixed-height
-    // slot so the status bar's row count never changes at runtime.
-    // The minimap itself renders a blank line when there's only 1
-    // turn or when width < 50 cols; the slot stays 1 row either way.
-    int frame_for_map = m.s.spinner.frame_index();
-    auto minimap_row = Element{ComponentElement{
-        .render = [&m, frame_for_map](int w, int /*h*/) -> Element {
-            if (w < 50) return text(" ", {});
-            if (m.d.current.messages.size() < 2) return text(" ", {});
-            // Budget scales with width: ~14 turns on wide, fewer on narrow.
-            int budget = (w >= 100) ? 14 : (w >= 70 ? 10 : 7);
-            return turn_minimap(m, budget, frame_for_map);
-        },
-        .layout = {},
-    }};
-
     // Compose. Phase-tinted accent strips replace the prior dim ─
     // dividers — they read as "soft state shelves" rather than hard
     // rules, and they carry app-state info (color = current phase)
@@ -777,11 +641,9 @@ Element status_bar(const Model& m) {
     std::vector<Element> rows;
     rows.push_back(phase_accent(pcolor, /*position=*/0));   // ▔ top
     rows.push_back(activity_row);
-    // Minimap + status rows are ALWAYS appended — their inner content
-    // fades in/out, but the row count of the status bar is fixed so
-    // the composer above never bobs vertically when a toast appears
-    // or the first assistant turn lands.
-    rows.push_back(minimap_row);
+    // status_row is ALWAYS appended — its inner content fades in/out,
+    // but the row count of the status bar is fixed so the composer
+    // above never bobs vertically when a toast appears or disappears.
     rows.push_back(status_row);
     rows.push_back(shortcuts);
     rows.push_back(phase_accent(pcolor, /*position=*/1));   // ▁ bottom
