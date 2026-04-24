@@ -8,12 +8,17 @@
 // 200 lines of Win32 pipe plumbing per call site.
 //
 // Platform specifics:
-//   Windows → CreateProcessA with stdin redirected to NUL (prevents the
+//   Windows → CreateProcessW with stdin redirected to NUL (prevents the
 //             child from stealing keystrokes) and stdin's console mode saved
 //             + restored (prevents a child resetting ENABLE_LINE_INPUT from
-//             corrupting TUI input).
-//   POSIX   → popen wrapped in GNU `timeout` so hung commands can't block
-//             the worker thread forever; stderr merged into stdout via 2>&1.
+//             corrupting TUI input). Reader thread drains the pipe so a
+//             grandchild that inherits stdout can't deadlock the wait.
+//   POSIX   → posix_spawn + poll-based deadline. Shell form goes through
+//             /bin/sh -c; argv form execs directly. Timeouts are enforced
+//             in-process via SIGTERM (with a 2 s grace) → SIGKILL — no
+//             dependency on GNU coreutils `timeout`, which isn't on stock
+//             macOS. stdin redirected from /dev/null; stdout+stderr both
+//             dup2'd onto a single pipe so callers see merged output.
 //
 // Both paths stream captured bytes through the thread-local progress sink
 // (see moha/tool/registry.hpp) at most every ~80 ms, so the UI reveals live

@@ -2,6 +2,7 @@
 #include "moha/tool/registry.hpp"
 #include "moha/tool/util/utf8.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -21,6 +22,15 @@
 #    define NOMINMAX
 #  endif
 #  include <windows.h>
+#else
+#  include <cerrno>
+#  include <fcntl.h>
+#  include <poll.h>
+#  include <signal.h>
+#  include <spawn.h>
+#  include <sys/wait.h>
+#  include <unistd.h>
+extern char** environ;
 #endif
 
 namespace moha::tools::util {
@@ -293,62 +303,241 @@ SubprocessResult run_win32_cmdline(const std::string& cmdline,
 
 #else // POSIX
 
-std::string posix_shell_quote(const std::string& s) {
-    std::string out = "'";
-    for (char c : s) {
-        if (c == '\'') out += "'\\''";
-        else out += c;
+// In-process runner: posix_spawn the child with stdout+stderr piped back
+// here, then poll(2) the read end with a deadline. Replaces the previous
+// `popen("timeout ... sh -c ...")` design, which had two problems:
+//   1. macOS doesn't ship GNU `timeout` (it lives in coreutils → brew),
+//      so every bash call on a stock Mac failed at the shell layer.
+//   2. Even on Linux it stacked an extra process layer, made stderr
+//      structure invisible (forced 2>&1 in the shell), and gave us no
+//      handle to actually kill the child if shell quoting went sideways.
+//
+// The new design owns the entire lifecycle: we hold the pid, we send
+// SIGTERM at the deadline, we escalate to SIGKILL after a 2 s grace,
+// and we close the read end ourselves once the child reaps so a
+// grandchild that inherits the pipe can't block us forever (same edge
+// case the Windows path handles via the reader-thread grace + force-
+// close pattern).
+
+namespace {
+
+// Drain whatever's currently readable on `fd` without blocking.
+// Returns true if EOF (read==0) was observed; the caller uses that to
+// distinguish "more might come later" from "writer closed for good".
+bool drain_pipe(int fd, std::ostringstream& out, std::size_t& total,
+                std::size_t max_bytes, bool& truncated) {
+    if (fd < 0) return true;
+    char buf[4096];
+    for (;;) {
+        ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n > 0) {
+            if (truncated) continue;
+            std::size_t room = (total < max_bytes) ? max_bytes - total : 0;
+            std::size_t w = std::min<std::size_t>(static_cast<std::size_t>(n), room);
+            out.write(buf, static_cast<std::streamsize>(w));
+            total += w;
+            if (w < static_cast<std::size_t>(n)) truncated = true;
+            continue;
+        }
+        if (n == 0) return true;                          // EOF
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return false;
+        return true;                                       // fatal read error
     }
-    out += "'";
-    return out;
 }
 
-// popen-based runner wrapped in GNU `timeout` so a hung command (network
-// wait, infinite loop, REPL with no stdin close) can't block the worker
-// thread forever and freeze the UI on the spinner.
-SubprocessResult run_posix_shell(const std::string& cmd,
-                                 const SubprocessOptions& opts) {
+} // namespace
+
+// argv form: arguments passed verbatim, no shell. shell_command form:
+// `/bin/sh -c <cmd>`. Either way, env is inherited.
+SubprocessResult run_posix(const std::vector<std::string>& argv_in,
+                           bool                           use_shell,
+                           const SubprocessOptions&       opts) {
     SubprocessResult r;
-    std::string wrapped = "timeout --kill-after=2s "
-                        + std::to_string(opts.timeout.count())
-                        + "s sh -c " + posix_shell_quote(cmd) + " 2>&1";
-    FILE* pipe = popen(wrapped.c_str(), "r");
-    if (!pipe) { r.started = false; r.start_error = "popen failed"; return r; }
-    std::ostringstream out;
-    std::array<char, 4096> buf{};
-    size_t total = 0;
-    auto  last_emit = std::chrono::steady_clock::now();
-    bool  emit_dirty = false;
-    auto flush_progress = [&]{
-        if (!emit_dirty || !opts.on_progress) { emit_dirty = false; return; }
-        opts.on_progress(to_valid_utf8(out.str()));
-        emit_dirty = false;
-    };
-    while (fgets(buf.data(), (int)buf.size(), pipe)) {
-        size_t n = std::strlen(buf.data());
-        if (!r.truncated) {
-            if (total + n > (size_t)opts.max_bytes) {
-                out.write(buf.data(), (std::streamsize)((size_t)opts.max_bytes - total));
-                total = (size_t)opts.max_bytes;
-                r.truncated = true;
-            } else {
-                out << buf.data();
-                total += n;
-            }
-            emit_dirty = true;
-        }
-        auto now = std::chrono::steady_clock::now();
-        if (now - last_emit >= kEmitGap) {
-            flush_progress();
-            last_emit = now;
-        }
+
+    // Pipe (child stdout+stderr → parent). Set the parent end non-blocking
+    // so drain_pipe returns instead of stalling on partial reads. Use
+    // pipe2(O_CLOEXEC) where available so the fd doesn't leak to nested
+    // posix_spawns; fall back to fcntl on macOS.
+    int pipefd[2] = {-1, -1};
+#if defined(__linux__)
+    if (::pipe2(pipefd, O_CLOEXEC) != 0) {
+        r.started = false; r.start_error = "pipe2 failed: " + std::string{std::strerror(errno)};
+        return r;
     }
-    flush_progress();
-    int rc = pclose(pipe);
-    r.output = to_valid_utf8(out.str());
-    // GNU `timeout` exits 124 on timeout, 137 on KILL after grace.
-    if (rc == 124 * 256 || rc == 137 * 256) r.timed_out = true;
-    else r.exit_code = (rc >> 8) & 0xff;
+#else
+    if (::pipe(pipefd) != 0) {
+        r.started = false; r.start_error = "pipe failed: " + std::string{std::strerror(errno)};
+        return r;
+    }
+    (void)::fcntl(pipefd[0], F_SETFD, ::fcntl(pipefd[0], F_GETFD) | FD_CLOEXEC);
+    (void)::fcntl(pipefd[1], F_SETFD, ::fcntl(pipefd[1], F_GETFD) | FD_CLOEXEC);
+#endif
+    (void)::fcntl(pipefd[0], F_SETFL, ::fcntl(pipefd[0], F_GETFL) | O_NONBLOCK);
+
+    // file_actions: redirect stdin from /dev/null (so the child can't
+    // steal terminal input from the TUI), and stdout+stderr to the pipe
+    // write end. Close the read end in the child so grandchildren that
+    // inherit fds don't hold it open after the child itself exits.
+    posix_spawn_file_actions_t actions;
+    if (::posix_spawn_file_actions_init(&actions) != 0) {
+        ::close(pipefd[0]); ::close(pipefd[1]);
+        r.started = false; r.start_error = "posix_spawn_file_actions_init failed";
+        return r;
+    }
+    ::posix_spawn_file_actions_addopen(&actions, STDIN_FILENO,
+        "/dev/null", O_RDONLY, 0);
+    ::posix_spawn_file_actions_adddup2 (&actions, pipefd[1], STDOUT_FILENO);
+    ::posix_spawn_file_actions_adddup2 (&actions, pipefd[1], STDERR_FILENO);
+    ::posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+    ::posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+
+    // Build child argv. Shell form goes through `/bin/sh -c <cmd>` so
+    // pipes / redirects / globs work; argv form bypasses the shell for
+    // exact-arg fidelity (matters for `git commit -m "msg with $vars"`
+    // and similar where the shell would mangle the message).
+    std::vector<std::string> argv_storage;
+    if (use_shell) {
+        if (argv_in.empty()) {
+            ::posix_spawn_file_actions_destroy(&actions);
+            ::close(pipefd[0]); ::close(pipefd[1]);
+            r.started = false; r.start_error = "empty shell command";
+            return r;
+        }
+        argv_storage = {"sh", "-c", argv_in[0]};
+    } else {
+        argv_storage = argv_in;
+    }
+    std::vector<char*> arg_ptrs;
+    arg_ptrs.reserve(argv_storage.size() + 1);
+    for (auto& s : argv_storage) arg_ptrs.push_back(s.data());
+    arg_ptrs.push_back(nullptr);
+
+    pid_t pid = -1;
+    int rc = ::posix_spawnp(&pid, arg_ptrs[0], &actions, nullptr,
+                            arg_ptrs.data(), environ);
+    ::posix_spawn_file_actions_destroy(&actions);
+    ::close(pipefd[1]);   // parent never writes
+    pipefd[1] = -1;
+
+    if (rc != 0) {
+        ::close(pipefd[0]);
+        r.started = false;
+        r.start_error = "spawn failed: " + std::string{std::strerror(rc)};
+        return r;
+    }
+
+    using clock = std::chrono::steady_clock;
+    const auto start    = clock::now();
+    const auto deadline = (opts.timeout.count() > 0)
+        ? start + std::chrono::seconds(opts.timeout.count())
+        : clock::time_point::max();
+    constexpr auto kKillGrace = std::chrono::milliseconds{2000};
+
+    auto last_emit  = start;
+    auto kill_at    = clock::time_point::max();
+    bool sent_term  = false;
+    bool sent_kill  = false;
+    bool timed_out  = false;
+    bool eof        = false;
+    int  wait_status = 0;
+
+    std::ostringstream out;
+    std::size_t total     = 0;
+    bool        truncated = false;
+
+    auto emit_progress = [&]{
+        if (!opts.on_progress) return;
+        opts.on_progress(to_valid_utf8(out.str()));
+        last_emit = clock::now();
+    };
+
+    // Main poll loop. Exits as soon as we've got both EOF on the pipe AND
+    // a reaped child — the order can vary (child can exit before its
+    // last bytes drain on a heavily-buffered pipe; pipe can EOF before
+    // waitpid completes if the child is being reparented).
+    bool reaped = false;
+    while (!eof || !reaped) {
+        auto now = clock::now();
+
+        // Deadline state machine. SIGTERM first (cooperative shutdown),
+        // SIGKILL after a 2 s grace if still alive. timed_out is sticky
+        // so we report it even if the child happened to exit cleanly
+        // moments after we sent the signal.
+        if (!sent_term && now >= deadline) {
+            ::kill(pid, SIGTERM);
+            sent_term = true;
+            timed_out = true;
+            kill_at   = now + kKillGrace;
+        }
+        if (sent_term && !sent_kill && now >= kill_at) {
+            ::kill(pid, SIGKILL);
+            sent_kill = true;
+        }
+
+        // Compute the next event we care about and bound the poll
+        // accordingly. 100 ms ceiling so we still revisit the kill
+        // state even when the child is silent and no timer is close.
+        auto next = last_emit + kEmitGap;
+        if (!sent_term && deadline < next) next = deadline;
+        if (sent_term && !sent_kill && kill_at < next) next = kill_at;
+        auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           next - now).count();
+        if (wait_ms < 0)   wait_ms = 0;
+        if (wait_ms > 100) wait_ms = 100;
+
+        if (!eof) {
+            struct pollfd pfd{pipefd[0], POLLIN, 0};
+            int pn = ::poll(&pfd, 1, static_cast<int>(wait_ms));
+            if (pn > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
+                if (drain_pipe(pipefd[0], out, total, opts.max_bytes, truncated))
+                    eof = true;
+            } else if (pn < 0 && errno != EINTR) {
+                eof = true;   // poll error → stop trying to read
+            }
+        } else {
+            // Pipe is done; just sleep briefly until reap completes.
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(std::min<long>(wait_ms, 20)));
+        }
+
+        // Non-blocking reap. If the child is gone but the pipe's still
+        // open (grandchild inherited stdout), force-close the read end
+        // so the next loop iteration sees eof=true and we exit cleanly
+        // instead of waiting forever on a phantom writer.
+        if (!reaped) {
+            int status = 0;
+            pid_t w = ::waitpid(pid, &status, WNOHANG);
+            if (w == pid) {
+                wait_status = status;
+                reaped = true;
+                if (!eof) {
+                    // One last best-effort drain of buffered bytes the
+                    // child wrote between its final flush and exit.
+                    drain_pipe(pipefd[0], out, total, opts.max_bytes, truncated);
+                    ::close(pipefd[0]);
+                    pipefd[0] = -1;
+                    eof = true;
+                }
+            } else if (w < 0 && errno != EINTR && errno != ECHILD) {
+                // Genuinely unexpected — bail rather than spin.
+                reaped = true;
+            }
+        }
+
+        now = clock::now();
+        if (opts.on_progress && now - last_emit >= kEmitGap)
+            emit_progress();
+    }
+
+    if (pipefd[0] >= 0) ::close(pipefd[0]);
+    emit_progress();   // final flush so the UI sees the last bytes
+
+    if      (WIFEXITED  (wait_status)) r.exit_code = WEXITSTATUS(wait_status);
+    else if (WIFSIGNALED(wait_status)) r.exit_code = 128 + WTERMSIG(wait_status);
+    r.timed_out = timed_out;
+    r.truncated = truncated;
+    r.output    = to_valid_utf8(out.str());
     return r;
 }
 
@@ -385,21 +574,24 @@ SubprocessResult Subprocess::run(SubprocessOptions opts) {
     }
     return run_win32_cmdline(cmdline, opts);
 #else
-    std::string cmd;
     if (opts.shell_command) {
-        cmd = *opts.shell_command;
-    } else if (opts.argv) {
+        // Shell form: pass the whole command string as the single sh -c
+        // argument. The runner sets up sh "-c" "<cmd>" itself; no
+        // additional quoting needed (and we don't want any — the user
+        // passed shell syntax expecting it to be parsed verbatim).
+        return run_posix({*opts.shell_command}, /*use_shell=*/true, opts);
+    }
+    if (opts.argv) {
         if (opts.argv->empty()) {
             r.started = false; r.start_error = "empty command"; return r;
         }
-        for (size_t i = 0; i < opts.argv->size(); ++i) {
-            if (i) cmd.push_back(' ');
-            cmd += posix_shell_quote((*opts.argv)[i]);
-        }
-    } else {
-        r.started = false; r.start_error = "no command specified"; return r;
+        // argv form: exec directly with no shell in the loop. Preserves
+        // every byte of every arg, which is what callers like git_commit
+        // (commit messages with $vars / quotes / newlines) actually need.
+        return run_posix(*opts.argv, /*use_shell=*/false, opts);
     }
-    return run_posix_shell(cmd, opts);
+    r.started = false; r.start_error = "no command specified";
+    return r;
 #endif
 }
 

@@ -216,7 +216,15 @@ std::string write_file(const fs::path& p, std::string_view content) {
     _close(fd);
 #else
     if (had_mode) (void)::fchmod(fd, target_mode);
+    // Linux/FreeBSD have fdatasync (skips metadata flush, slightly faster);
+    // macOS only has fsync. The durability guarantee we need is the same —
+    // file contents committed to disk before the rename publishes them —
+    // so falling back to fsync on Apple costs a metadata block at most.
+#if defined(__APPLE__)
+    (void)::fsync(fd);
+#else
     (void)::fdatasync(fd);
+#endif
     ::close(fd);
 #endif
 

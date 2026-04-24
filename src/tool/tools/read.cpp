@@ -97,7 +97,15 @@ ExecResult run_read(const ReadArgs& a) {
             ++total_lines;
             int n = total_lines; // 1-based index of the line just ended
             if (n >= a.offset && shown < a.limit) {
-                out.append(content.data() + line_start, i - line_start + 1);
+                // Normalize CRLF → LF on emit. Without this, Windows-
+                // authored files come through to the model as `line\r\n`
+                // and any string-matching the model does against the
+                // read output silently fails (the embedded \r is invisible
+                // in most TUIs but very real to a string compare).
+                size_t end = i;
+                if (end > line_start && content[end - 1] == '\r') --end;
+                out.append(content.data() + line_start, end - line_start);
+                out.push_back('\n');
                 ++shown;
             }
             line_start = i + 1;
@@ -108,7 +116,9 @@ ExecResult run_read(const ReadArgs& a) {
         ++total_lines;
         int n = total_lines;
         if (n >= a.offset && shown < a.limit) {
-            out.append(content.data() + line_start, N - line_start);
+            size_t end = N;
+            if (end > line_start && content[end - 1] == '\r') --end;
+            out.append(content.data() + line_start, end - line_start);
             out.push_back('\n');
             ++shown;
         }
