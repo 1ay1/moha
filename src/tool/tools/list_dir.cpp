@@ -68,7 +68,21 @@ ExecResult run_list_dir(const ListDirArgs& a) {
             auto sz = entry.file_size(ec);
             out << indent << fn << "  " << format_size(ec ? 0 : sz) << "\n";
         } else if (entry.is_symlink(ec)) {
-            out << indent << fn << " -> " << fs::read_symlink(entry.path(), ec).string() << "\n";
+            // read_symlink can fail on Windows when the user lacks
+            // Developer Mode / admin privileges, on a broken symlink, or
+            // on filesystems that report symlink-ish entries without
+            // exposing the target (some FUSE mounts). Don't emit an
+            // empty `name -> ` row when that happens — show "<unreadable>"
+            // so the model can tell the entry exists but the target
+            // can't be resolved here.
+            std::error_code link_ec;
+            auto target = fs::read_symlink(entry.path(), link_ec);
+            if (link_ec) {
+                out << indent << fn << " -> <unreadable: "
+                    << link_ec.message() << ">\n";
+            } else {
+                out << indent << fn << " -> " << target.string() << "\n";
+            }
         }
         count++;
     };
