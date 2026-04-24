@@ -25,9 +25,18 @@ Cmd<Msg> launch_stream(Model& m) {
 
     if (m.d.profile != Profile::Minimal) {
         for (const auto& t : tools::registry()) {
-            if (m.d.profile == Profile::Ask
-                && (t.name == "write" || t.name == "edit" || t.name == "bash"))
-                continue;
+            // Ask profile hides the mutating/executing trio from the wire
+            // so the model can't even request them — it must ask the user
+            // to switch profile first. Closed-set Kind dispatch: adding
+            // another gated tool is an enum-arm change, not a new string
+            // compare to add here.
+            if (m.d.profile == Profile::Ask) {
+                auto k = tools::spec::kind_of(t.name.value);
+                if (k && (*k == tools::spec::Kind::Write
+                       || *k == tools::spec::Kind::Edit
+                       || *k == tools::spec::Kind::Bash))
+                    continue;
+            }
             req.tools.push_back({t.name.value, t.description, t.input_schema,
                                  t.eager_input_streaming});
         }

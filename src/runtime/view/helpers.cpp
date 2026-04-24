@@ -42,10 +42,15 @@ std::string_view phase_verb(const Phase& p) noexcept {
 maya::Color phase_color(const Phase& p) noexcept {
     return std::visit([](const auto& v) -> maya::Color {
         using T = std::decay_t<decltype(v)>;
+        // Use bright ANSI variants for active phases so the pulsing
+        // spinner in the status-bar chip reads as "alive" on every
+        // palette, not just high-contrast dark themes. `highlight`
+        // and `success` alone were landing on the desaturated end of
+        // several popular light themes.
         if      constexpr (std::same_as<T, phase::Idle>)               return muted;
-        else if constexpr (std::same_as<T, phase::Streaming>)          return highlight;
-        else if constexpr (std::same_as<T, phase::AwaitingPermission>) return warn;
-        else                                                           return success;
+        else if constexpr (std::same_as<T, phase::Streaming>)          return maya::Color::bright_cyan();
+        else if constexpr (std::same_as<T, phase::AwaitingPermission>) return maya::Color::bright_yellow();
+        else                                                           return maya::Color::bright_green();
     }, p);
 }
 

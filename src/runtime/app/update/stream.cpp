@@ -14,6 +14,7 @@
 
 #include "moha/runtime/app/cmd_factory.hpp"
 #include "moha/runtime/app/deps.hpp"
+#include "moha/tool/spec.hpp"
 #include "moha/tool/util/partial_json.hpp"
 
 namespace moha::app::detail {
@@ -103,42 +104,65 @@ std::string_view missing_required_field(std::string_view tool_name,
         }
         return false;
     };
-    if (tool_name == "write") {
-        if (!is_nonempty_string_any(kPathAliases))    return "path";
-        if (!is_nonempty_string_any(kContentAliases)) return "content";
-    } else if (tool_name == "edit") {
-        if (!is_nonempty_string_any(kPathAliases))    return "path";
-        auto it = args.find("edits");
-        if (it != args.end() && it->is_array() && !it->empty()) return {};
-        if (!is_nonempty_string_any(kOldStrAliases))  return "old_string";
-        if (!is_nonempty_string_any(kNewStrAliases))  return "new_string";
-    } else if (tool_name == "bash" || tool_name == "diagnostics") {
-        auto it = args.find("command");
-        if (it == args.end() || !it->is_string()
-            || it->get_ref<const std::string&>().empty()) return "command";
-    } else if (tool_name == "read" || tool_name == "list_dir"
-            || tool_name == "glob"
-            || tool_name == "git_diff"  || tool_name == "git_log") {
-        // `path` is nice-to-have but not strictly required (list_dir/glob
-        // default to cwd; read without path is already a tool error).
-    } else if (tool_name == "grep") {
-        auto it = args.find("pattern");
-        if (it == args.end() || !it->is_string()
-            || it->get_ref<const std::string&>().empty()) return "pattern";
-    } else if (tool_name == "find_definition") {
-        auto it = args.find("symbol");
-        if (it == args.end() || !it->is_string()
-            || it->get_ref<const std::string&>().empty()) return "symbol";
-    } else if (tool_name == "web_fetch") {
-        auto it = args.find("url");
-        if (it == args.end() || !it->is_string()
-            || it->get_ref<const std::string&>().empty()) return "url";
-    } else if (tool_name == "git_commit") {
-        auto it = args.find("message");
-        if (it == args.end() || !it->is_string()
-            || it->get_ref<const std::string&>().empty()) return "message";
+    auto is_nonempty_string = [&](std::string_view key) {
+        auto it = args.find(std::string{key});
+        return it != args.end() && it->is_string()
+            && !it->get_ref<const std::string&>().empty();
+    };
+
+    // Closed-set dispatch via spec::Kind. Tools not in the catalog
+    // (kind_of returns nullopt) get treated as "no required fields" so
+    // an unknown future tool isn't blocked by this guard — the runtime
+    // dispatcher will reject the unknown name with a typed error first.
+    auto kind = tools::spec::kind_of(tool_name);
+    if (!kind) return {};
+
+    using K = tools::spec::Kind;
+    switch (*kind) {
+        case K::Write:
+            if (!is_nonempty_string_any(kPathAliases))    return "path";
+            if (!is_nonempty_string_any(kContentAliases)) return "content";
+            return {};
+        case K::Edit: {
+            if (!is_nonempty_string_any(kPathAliases))    return "path";
+            auto it = args.find("edits");
+            if (it != args.end() && it->is_array() && !it->empty()) return {};
+            if (!is_nonempty_string_any(kOldStrAliases))  return "old_string";
+            if (!is_nonempty_string_any(kNewStrAliases))  return "new_string";
+            return {};
+        }
+        case K::Bash:
+        case K::Diagnostics:
+            if (!is_nonempty_string("command")) return "command";
+            return {};
+        case K::Grep:
+            if (!is_nonempty_string("pattern")) return "pattern";
+            return {};
+        case K::FindDefinition:
+            if (!is_nonempty_string("symbol")) return "symbol";
+            return {};
+        case K::WebFetch:
+            if (!is_nonempty_string("url")) return "url";
+            return {};
+        case K::GitCommit:
+            if (!is_nonempty_string("message")) return "message";
+            return {};
+        // `path` is nice-to-have but not strictly required for these
+        // (list_dir/glob default to cwd; read without path is already
+        // a tool error — surfacing it from the tool itself preserves
+        // the typed ToolError chain instead of converting to a stream-
+        // level salvage failure here).
+        case K::Read:
+        case K::ListDir:
+        case K::Glob:
+        case K::GitDiff:
+        case K::GitLog:
+        case K::GitStatus:
+        case K::WebSearch:
+        case K::Todo:
+            return {};
     }
-    return {};
+    return {};   // unreachable: switch is exhaustive over Kind
 }
 
 } // namespace

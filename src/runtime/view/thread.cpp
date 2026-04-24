@@ -394,18 +394,26 @@ Element rich_status_icon(const ToolUse& tc, int frame) {
         "\xe2\xa0\x87", "\xe2\xa0\x8f",
     };
     if (tc.is_running() || tc.is_approved()) {
-        return text(frames[frame % 10], Style{}.with_fg(info).with_bold());
+        // Bright cyan + bold. `info` alone reads as faint grey on a lot
+        // of low-contrast palettes (Solarized light, anything where the
+        // ANSI 4 maps to a desaturated blue) — bright_cyan is the most
+        // universally vivid "work in progress" color across themes.
+        return text(frames[frame % 10],
+                    Style{}.with_fg(Color::bright_cyan()).with_bold());
     }
     if (tc.is_pending()) {
-        // Dim muted spinner — visually lighter than the bright-info
-        // running spinner, so the user can still tell pending from
-        // running at a glance, but no row stays fully static while
-        // the model is emitting its args.
-        return text(frames[frame % 10], Style{}.with_fg(muted).with_dim());
+        // Pending = model is still streaming the tool's args. Used to
+        // be muted+dim, which on most palettes rendered as a barely-
+        // visible grey — a long edit args stream looked frozen. Now
+        // bright_yellow + bold so it's unmistakably alive while still
+        // being a different hue from the running cyan, so the user can
+        // tell "args streaming" from "executing" at a glance.
+        return text(frames[frame % 10],
+                    Style{}.with_fg(Color::bright_yellow()).with_bold());
     }
-    if (tc.is_done())     return text("\xe2\x9c\x93", fg_bold(success));   // ✓
-    if (tc.is_failed())   return text("\xe2\x9c\x97", fg_bold(danger));    // ✗
-    if (tc.is_rejected()) return text("\xe2\x8a\x98", fg_bold(warn));      // ⊘
+    if (tc.is_done())     return text("\xe2\x9c\x93", Style{}.with_fg(Color::bright_green()).with_bold());   // ✓
+    if (tc.is_failed())   return text("\xe2\x9c\x97", Style{}.with_fg(Color::bright_red()).with_bold());     // ✗
+    if (tc.is_rejected()) return text("\xe2\x8a\x98", Style{}.with_fg(Color::bright_yellow()).with_bold());  // ⊘
     return text("\xe2\x97\x8b", fg_dim(muted));                            // ○
 }
 

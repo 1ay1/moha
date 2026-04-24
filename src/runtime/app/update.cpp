@@ -89,7 +89,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             auto now = std::chrono::steady_clock::now();
             m.s.started          = now;
             m.s.last_event_at    = now;
-            m.s.stall_dispatched = false;       // fresh stream → re-arm watchdog
+            m.s.retry_state      = retry::Fresh{};       // fresh stream → re-arm watchdog
             // Fresh stream is alive — wipe any leftover toast (retry
             // countdown, "error: …", "cancelled") from the previous
             // attempt so the status row doesn't show a stale message
@@ -244,7 +244,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             // subsequent ones that arrive before that retry runs,
             // otherwise we'd race two worker threads into the same
             // session.
-            if (m.s.retry_pending) return done(std::move(m));
+            if (m.s.in_scheduled()) return done(std::move(m));
 
             // Worker thread is unwinding; drop the token so the next turn
             // (or scheduled retry) mints a fresh one.
@@ -271,7 +271,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             // — that's our doing, not the user's. Force-classify it as
             // Transient so the retry machinery treats it as a recoverable
             // upstream stall, not a user cancel.
-            if (m.s.stall_dispatched
+            if (m.s.in_stall_fired()
                 && klass == provider::ErrorClass::Cancelled) {
                 klass = provider::ErrorClass::Transient;
             }
@@ -312,7 +312,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 // Phase=Streaming keeps active() true → Tick subscription
                 // stays armed, the user sees the countdown / can Esc.
                 m.s.phase = phase::Streaming{};
-                m.s.retry_pending = true;     // dedupes follow-up StreamErrors
+                m.s.retry_state = retry::Scheduled{};  // dedupes follow-up StreamErrors
                 // Replace the half-formed turn with a fresh placeholder.
                 // launch_stream's contract is "caller has appended an
                 // Assistant placeholder" — every stream-event handler
@@ -373,12 +373,11 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             }
         },
         [&](RetryStream) -> Step {
-            // Scheduled retry fired. Clear the pending-flag so the
+            // Scheduled retry fired. Transition back to Fresh so the
             // freshly-launched stream's own errors flow through the
             // normal classifier path. If the user cancelled during the
-            // wait (Esc → CancelStream dropped phase to Idle and
-            // cleared retry_pending), do nothing.
-            m.s.retry_pending = false;
+            // wait (Esc → CancelStream dropped phase to Idle), do nothing.
+            m.s.retry_state = retry::Fresh{};
             if (m.s.is_idle()) return done(std::move(m));
             // Re-launch on the same context. launch_stream will mint a
             // new cancel token, append a placeholder assistant message,
@@ -402,8 +401,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 auto ttl = std::chrono::seconds{3};
                 m.s.status_until = now + ttl;
                 auto stamp = m.s.status_until;
-                m.s.retry_pending = false;     // any scheduled retry is moot
-                m.s.stall_dispatched = false;  // re-arm the watchdog cleanly
+                m.s.retry_state = retry::Fresh{};   // drop any Scheduled/StallFired
                 return {std::move(m), Cmd<Msg>::after(
                     std::chrono::duration_cast<std::chrono::milliseconds>(ttl)
                         + std::chrono::milliseconds{50},
@@ -796,10 +794,10 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             // legitimate model behaviour.
             constexpr auto kStallSecs = std::chrono::seconds(60);
             if (m.s.is_streaming() && m.s.active()
-                && !m.s.stall_dispatched
+                && m.s.in_fresh()
                 && m.s.last_event_at.time_since_epoch().count() != 0
                 && now - m.s.last_event_at >= kStallSecs) {
-                m.s.stall_dispatched = true;
+                m.s.retry_state = retry::StallFired{};
                 if (m.s.cancel) m.s.cancel->cancel();
                 auto since = std::chrono::duration_cast<std::chrono::seconds>(
                                  now - m.s.last_event_at).count();

@@ -26,6 +26,34 @@ struct ExecutingTool      {};
 using Phase = std::variant<phase::Idle, phase::Streaming,
                            phase::AwaitingPermission, phase::ExecutingTool>;
 
+// ── Retry / stall watchdog state machine ──────────────────────
+// Used to be two parallel bools (`stall_dispatched`, `retry_pending`)
+// that together encoded a 3-state machine; the invariants were comment-
+// only and hand-maintained across ~6 sites in the reducer. Now a proper
+// sum type:
+//
+//   Fresh        — stream alive, watchdog armed.
+//   StallFired   — watchdog tripped the cancel token, synthetic
+//                  StreamError is in flight. The worker thread's late
+//                  StreamError("cancelled") must be re-classified as
+//                  Transient, not user-cancel.
+//   Scheduled    — StreamError handler scheduled a RetryStream via
+//                  Cmd::after. A second StreamError arriving during the
+//                  wait must NOT schedule another retry.
+//
+// Transitions:
+//   Fresh       → StallFired  (Tick watchdog detects dead stream)
+//   Fresh       → Scheduled   (StreamError fires directly, non-stall)
+//   StallFired  → Scheduled   (the synthetic StreamError schedules retry)
+//   Scheduled   → Fresh       (RetryStream fires, fresh stream begins)
+//   any         → Fresh       (CancelStream, StreamStarted reset)
+namespace retry {
+struct Fresh      {};
+struct StallFired {};
+struct Scheduled  {};
+} // namespace retry
+using RetryState = std::variant<retry::Fresh, retry::StallFired, retry::Scheduled>;
+
 [[nodiscard]] constexpr std::string_view to_string(const Phase& p) noexcept {
     return std::visit([](const auto& v) -> std::string_view {
         using T = std::decay_t<decltype(v)>;
@@ -81,32 +109,27 @@ struct StreamState {
 
     std::shared_ptr<moha::http::CancelToken> cancel;
 
-    // ── Stream-stall watchdog ───────────────────────────────────────────
+    // ── Stream-stall watchdog ─────────────────────────────────────
     // Bumped on every SSE event the reducer processes (StreamStarted,
     // TextDelta, ToolUseStart/Delta/End, Usage). The Tick handler reads
     // it and force-fires a Transient error if no event has arrived for
     // longer than the stall threshold. Catches the case the http idle
     // timeout misses: server keeps the TCP/h2 connection alive (PING
-    // ACKs reset `last_rx`) but stops sending application-level
-    // events. Without this we'd wait the full 45 s http idle, even
-    // though the model has clearly stalled within a few seconds.
+    // ACKs reset `last_rx`) but stops sending application-level events.
     std::chrono::steady_clock::time_point last_event_at{};
 
-    // True between "watchdog fired the synthetic error" and "retry
-    // launched a fresh stream." Kept so the late StreamError("cancelled")
-    // from the worker thread (which unwinds when we trip the cancel
-    // token) doesn't get classified as user cancellation and short-
-    // circuit the retry. Reset to false in StreamStarted.
-    bool stall_dispatched = false;
+    // Retry/stall machine state. See the RetryState definition above
+    // for the full transition diagram. Replaces the legacy bool pair
+    // (stall_dispatched + retry_pending) which encoded the same 3-state
+    // progression with no help from the type system.
+    RetryState retry_state = retry::Fresh{};
 
-    // True between "StreamError handler scheduled a RetryStream" and
-    // "RetryStream fired (or user cancelled)." Deduplicates double
-    // retries: when the stall watchdog fires, it dispatches a synthetic
-    // StreamError; the worker thread's eventual StreamError("cancelled")
-    // arrives shortly after. Without this guard, the second one would
-    // match the retry conditions too and fire a second RetryStream,
-    // racing the first into two concurrent worker threads.
-    bool retry_pending = false;
+    // Predicates — read sites stay terse and self-documenting:
+    //   if (m.s.in_stall_fired()) reclassify_cancel_as_transient();
+    //   if (m.s.in_scheduled())   skip_double_retry();
+    [[nodiscard]] bool in_fresh()       const noexcept { return std::holds_alternative<retry::Fresh>(retry_state); }
+    [[nodiscard]] bool in_stall_fired() const noexcept { return std::holds_alternative<retry::StallFired>(retry_state); }
+    [[nodiscard]] bool in_scheduled()   const noexcept { return std::holds_alternative<retry::Scheduled>(retry_state); }
 
     // ── Phase predicates ─────────────────────────────────────────────────
     [[nodiscard]] bool is_idle()                const noexcept { return std::holds_alternative<phase::Idle>(phase); }

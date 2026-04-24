@@ -29,14 +29,20 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "moha/tool/effects.hpp"
+#include "moha/domain/id.hpp"
 
 namespace moha::tools::spec {
 
+enum class Kind : std::uint8_t;  // forward-declared; defined after ToolSpec
+
 struct ToolSpec {
     std::string_view name;            // wire identifier — must be unique
+    Kind             kind;            // closed-set discriminator; match `name`
     EffectSet        effects;         // capability set; drives the policy
     bool             eager_input_streaming;   // FGTS opt-in flag (Anthropic)
     // Wall-clock watchdog deadline. The reducer schedules
@@ -74,25 +80,69 @@ namespace detail {
 using sec = std::chrono::seconds;
 }
 
-inline constexpr std::array kCatalog = {
-    //         name              effects                              eager   timeout
-    ToolSpec{"read",            {Effect::ReadFs},                     false,   detail::sec{20}},
-    ToolSpec{"edit",            {Effect::ReadFs, Effect::WriteFs},    true,    detail::sec{30}},
-    ToolSpec{"write",           {Effect::WriteFs},                    true,    detail::sec{30}},
-    ToolSpec{"bash",            {Effect::Exec},                       true,    detail::sec{0}},   // subprocess-managed
-    ToolSpec{"grep",            {Effect::ReadFs},                     false,   detail::sec{90}},  // tree walks can be deep
-    ToolSpec{"glob",            {Effect::ReadFs},                     false,   detail::sec{60}},
-    ToolSpec{"list_dir",        {Effect::ReadFs},                     false,   detail::sec{20}},
-    ToolSpec{"todo",            {} /* pure */,                        true,    detail::sec{5}},   // in-memory only
-    ToolSpec{"web_fetch",       {Effect::Net},                        false,   detail::sec{30}},  // matches http total-timeout
-    ToolSpec{"web_search",      {Effect::Net},                        false,   detail::sec{20}},
-    ToolSpec{"find_definition", {Effect::ReadFs},                     false,   detail::sec{60}},
-    ToolSpec{"diagnostics",     {Effect::Exec},                       false,   detail::sec{0}},   // subprocess-managed
-    ToolSpec{"git_status",      {Effect::ReadFs},                     false,   detail::sec{20}},
-    ToolSpec{"git_diff",        {Effect::ReadFs},                     false,   detail::sec{30}},
-    ToolSpec{"git_log",         {Effect::ReadFs},                     false,   detail::sec{20}},
-    ToolSpec{"git_commit",      {Effect::WriteFs},                    true,    detail::sec{30}},
+// ── Closed-set identity for every tool in the catalog ───────────────────
+// A typed discriminator so call sites stop hand-rolling `name == "bash"`
+// string compares. Add a tool: add a Kind arm, add a row to the catalog
+// with the matching `kind`, and `kind_of("new_tool") == Kind::NewTool`
+// at compile time — the `static_assert` wall below proves every Kind has
+// exactly one catalog entry and every catalog entry has a Kind.
+//
+// Wire identity stays the `name` string field (Anthropic's vocabulary is
+// the source of truth on the wire); Kind is the internal closed set the
+// reducer/views dispatch on.
+enum class Kind : std::uint8_t {
+    Read,
+    Edit,
+    Write,
+    Bash,
+    Grep,
+    Glob,
+    ListDir,
+    Todo,
+    WebFetch,
+    WebSearch,
+    FindDefinition,
+    Diagnostics,
+    GitStatus,
+    GitDiff,
+    GitLog,
+    GitCommit,
 };
+
+inline constexpr std::array kCatalog = {
+    //         name              kind                  effects                              eager   timeout
+    ToolSpec{"read",            Kind::Read,           {Effect::ReadFs},                     false,   detail::sec{20}},
+    ToolSpec{"edit",            Kind::Edit,           {Effect::ReadFs, Effect::WriteFs},    true,    detail::sec{30}},
+    ToolSpec{"write",           Kind::Write,          {Effect::WriteFs},                    true,    detail::sec{30}},
+    ToolSpec{"bash",            Kind::Bash,           {Effect::Exec},                       true,    detail::sec{0}},   // subprocess-managed
+    ToolSpec{"grep",            Kind::Grep,           {Effect::ReadFs},                     false,   detail::sec{90}},  // tree walks can be deep
+    ToolSpec{"glob",            Kind::Glob,           {Effect::ReadFs},                     false,   detail::sec{60}},
+    ToolSpec{"list_dir",        Kind::ListDir,        {Effect::ReadFs},                     false,   detail::sec{20}},
+    ToolSpec{"todo",            Kind::Todo,           {} /* pure */,                        true,    detail::sec{5}},   // in-memory only
+    ToolSpec{"web_fetch",       Kind::WebFetch,       {Effect::Net},                        false,   detail::sec{30}},  // matches http total-timeout
+    ToolSpec{"web_search",      Kind::WebSearch,      {Effect::Net},                        false,   detail::sec{20}},
+    ToolSpec{"find_definition", Kind::FindDefinition, {Effect::ReadFs},                     false,   detail::sec{60}},
+    ToolSpec{"diagnostics",     Kind::Diagnostics,    {Effect::Exec},                       false,   detail::sec{0}},   // subprocess-managed
+    ToolSpec{"git_status",      Kind::GitStatus,      {Effect::ReadFs},                     false,   detail::sec{20}},
+    ToolSpec{"git_diff",        Kind::GitDiff,        {Effect::ReadFs},                     false,   detail::sec{30}},
+    ToolSpec{"git_log",         Kind::GitLog,         {Effect::ReadFs},                     false,   detail::sec{20}},
+    ToolSpec{"git_commit",      Kind::GitCommit,      {Effect::WriteFs},                    true,    detail::sec{30}},
+};
+
+// Wire-string → Kind. `std::nullopt` for names not in the catalog so the
+// caller (reducer guards, runtime dispatch) can react to an unknown tool
+// explicitly instead of silently falling through a string compare chain.
+[[nodiscard]] constexpr std::optional<Kind> kind_of(std::string_view name) noexcept {
+    for (const auto& s : kCatalog) if (s.name == name) return s.kind;
+    return std::nullopt;
+}
+
+// Kind → wire-string. Total: every Kind has an entry by the static_assert
+// wall below, so the fallback is unreachable in well-formed builds.
+[[nodiscard]] constexpr std::string_view name_of(Kind k) noexcept {
+    for (const auto& s : kCatalog) if (s.kind == k) return s.name;
+    return {};
+}
 
 // Compile-time lookup. Returns a pointer to the spec, or nullptr if
 // the name doesn't exist. Used by the runtime factories to populate
@@ -144,6 +194,36 @@ consteval bool all_names_unique() {
     return true;
 }
 static_assert(all_names_unique(), "tool catalog has duplicate names");
+
+// Every Kind arm appears exactly once in the catalog. Pair with the name
+// uniqueness check: together they prove `kind_of(name)` is injective and
+// `name_of(kind)` is total.
+consteval bool kinds_bijective() {
+    constexpr Kind kAll[] = {
+        Kind::Read, Kind::Edit, Kind::Write, Kind::Bash,
+        Kind::Grep, Kind::Glob, Kind::ListDir, Kind::Todo,
+        Kind::WebFetch, Kind::WebSearch, Kind::FindDefinition,
+        Kind::Diagnostics, Kind::GitStatus, Kind::GitDiff,
+        Kind::GitLog, Kind::GitCommit,
+    };
+    if (std::size(kAll) != kCatalog.size()) return false;
+    for (auto k : kAll) {
+        int hits = 0;
+        for (const auto& s : kCatalog) if (s.kind == k) ++hits;
+        if (hits != 1) return false;
+    }
+    // And for every row the reverse holds (name↔kind round-trip).
+    for (const auto& s : kCatalog) {
+        auto k = kind_of(s.name);
+        if (!k || *k != s.kind) return false;
+        if (name_of(s.kind) != s.name) return false;
+    }
+    return true;
+}
+static_assert(kinds_bijective(),
+              "spec::Kind and kCatalog must be in bijection — every Kind arm "
+              "needs exactly one row whose `kind` matches and whose `name` "
+              "round-trips through kind_of/name_of");
 
 // Every tool has a non-empty name (the wire requires it).
 consteval bool all_names_present() {
