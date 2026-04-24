@@ -58,5 +58,20 @@ void apply_tool_output(Model& m, const ToolCallId& id,
 void mark_tool_rejected(Model& m, const ToolCallId& id,
                         std::string_view reason);
 
+// ── update/login.cpp ─────────────────────────────────────────────────────
+// In-app login modal reducer arms. Live in their own TU because the OAuth
+// flow needs auth + cmd_factory + view helpers that update.cpp would
+// otherwise have to drag in just for one modal.
+Step open_login           (Model m);
+Step close_login          (Model m);
+Step login_pick_method    (Model m, char32_t key);
+Step login_char_input     (Model m, char32_t ch);
+Step login_backspace      (Model m);
+Step login_paste          (Model m, std::string text);
+Step login_cursor_left    (Model m);
+Step login_cursor_right   (Model m);
+Step login_submit         (Model m);
+Step login_exchanged      (Model m, moha::auth::TokenResult result);
+
 } // namespace detail
 } // namespace moha::app

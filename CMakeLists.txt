@@ -316,6 +316,7 @@ set(MOHA_RUNTIME_NOMAIN_SOURCES
     src/runtime/app/update/stream.cpp
     src/runtime/app/update/modal.cpp
     src/runtime/app/update/tool.cpp
+    src/runtime/app/update/login.cpp
     src/runtime/app/subscribe.cpp
 
     src/runtime/view/cache.cpp
@@ -329,6 +330,7 @@ set(MOHA_RUNTIME_NOMAIN_SOURCES
     src/runtime/view/pickers.cpp
     src/runtime/view/diff_review.cpp
     src/runtime/view/permission.cpp
+    src/runtime/view/login.cpp
     src/runtime/view/view.cpp
 )
 

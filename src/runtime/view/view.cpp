@@ -1,8 +1,10 @@
 #include "moha/runtime/view/view.hpp"
 
+#include "moha/runtime/login.hpp"
 #include "moha/runtime/view/changes.hpp"
 #include "moha/runtime/view/composer.hpp"
 #include "moha/runtime/view/diff_review.hpp"
+#include "moha/runtime/view/login.hpp"
 #include "moha/runtime/view/pickers.hpp"
 #include "moha/runtime/view/statusbar.hpp"
 #include "moha/runtime/view/thread.hpp"
@@ -23,7 +25,10 @@ Element view(const Model& m) {
     Element overlay;
     bool has_overlay = false;
 
-    if      (pick::is_open(m.ui.model_picker)) { overlay = model_picker(m);  has_overlay = true; }
+    // Login modal precedes the others — auth is the gating step, no
+    // other UI should appear over it.
+    if      (login::is_open(m.ui.login))       { overlay = login_modal(m);  has_overlay = true; }
+    else if (pick::is_open(m.ui.model_picker)) { overlay = model_picker(m);  has_overlay = true; }
     else if (pick::is_open(m.ui.thread_list))  { overlay = thread_list(m);   has_overlay = true; }
     else if (is_open(m.ui.command_palette))    { overlay = command_palette(m);has_overlay = true; }
     else if (pick::is_open(m.ui.diff_review))  { overlay = diff_review(m);   has_overlay = true; }

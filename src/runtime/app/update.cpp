@@ -692,6 +692,18 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             return done(std::move(m));
         },
 
+        // ── In-app login modal ──────────────────────────────────────────
+        [&](OpenLogin)              -> Step { return detail::open_login(std::move(m)); },
+        [&](CloseLogin)             -> Step { return detail::close_login(std::move(m)); },
+        [&](LoginPickMethod& e)     -> Step { return detail::login_pick_method(std::move(m), e.key); },
+        [&](LoginCharInput& e)      -> Step { return detail::login_char_input(std::move(m), e.ch); },
+        [&](LoginBackspace)         -> Step { return detail::login_backspace(std::move(m)); },
+        [&](LoginPaste& e)          -> Step { return detail::login_paste(std::move(m), std::move(e.text)); },
+        [&](LoginCursorLeft)        -> Step { return detail::login_cursor_left(std::move(m)); },
+        [&](LoginCursorRight)       -> Step { return detail::login_cursor_right(std::move(m)); },
+        [&](LoginSubmit)            -> Step { return detail::login_submit(std::move(m)); },
+        [&](LoginExchanged& e)      -> Step { return detail::login_exchanged(std::move(m), std::move(e.result)); },
+
         // ── Profile ─────────────────────────────────────────────────────
         [&](CycleProfile) -> Step {
             m.d.profile = m.d.profile == Profile::Write   ? Profile::Ask

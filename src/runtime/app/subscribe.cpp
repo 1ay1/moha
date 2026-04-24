@@ -4,6 +4,7 @@
 #include <optional>
 #include <variant>
 
+#include "moha/runtime/login.hpp"
 #include "moha/runtime/picker.hpp"
 
 namespace moha::app {
@@ -112,6 +113,46 @@ std::optional<Msg> on_todo_modal(const KeyEvent& ev) {
     return std::nullopt;
 }
 
+// Login modal — dispatches based on which sub-state we're in.
+// Picking accepts only '1'/'2' (and Esc to close);
+// OAuthCode + ApiKeyInput consume free-text input + cursor keys + Enter;
+// OAuthExchanging consumes only Esc (cancel back to Picking is fine);
+// Failed accepts any key to return to Picking.
+std::optional<Msg> on_login(const ui::login::State& state, const KeyEvent& ev) {
+    using namespace moha::ui::login;
+
+    // Esc always closes — gives the user an out from any sub-state.
+    if (std::holds_alternative<SpecialKey>(ev.key)
+        && std::get<SpecialKey>(ev.key) == SpecialKey::Escape)
+        return CloseLogin{};
+
+    if (std::holds_alternative<Picking>(state)
+        || std::holds_alternative<Failed>(state)) {
+        if (auto* ck = std::get_if<CharKey>(&ev.key))
+            return LoginPickMethod{ck->codepoint};
+        return std::nullopt;
+    }
+
+    if (std::holds_alternative<OAuthExchanging>(state)) {
+        // Awaiting HTTP completion. No keys accepted besides Esc (above).
+        return NoOp{};
+    }
+
+    // OAuthCode or ApiKeyInput — both accept free-text input.
+    if (std::holds_alternative<SpecialKey>(ev.key)) {
+        switch (std::get<SpecialKey>(ev.key)) {
+            case SpecialKey::Enter:     return LoginSubmit{};
+            case SpecialKey::Backspace: return LoginBackspace{};
+            case SpecialKey::Left:      return LoginCursorLeft{};
+            case SpecialKey::Right:     return LoginCursorRight{};
+            default: return std::nullopt;
+        }
+    }
+    if (auto* ck = std::get_if<CharKey>(&ev.key))
+        if (ck->codepoint >= 0x20) return LoginCharInput{ck->codepoint};
+    return std::nullopt;
+}
+
 std::optional<Msg> on_global(const KeyEvent& ev) {
     if (ev.mods.ctrl) {
         if (auto* ck = std::get_if<CharKey>(&ev.key)) {
@@ -174,11 +215,16 @@ Sub<Msg> subscribe(const Model& m) {
     const bool in_threads = pick::is_open(m.ui.thread_list);
     const bool in_diff    = pick::is_open(m.ui.diff_review);
     const bool in_todo    = pick::is_open(m.ui.todo.open);
+    const bool in_login   = ui::login::is_open(m.ui.login);
     const bool streaming  = m.s.active()
                          && !m.s.is_awaiting_permission();
 
     auto key_sub = Sub<Msg>::on_key(
-        [=](const KeyEvent& ev) -> std::optional<Msg> {
+        [=, login_state = m.ui.login](const KeyEvent& ev) -> std::optional<Msg> {
+            // Login modal owns the whole keyboard — auth is the gating
+            // step, no other UI is reachable until the user finishes
+            // (or Escs out, which is allowed but leaves moha unauth'd).
+            if (in_login)   return on_login(login_state, ev);
             if (in_perm)    return on_permission(ev);
             if (in_cmd)     return on_command_palette(ev);
             if (in_models)  return on_model_picker(ev);
@@ -196,7 +242,11 @@ Sub<Msg> subscribe(const Model& m) {
             return on_composer(ev);
         });
 
-    auto paste_sub = Sub<Msg>::on_paste([](std::string s) -> Msg {
+    auto paste_sub = Sub<Msg>::on_paste([in_login](std::string s) -> Msg {
+        // Pastes go to the login modal's text fields when it's open
+        // (users will paste OAuth codes / API keys); otherwise they're
+        // composer pastes.
+        if (in_login) return LoginPaste{std::move(s)};
         return ComposerPaste{std::move(s)};
     });
 

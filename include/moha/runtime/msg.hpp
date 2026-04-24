@@ -5,6 +5,7 @@
 #include <string>
 #include <variant>
 
+#include "moha/auth/auth.hpp"
 #include "moha/runtime/model.hpp"
 #include "moha/tool/registry.hpp"
 
@@ -99,6 +100,26 @@ struct CancelStream {};
 // when this Msg fires, the stream is re-launched on the same context.
 // The user can intercept with Esc → CancelStream during the wait.
 struct RetryStream {};
+
+// ── In-app login modal ───────────────────────────────────────────────────
+// Shown when the user starts moha with no valid credentials, OR
+// triggered explicitly from the command palette to switch accounts.
+// Same state-machine flavor as the other modals: closed → picking →
+// {oauth_code | api_key_input} → done. The async OAuth exchange runs
+// on a worker thread (Cmd::task) and reports back via LoginExchanged.
+struct OpenLogin {};
+struct CloseLogin {};
+struct LoginPickMethod  { char32_t key; };          // '1' = OAuth, '2' = ApiKey
+struct LoginCharInput   { char32_t ch; };
+struct LoginBackspace   {};
+struct LoginPaste       { std::string text; };
+struct LoginCursorLeft  {};
+struct LoginCursorRight {};
+struct LoginSubmit      {};
+// Result of the async OAuth code-exchange. Carries the typed
+// `auth::TokenResult` so the reducer can distinguish ApiError /
+// Network / MissingToken without parsing strings.
+struct LoginExchanged   { moha::auth::TokenResult result; };
 
 // ── Tool execution (local) ───────────────────────────────────────────────
 // Tool finished executing. `result` is `expected<output_text, ToolError>`
@@ -203,6 +224,8 @@ using Msg = std::variant<
     OpenCommandPalette, CloseCommandPalette, CommandPaletteInput,
     CommandPaletteBackspace, CommandPaletteMove, CommandPaletteSelect,
     OpenTodoModal, CloseTodoModal, UpdateTodos,
+    OpenLogin, CloseLogin, LoginPickMethod, LoginCharInput, LoginBackspace,
+    LoginPaste, LoginCursorLeft, LoginCursorRight, LoginSubmit, LoginExchanged,
     CycleProfile,
     OpenDiffReview, CloseDiffReview, DiffReviewMove,
     DiffReviewNextFile, DiffReviewPrevFile,

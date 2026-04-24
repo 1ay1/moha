@@ -19,4 +19,10 @@ void install_deps(Deps d) {
     g_deps = &storage;
 }
 
+void update_auth(std::string header, auth::Style style) {
+    if (!g_deps) return;
+    g_deps->auth_header = std::move(header);
+    g_deps->auth_style  = style;
+}
+
 } // namespace moha::app

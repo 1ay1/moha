@@ -125,6 +125,23 @@ using TokenResult = std::expected<OAuthToken, OAuthError>;
                                         const OAuthState& state);
 [[nodiscard]] TokenResult refresh_access_token(const RefreshToken& refresh_token);
 
+// Build the claude.ai authorize URL the user must visit to grant moha
+// access. Pure: same inputs, same URL — no side effects, safe to call
+// from the reducer. The in-app login modal calls this once when it
+// transitions Picking → OAuthCode so the URL can be both shown to the
+// user (fallback if the browser launch fails) and handed to
+// `open_browser` via a Cmd::task.
+[[nodiscard]] std::string oauth_authorize_url(const PkceVerifier& verifier,
+                                              const OAuthState&   state);
+
+// Fire-and-forget: open the user's default browser pointing at `url`.
+// Uses `xdg-open` / `open` / `ShellExecute` depending on platform.
+// Always returns immediately — the system command is backgrounded with
+// `&`, so this is safe to call from the UI thread, but it is also fine
+// (and cleaner) to wrap in a Cmd::task so a wedged opener doesn't
+// stall the reducer tick.
+void open_browser(const std::string& url);
+
 // Resolve credentials following the documented priority order.
 // `cli_api_key` (from `-k`) takes top priority if non-empty. Auto-refresh
 // expired OAuth tokens when refresh_token is available.

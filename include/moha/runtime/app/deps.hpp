@@ -44,6 +44,13 @@ struct Deps {
 [[nodiscard]] const Deps& deps();
 void install_deps(Deps d);
 
+// Live-replace just the auth context after install. Used by the in-app
+// login modal: when the user finishes signing in, the reducer dispatches
+// a Cmd that calls this so the next stream pick up the new bearer
+// without restarting the process. Safe to call from the UI thread —
+// streams in flight cache the header at request-build time.
+void update_auth(std::string header, auth::Style style);
+
 // Convenience: bind a Provider + Store satisfying the concepts.
 template <provider::Provider P, store::Store S>
 void install(P& p, S& s, std::string auth_header, auth::Style style) {

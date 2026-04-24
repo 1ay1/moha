@@ -18,6 +18,7 @@
 #include "moha/domain/session.hpp"
 #include "moha/domain/todo.hpp"
 #include "moha/runtime/command_palette.hpp"
+#include "moha/runtime/login.hpp"
 #include "moha/runtime/picker.hpp"
 
 namespace moha {
@@ -71,6 +72,7 @@ struct Model {
         CommandPaletteState command_palette;
         ui::pick::TwoAxis   diff_review;      // Closed | OpenAtCell{file_index,hunk_index}
         TodoState           todo;
+        ui::login::State    login;            // Closed | Picking | OAuthCode | OAuthExchanging | ApiKeyInput | Failed
         int                 thread_scroll = 0;
         // Index of the first message the view should render.  Messages
         // before this point are committed to the terminal's native

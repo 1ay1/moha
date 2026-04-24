@@ -447,6 +447,22 @@ static TokenResult parse_token_json(const std::string& body, int http_status) {
     return tok;
 }
 
+std::string oauth_authorize_url(const PkceVerifier& verifier,
+                                const OAuthState&   state) {
+    std::string challenge = code_challenge_s256(verifier.value);
+    std::ostringstream url;
+    url << OAuthConfig::authorize_url
+        << "?response_type=code"
+        << "&client_id="             << OAuthConfig::client_id
+        << "&redirect_uri="          << url_escape(OAuthConfig::redirect_uri)
+        << "&scope="                 << url_escape(OAuthConfig::scopes)
+        << "&state="                 << state.value
+        << "&code_challenge="        << challenge
+        << "&code_challenge_method=S256"
+        << "&code=true";
+    return url.str();
+}
+
 TokenResult exchange_code(const OAuthCode& code,
                           const PkceVerifier& verifier,
                           const OAuthState& state) {
@@ -539,7 +555,7 @@ Credentials resolve(const std::string& cli_api_key) {
 // Browser launch
 // ---------------------------------------------------------------------------
 
-static void open_browser(const std::string& url) {
+void open_browser(const std::string& url) {
 #ifdef _WIN32
     ::ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #elif defined(__APPLE__)
@@ -581,21 +597,9 @@ int cmd_login() {
 
     // OAuth PKCE flow
     PkceVerifier verifier{random_urlsafe(128)};
-    std::string  challenge = code_challenge_s256(verifier.value);
     OAuthState   state{random_urlsafe(32)};
+    std::string  auth_url = oauth_authorize_url(verifier, state);
 
-    std::ostringstream url;
-    url << OAuthConfig::authorize_url
-        << "?response_type=code"
-        << "&client_id="             << OAuthConfig::client_id
-        << "&redirect_uri="          << url_escape(OAuthConfig::redirect_uri)
-        << "&scope="                 << url_escape(OAuthConfig::scopes)
-        << "&state="                 << state.value
-        << "&code_challenge="        << challenge
-        << "&code_challenge_method=S256"
-        << "&code=true";
-
-    std::string auth_url = url.str();
     std::cout << "\nOpening browser to authorize moha...\n"
               << auth_url << "\n\n";
     open_browser(auth_url);

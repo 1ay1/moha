@@ -27,4 +27,18 @@ namespace moha::app::cmd {
 
 [[nodiscard]] maya::Cmd<Msg> fetch_models();
 
+// ── In-app login modal ──────────────────────────────────────────────────
+// Fire-and-forget: shells out to the platform browser opener. Wrapped in
+// Cmd::task so a wedged xdg-open / open / ShellExecute can never block
+// the reducer tick.
+[[nodiscard]] maya::Cmd<Msg> open_browser_async(std::string url);
+
+// Run the OAuth code-exchange HTTP POST off the UI thread. Dispatches
+// LoginExchanged{result} on completion regardless of success/failure —
+// the reducer matches on `expected<OAuthToken, OAuthError>` to decide
+// whether to install creds or transition to Failed.
+[[nodiscard]] maya::Cmd<Msg> oauth_exchange(auth::OAuthCode    code,
+                                            auth::PkceVerifier verifier,
+                                            auth::OAuthState   state);
+
 } // namespace moha::app::cmd

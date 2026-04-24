@@ -1,4 +1,5 @@
 #include "moha/runtime/app/program.hpp"
+#include "moha/runtime/login.hpp"
 #include "moha/runtime/view/helpers.hpp"
 
 namespace moha::app {
@@ -31,6 +32,15 @@ Model init() {
 
     m.d.current.id  = deps().new_thread_id();
     m.s.status = "ready";
+
+    // No credentials installed yet → main() invoked install() with an
+    // empty header. Open the login modal so the user can authenticate
+    // without leaving the TUI; subscribe.cpp routes all input there
+    // until they finish (or Esc out, leaving moha unauth'd — they'll
+    // hit a stream error on first send and can /login from the palette).
+    if (deps().auth_header.empty())
+        m.ui.login = ui::login::Picking{};
+
     return m;
 }
 

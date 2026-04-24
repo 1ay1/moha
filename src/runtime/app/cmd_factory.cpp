@@ -5,6 +5,7 @@
 #include <ranges>
 #include <utility>
 
+#include "moha/auth/auth.hpp"
 #include "moha/runtime/app/deps.hpp"
 #include "moha/runtime/app/update/internal.hpp"
 #include "moha/io/http.hpp"
@@ -245,6 +246,38 @@ Cmd<Msg> fetch_models() {
             dispatch(StreamError{"models fetch: unknown exception"});
         }
     });
+}
+
+Cmd<Msg> open_browser_async(std::string url) {
+    return Cmd<Msg>::task([url = std::move(url)](std::function<void(Msg)>) {
+        // No dispatch — the reducer doesn't care whether the browser
+        // launched. The user can always paste auth_url manually from
+        // the modal if their default opener is broken.
+        auth::open_browser(url);
+    });
+}
+
+Cmd<Msg> oauth_exchange(auth::OAuthCode    code,
+                        auth::PkceVerifier verifier,
+                        auth::OAuthState   state) {
+    return Cmd<Msg>::task(
+        [code = std::move(code),
+         verifier = std::move(verifier),
+         state = std::move(state)]
+        (std::function<void(Msg)> dispatch) {
+            try {
+                auto r = auth::exchange_code(code, verifier, state);
+                dispatch(LoginExchanged{std::move(r)});
+            } catch (const std::exception& e) {
+                dispatch(LoginExchanged{std::unexpected(auth::OAuthError{
+                    auth::OAuthErrorKind::Network,
+                    std::string{"exchange threw: "} + e.what()})});
+            } catch (...) {
+                dispatch(LoginExchanged{std::unexpected(auth::OAuthError{
+                    auth::OAuthErrorKind::Network,
+                    "exchange threw: unknown exception"})});
+            }
+        });
 }
 
 } // namespace moha::app::cmd

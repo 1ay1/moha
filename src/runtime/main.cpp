@@ -125,15 +125,12 @@ int main(int argc, char** argv) {
     if (args.subcommand == "logout") return auth::cmd_logout();
     if (args.subcommand == "status") return auth::cmd_status();
 
+    // Missing creds is no longer a fatal error: we install with an empty
+    // auth header, init.cpp opens the in-app login modal, and the user
+    // finishes signing in inside the TUI. The reducer's LoginExchanged /
+    // LoginSubmit handlers call auth::update_auth() which live-swaps the
+    // creds in the Deps without requiring a process restart.
     auto creds = auth::resolve(args.cli_key);
-    if (!auth::is_valid(creds)) {
-        std::fprintf(stderr,
-            "moha: not authenticated.\n"
-            "  run:  moha login\n"
-            "  or:   export ANTHROPIC_API_KEY=sk-ant-...\n"
-            "  or:   export CLAUDE_CODE_OAUTH_TOKEN=...\n");
-        return 1;
-    }
 
     if (!args.cli_model.empty()) {
         auto s = persistence::load_settings();
