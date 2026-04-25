@@ -101,7 +101,7 @@ ExecResult run_web_fetch(const WebFetchArgs& a) {
     req.host = u->host;
     req.port = u->port;
     req.path = u->path;
-    req.headers.push_back({"user-agent", "moha/0.1"});
+    req.headers.push_back({"user-agent", std::string{moha::kUserAgent}});
     for (const auto& [k, v] : a.headers) {
         std::string lower; lower.reserve(k.size());
         for (char c : k) lower.push_back(static_cast<char>(std::tolower(c)));

@@ -1621,50 +1621,56 @@ Element investigate_body(const ToolUse& tc, float elapsed) {
                 icon_st = Style{}.with_fg(danger).with_bold();
             }
 
-            // Per-row width discipline. The row carries (in order):
-            //   icon · name · arg · [res|err] · ms
-            // Two failure modes broke the layout before:
-            //   (a) success rows with a verbose `res` blew past
-            //       terminal width when paired with a longish path.
-            //   (b) failed rows shoved arg+res+err onto one row;
-            //       the err alone is often >50 chars (model error
-            //       messages reference absolute paths). Width cap
-            //       only saw arg+res so err overflowed.
+            // Per-row layout:
+            //   rail · icon · name · arg · [sec] · spacer · ms
             //
-            // Fix:
-            //   * Failed rows suppress `res` entirely (it's
-            //     meaningless when the call errored — and worse,
-            //     the parser sometimes mis-attributes a sibling's
-            //     `res` to a same-named failure, putting "L1-100 of
-            //     403" on a "file not found" row).
-            //   * Combined cap counts (arg + secondary) where
-            //     secondary = err on failure, res on success.
-            //   * Failure secondary uses tighter cap (40 chars) so
-            //     the error stays scannable.
+            // Width discipline (more aggressive than before — was
+            // breaking the layout on failed rows where err is often
+            // longer than the path):
+            //   * Drop the "·" separator when `arg` is empty —
+            //     leaving "name  ·  err" with a phantom column gap
+            //     looks broken (it's what you saw in the screenshot).
+            //   * Strip the leading "[<kind>] " framing from err —
+            //     the red ✗ icon already conveys "this failed"; the
+            //     framing tag is redundant noise that eats width.
+            //   * Combined cap dropped from 90 → 80 chars so the row
+            //     stays inside an 80-column terminal cleanly.
+            //   * Failed-row secondary (err) gets the tighter cap so
+            //     the error message stays scannable.
             std::string arg_disp = tr.arg_summary;
-            std::string sec_disp;          // either res or err
+            std::string sec_disp;
             bool        sec_is_err = false;
             if (!tr.ok && !tr.running) {
                 sec_disp   = tr.err;
                 sec_is_err = true;
+                // Strip the "[<kind>] " framing prefix that
+                // ToolError::render() adds — the icon column already
+                // says "this failed", we don't need to repeat the
+                // category in text. Keeps the visible message focused
+                // on what actually went wrong.
+                if (sec_disp.starts_with("[")) {
+                    if (auto rb = sec_disp.find("] ");
+                        rb != std::string::npos) {
+                        sec_disp.erase(0, rb + 2);
+                    }
+                }
             } else if (tr.ok) {
                 sec_disp = tr.res_summary;
             }
-            // Per-piece tighter cap for the secondary field.
-            const std::size_t kSecCap = sec_is_err ? 40u : 50u;
+            const std::size_t kSecCap = sec_is_err ? 36u : 48u;
             if (sec_disp.size() > kSecCap) {
                 sec_disp.resize(kSecCap - 1);
                 sec_disp += "\xe2\x80\xa6";
             }
-            // Combined ceiling: arg + " · " + sec ≤ 90 chars.
-            constexpr std::size_t kCombinedCap = 90;
-            std::size_t want = arg_disp.size() + sec_disp.size()
-                             + (sec_disp.empty() ? 0 : 4);
+            constexpr std::size_t kCombinedCap = 80;
+            const std::size_t sep_width = (arg_disp.empty()
+                                         || sec_disp.empty()) ? 0u : 4u;
+            std::size_t want = arg_disp.size() + sec_disp.size() + sep_width;
             if (want > kCombinedCap) {
                 std::size_t over = want - kCombinedCap;
                 if (!sec_disp.empty()) {
-                    if (over >= sec_disp.size() + 4) {
-                        over -= sec_disp.size() + 4;
+                    if (over >= sec_disp.size() + sep_width) {
+                        over -= sec_disp.size() + sep_width;
                         sec_disp.clear();
                     } else {
                         sec_disp.resize(sec_disp.size() - over - 1);
@@ -1683,21 +1689,22 @@ Element investigate_body(const ToolUse& tc, float elapsed) {
             tcells.push_back(text("    " + icon, icon_st));
             tcells.push_back(text(pad_right(tr.name, name_w),
                 Style{}.with_fg(kind_color(tr.name))));
-            // Arg summary (path / pattern / query / etc.) — the *what*
-            // of this call. Bright fg so it reads as the primary
-            // content of the row, not metadata.
             if (!arg_disp.empty()) {
                 tcells.push_back(text("  " + arg_disp,
                                       Style{}.with_fg(fg)));
             }
-            // Secondary cell: result summary on success (dim cyan),
-            // error message on failure (dim danger). Same column,
-            // styled by which it is.
             if (!sec_disp.empty()) {
                 Style sec_st = sec_is_err
                     ? Style{}.with_fg(danger).with_dim()
                     : Style{}.with_fg(highlight).with_dim();
-                tcells.push_back(text("  \xc2\xb7  " + sec_disp, sec_st));
+                // Use the dot separator only when there's a left
+                // neighbour (arg) to separate FROM. Otherwise the
+                // err sits flush after the name pad — no phantom
+                // column gap.
+                std::string lead = arg_disp.empty()
+                    ? std::string{"  "}
+                    : std::string{"  \xc2\xb7  "};
+                tcells.push_back(text(lead + sec_disp, sec_st));
             }
             tcells.push_back(spacer());
             if (!tr.running)

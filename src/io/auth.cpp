@@ -396,7 +396,7 @@ FormPostResult http_post_form(const std::string& url,
     hreq.headers = {
         {"content-type", "application/x-www-form-urlencoded"},
         {"accept",       "application/json"},
-        {"user-agent",   "moha/0.1.0"},
+        {"user-agent",   std::string{moha::kUserAgent}},
     };
     hreq.body = form_urlencode(fields);
 

@@ -21,6 +21,8 @@
 #include <string_view>
 #include <vector>
 
+#include "moha/version.hpp"
+
 namespace moha::http {
 
 // ---------------------------------------------------------------------------
@@ -191,8 +193,13 @@ struct Timeouts {
 class Client {
 public:
     struct Config {
-        // Defaults to a descriptive UA with the moha version; override for tests.
-        std::string user_agent = "moha/0.1.0";
+        // Defaults to the canonical wire identity from version.hpp;
+        // override for tests / probes that need to look like something
+        // else (e.g. `claude-code/<v>` for Anthropic OAuth — handled in
+        // transport.cpp's headers, not here). The default here is the
+        // single source of truth — `moha/<MAJOR.MINOR.PATCH>`, bumped
+        // by editing the project() line in CMakeLists.txt.
+        std::string user_agent = std::string{moha::kUserAgent};
         // When set, skip TLS chain verification — wire matches `-k` in curl.
         // Honors MOHA_INSECURE=1 env automatically in the ctor path.
         bool insecure = false;

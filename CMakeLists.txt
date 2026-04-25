@@ -1,6 +1,18 @@
 cmake_minimum_required(VERSION 3.28)
 project(moha VERSION 0.1.0 LANGUAGES CXX)
 
+# ── Central version source-of-truth ─────────────────────────────────────
+# `project(VERSION ...)` above is the ONLY place to bump the version.
+# Everything else — HTTP user-agent, UI labels, log lines, crash reports
+# — reads from include/moha/version.hpp, which CMake regenerates from
+# include/moha/version.hpp.in on every configure. Hard-coding "0.1.0"
+# anywhere outside the project() line is a refactoring hazard.
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/moha/version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/include/moha/version.hpp"
+    @ONLY
+)
+
 # CMake (as of 4.2) has no /std:c++26 mapping for MSVC yet. Ask for C++23
 # there and opt into /std:c++latest so MSVC 14.50+ exposes available C++26
 # library bits (std::expected, std::format, etc). Other compilers get C++26.
@@ -401,7 +413,9 @@ if(MOHA_BUILD_TESTS)
         ${MOHA_RUNTIME_NOMAIN_SOURCES}
         tests/reducer_tests.cpp
     )
-    target_include_directories(moha_reducer_tests PRIVATE include)
+    target_include_directories(moha_reducer_tests PRIVATE
+        include
+        "${CMAKE_CURRENT_BINARY_DIR}/include")  # generated version.hpp
     target_link_libraries(moha_reducer_tests PRIVATE
         maya::maya
         nlohmann_json::nlohmann_json
@@ -416,7 +430,9 @@ if(MOHA_BUILD_TESTS)
     endif()
 endif()
 
-target_include_directories(moha PRIVATE include)
+target_include_directories(moha PRIVATE
+    include
+    "${CMAKE_CURRENT_BINARY_DIR}/include")  # generated version.hpp
 target_link_libraries(moha PRIVATE
     maya::maya
     nlohmann_json::nlohmann_json

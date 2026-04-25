@@ -40,6 +40,7 @@
 #include "moha/memory/file_card_store.hpp"
 #include "moha/memory/hot_files.hpp"
 #include "moha/memory/memo_store.hpp"
+#include "moha/version.hpp"
 #include "moha/provider/anthropic/provider.hpp"
 #include "moha/tool/util/fs_helpers.hpp"
 #include "moha/tool/util/sandbox.hpp"
@@ -48,12 +49,14 @@ namespace {
 
 void print_usage() {
     std::fprintf(stderr,
+        "%s %s\n"
         "usage: moha [subcommand] [options]\n"
         "\n"
         "subcommands:\n"
         "  login             Authenticate (OAuth via claude.ai or API key)\n"
         "  logout            Remove saved credentials\n"
         "  status            Show current auth status\n"
+        "  version           Print version + exit\n"
         "  help              Show this message\n"
         "\n"
         "options:\n"
@@ -66,7 +69,11 @@ void print_usage() {
         "                      MODE = auto (default: use if available),\n"
         "                             on  (require backend; fail otherwise),\n"
         "                             off (disable wrapping).\n"
-        "\n");
+        "  -v, --version       Print version + exit\n"
+        "  -h, --help          Show this message\n"
+        "\n",
+        std::string{moha::kName}.c_str(),
+        std::string{moha::kVersion}.c_str());
 }
 
 struct Args {
@@ -82,7 +89,8 @@ Args parse_args(int argc, char** argv) {
     Args out;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "login" || a == "logout" || a == "status" || a == "help") {
+        if (a == "login" || a == "logout" || a == "status" || a == "help"
+         || a == "version") {
             out.subcommand = std::move(a);
         } else if ((a == "-k" || a == "--key") && i + 1 < argc) {
             out.cli_key = argv[++i];
@@ -94,6 +102,8 @@ Args parse_args(int argc, char** argv) {
             out.cli_sandbox = argv[++i];
         } else if (a == "-h" || a == "--help") {
             out.subcommand = "help";
+        } else if (a == "-v" || a == "--version") {
+            out.subcommand = "version";
         } else {
             std::fprintf(stderr, "unknown arg: %s\n\n", a.c_str());
             out.bad = true;
@@ -139,6 +149,12 @@ int main(int argc, char** argv) {
     auto args = parse_args(argc, argv);
     if (args.bad)                    { print_usage(); return 2; }
     if (args.subcommand == "help")   { print_usage(); return 0; }
+    if (args.subcommand == "version") {
+        std::printf("%s %s\n",
+            std::string{moha::kName}.c_str(),
+            std::string{moha::kVersion}.c_str());
+        return 0;
+    }
     if (args.subcommand == "login")  return auth::cmd_login();
     if (args.subcommand == "logout") return auth::cmd_logout();
     if (args.subcommand == "status") return auth::cmd_status();

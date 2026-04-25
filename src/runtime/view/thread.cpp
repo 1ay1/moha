@@ -15,6 +15,7 @@
 #include "moha/runtime/view/palette.hpp"
 #include "moha/runtime/view/permission.hpp"
 #include "moha/runtime/view/tool_args.hpp"
+#include "moha/version.hpp"
 
 namespace moha::ui {
 
@@ -1784,6 +1785,14 @@ Element thread_panel(const Model& m) {
             "a calm middleware between you and the model",
             fg_italic(muted));
 
+        // ── Version subline ──────────────────────────────────────────
+        // Quiet "v0.1.0" under the tagline. Pulls from the central
+        // version constants — bumping `project(VERSION ...)` in
+        // CMakeLists.txt updates this without any code edit.
+        auto version_line = centered_text(
+            "v" + std::string{moha::kVersion},
+            fg_dim(muted));
+
         // ── Model + profile chip row ─────────────────────────────────
         ModelBadge mb;
         mb.set_model(m.d.model_id.value);
@@ -1843,6 +1852,7 @@ Element thread_panel(const Model& m) {
             mark_rows[0], mark_rows[1], mark_rows[2],
             text(""),
             tagline,
+            version_line,
             text(""), text(""),
             chips_row,
             text(""), text(""),
