@@ -135,24 +135,37 @@ set(MAYA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(MAYA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 
 # Prefer the in-tree submodule when present; only fall back to fetch.
+# EXCLUDE_FROM_ALL: maya's own `install(...)` rules ship its public
+# headers (and `find_package(maya)` config files) into prefix/include —
+# useful when consumers `find_package(maya)`, but moha is a binary, not
+# a library, so those headers ride along into the .deb / .rpm / .dmg
+# without serving any purpose. EXCLUDE_FROM_ALL keeps maya buildable as
+# a link dependency (moha's target_link_libraries still pulls it in)
+# while suppressing its install rules from CPack's component capture.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/maya/CMakeLists.txt")
-    add_subdirectory(maya)
+    add_subdirectory(maya EXCLUDE_FROM_ALL)
 else()
     FetchContent_Declare(
         maya
         GIT_REPOSITORY https://github.com/1ay1/maya.git
         GIT_TAG        main
         GIT_SHALLOW    TRUE
+        EXCLUDE_FROM_ALL
     )
     FetchContent_MakeAvailable(maya)
 endif()
 
 set(JSON_BuildTests OFF CACHE INTERNAL "")
+# JSON_Install gates whether nlohmann_json adds install(...) rules; OFF
+# keeps its headers out of moha's binary packages (we just link, not
+# expose). Same intent as EXCLUDE_FROM_ALL on simdjson below.
+set(JSON_Install   OFF CACHE INTERNAL "")
 FetchContent_Declare(
     nlohmann_json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
     GIT_TAG        v3.11.3
     GIT_SHALLOW    TRUE
+    EXCLUDE_FROM_ALL
 )
 
 # simdjson — used on the SSE hot path (content_block_delta) where we parse
@@ -160,11 +173,17 @@ FetchContent_Declare(
 # for config + cold events; simdjson's ondemand API is 3–5× faster for the
 # "open doc, read two fields, throw away" pattern that dominates here.
 set(SIMDJSON_DEVELOPER_MODE   OFF CACHE INTERNAL "")
+# Suppress simdjson's `install(TARGETS simdjson)` + cmake-config files —
+# moha consumes simdjson statically and never re-exposes it; without
+# this the .deb / .rpm bundles ~600 KB of unused libsimdjson.a +
+# cmake-config noise into /usr/lib.
+set(SIMDJSON_INSTALL          OFF CACHE INTERNAL "")
 FetchContent_Declare(
     simdjson
     GIT_REPOSITORY https://github.com/simdjson/simdjson.git
     GIT_TAG        v3.10.1
     GIT_SHALLOW    TRUE
+    EXCLUDE_FROM_ALL
 )
 
 FetchContent_MakeAvailable(nlohmann_json simdjson)
@@ -687,4 +706,116 @@ if(MOHA_PGO)
         endif()
     endif()
     message(STATUS "moha: PGO phase = ${MOHA_PGO} (data dir: ${MOHA_PGO_DIR})")
+endif()
+
+# ─────────────────────────────────────────────────────────────────────
+# Packaging (CPack)
+# ─────────────────────────────────────────────────────────────────────
+# Per-platform installers built by `cpack -G <generator>` after a Release
+# build. Designed to run from CI, but also works locally:
+#
+#   Linux:    cpack -G DEB    →  moha_<ver>_amd64.deb
+#             cpack -G RPM    →  moha-<ver>-1.x86_64.rpm
+#   macOS:    cpack -G DragNDrop  →  moha-<ver>-<target>.dmg
+#   Windows:  cpack -G NSIS   →  moha-<ver>-<target>.exe (installer)
+#
+# Pass `-DMOHA_TARGET=linux-x86_64` (or similar) at configure time so the
+# CPack output filenames embed the target triple — matches the asset
+# naming the tarball/zip artifacts use, and lets all installer formats
+# coexist on a single GitHub Release page.
+set(MOHA_TARGET "" CACHE STRING
+    "Target triple suffix for CPack output (e.g. linux-x86_64). Empty = CMake default.")
+
+# Keep packaging gated behind an opt-in option so a regular `cmake`
+# configure for development doesn't pull in CPack's machinery.
+option(MOHA_BUILD_PACKAGES "Configure CPack installer generators" OFF)
+if(MOHA_BUILD_PACKAGES)
+    install(TARGETS moha
+        RUNTIME DESTINATION bin)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
+        DESTINATION share/doc/moha)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+            DESTINATION share/doc/moha)
+    endif()
+
+    set(CPACK_PACKAGE_NAME           "moha")
+    set(CPACK_PACKAGE_VERSION        "${PROJECT_VERSION}")
+    set(CPACK_PACKAGE_VENDOR         "moha contributors")
+    set(CPACK_PACKAGE_CONTACT        "moha contributors <https://github.com/1ay1/moha>")
+    set(CPACK_PACKAGE_HOMEPAGE_URL   "https://github.com/1ay1/moha")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+        "A native terminal client for Claude — written in modern C++26")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+        set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+    endif()
+    set(CPACK_RESOURCE_FILE_README   "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "moha")
+
+    # File naming. If MOHA_TARGET is set, embed it so .deb/.rpm/.dmg/.exe
+    # names match the tarball/zip names from the workflow. Otherwise let
+    # CPack pick a generator-specific default.
+    if(MOHA_TARGET)
+        set(CPACK_PACKAGE_FILE_NAME
+            "moha-${PROJECT_VERSION}-${MOHA_TARGET}")
+    endif()
+
+    # ── Linux: DEB + RPM ──────────────────────────────────────────────
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # DEB
+        set(CPACK_DEBIAN_PACKAGE_MAINTAINER "${CPACK_PACKAGE_CONTACT}")
+        set(CPACK_DEBIAN_PACKAGE_SECTION    "utils")
+        set(CPACK_DEBIAN_PACKAGE_PRIORITY   "optional")
+        set(CPACK_DEBIAN_PACKAGE_HOMEPAGE   "${CPACK_PACKAGE_HOMEPAGE_URL}")
+        # Auto-detect shared library deps from the binary's DT_NEEDED entries —
+        # produces e.g. `libssl3 (>= 3.0.0), libnghttp2-14, libstdc++6, libc6`.
+        # Standalone builds fold most of these in statically; what remains
+        # (libc, libssl on distros that didn't have a static .a) is captured
+        # exactly. Skipping this would make every install fail with `unmet
+        # dependencies` at apt time on minimal containers.
+        set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS  ON)
+        # Map Debian arch from CMAKE_SYSTEM_PROCESSOR for cross-compiles +
+        # the GitHub ARM runner. dpkg uses `amd64` / `arm64`, not the
+        # uname `x86_64` / `aarch64`.
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
+            set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+            set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "arm64")
+        endif()
+
+        # RPM
+        set(CPACK_RPM_PACKAGE_LICENSE       "MIT")
+        set(CPACK_RPM_PACKAGE_GROUP         "Development/Tools")
+        set(CPACK_RPM_PACKAGE_URL           "${CPACK_PACKAGE_HOMEPAGE_URL}")
+        set(CPACK_RPM_PACKAGE_AUTOREQ       YES)   # auto runtime deps
+        # Don't claim ownership of standard system dirs the OS already owns —
+        # rpmbuild errors on conflicting %dir entries otherwise.
+        set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+            /usr /usr/bin /usr/share /usr/share/doc)
+
+    # ── macOS: DragNDrop (.dmg) ──────────────────────────────────────
+    elseif(APPLE)
+        set(CPACK_DMG_VOLUME_NAME           "moha-${PROJECT_VERSION}")
+        # bzip2-compressed image — smaller than the default UDZO, no
+        # meaningful compatibility tradeoff for current macOS versions.
+        set(CPACK_DMG_FORMAT                "UDBZ")
+
+    # ── Windows: NSIS (.exe installer) ────────────────────────────────
+    elseif(WIN32)
+        set(CPACK_NSIS_DISPLAY_NAME         "moha")
+        set(CPACK_NSIS_PACKAGE_NAME         "moha")
+        set(CPACK_NSIS_HELP_LINK            "${CPACK_PACKAGE_HOMEPAGE_URL}")
+        set(CPACK_NSIS_URL_INFO_ABOUT       "${CPACK_PACKAGE_HOMEPAGE_URL}")
+        set(CPACK_NSIS_CONTACT              "${CPACK_PACKAGE_CONTACT}")
+        # Offer to add the install dir to the user's PATH — the whole
+        # point is a CLI binary that's discoverable from any shell.
+        set(CPACK_NSIS_MODIFY_PATH          ON)
+        # Quick-launch + Start Menu link to the binary itself (so the
+        # user can find moha after install). The square brackets here
+        # are NSIS's `Section` syntax, not a typo.
+        set(CPACK_PACKAGE_EXECUTABLES       "moha" "moha")
+        set(CPACK_CREATE_DESKTOP_LINKS      "moha")
+    endif()
+
+    include(CPack)
 endif()

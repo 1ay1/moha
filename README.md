@@ -24,19 +24,32 @@ Detects your OS+arch, downloads the latest pre-built binary, verifies the SHA256
 
 Pin a version with `MOHA_VERSION=v0.1.0`, change the install dir with `MOHA_PREFIX=/usr/local/bin`.
 
-### Pre-built binaries (every release)
+### Native installer (per platform)
 
-Grab the right tarball / zip from the [Releases page](https://github.com/1ay1/moha/releases):
+Every release also ships a proper installer for each platform — pick the one that matches your OS and let your package manager / installer handle the rest.
+
+| Platform | Installer | One-line install |
+|---|---|---|
+| **Debian / Ubuntu** (x86_64, ARM64) | `.deb` | `sudo apt install ./moha-<ver>-linux-<arch>.deb` |
+| **Fedora / RHEL / openSUSE** (x86_64, ARM64) | `.rpm` | `sudo dnf install ./moha-<ver>-linux-<arch>.rpm` |
+| **macOS** (Intel + Apple Silicon) | `.dmg` | mount, drag `moha` to `/Applications` (or `~/bin`) |
+| **Windows** (x86_64) | `.exe` (NSIS) | double-click; installer offers to add `moha` to PATH |
+
+All grabbed from the [Releases page](https://github.com/1ay1/moha/releases). `SHA256SUMS` is attached to every release for verification.
+
+> **Code signing:** macOS and Windows installers are **not** signed yet. Gatekeeper will say "unidentified developer" (right-click → Open to bypass), and SmartScreen will say "Windows protected your PC" (More info → Run anyway). Signing is a separate, paid concern (Apple Dev ID, Authenticode cert) and tracked as a follow-up.
+
+### Portable archive (no installer)
+
+Prefer to drop the binary somewhere yourself? Grab the tarball / zip:
 
 | Platform | Asset |
 |---|---|
-| Linux x86_64 | `moha-linux-x86_64.tar.gz` |
-| Linux ARM64 | `moha-linux-arm64.tar.gz` |
-| macOS Intel | `moha-macos-x86_64.tar.gz` |
-| macOS Apple Silicon | `moha-macos-arm64.tar.gz` |
-| Windows x86_64 | `moha-windows-x86_64.zip` |
-
-`SHA256SUMS` is published alongside. macOS and Windows binaries are unsigned right now — Gatekeeper / SmartScreen will warn on first launch (right-click → Open on macOS, "More info → Run anyway" on Windows).
+| Linux x86_64 | `moha-<ver>-linux-x86_64.tar.gz` |
+| Linux ARM64 | `moha-<ver>-linux-arm64.tar.gz` |
+| macOS Intel | `moha-<ver>-macos-x86_64.tar.gz` |
+| macOS Apple Silicon | `moha-<ver>-macos-arm64.tar.gz` |
+| Windows x86_64 | `moha-<ver>-windows-x86_64.zip` |
 
 ### Build from source
 

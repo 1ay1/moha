@@ -72,15 +72,19 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # ── Linux toolchain: GCC 14 + system OpenSSL/nghttp2 ──────────────
-      - name: Linux deps (GCC 14, OpenSSL, nghttp2)
+      # ── Linux toolchain: GCC 14 + system OpenSSL/nghttp2 + dpkg/rpm ───
+      # `rpm` so cpack -G RPM works on the same Ubuntu runner without
+      # spinning up a Fedora container; `file` is a CPack DEB dep used
+      # for shlibs scanning.
+      - name: Linux deps (GCC 14, OpenSSL, nghttp2, packagers)
         if: startsWith(matrix.os, 'ubuntu-')
         run: |
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-14 g++-14 cmake ninja-build \
-            libssl-dev libnghttp2-dev pkg-config
+            libssl-dev libnghttp2-dev pkg-config \
+            rpm file
           echo "CC=gcc-14"  >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
@@ -95,8 +99,10 @@ jobs:
           echo "OPENSSL_ROOT_DIR=${OPENSSL_ROOT}"   >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=${OPENSSL_ROOT}/lib/pkgconfig:$(brew --prefix nghttp2)/lib/pkgconfig" >> "$GITHUB_ENV"
 
-      # ── Windows toolchain: vcpkg-managed OpenSSL + nghttp2 ────────────
-      - name: Windows deps (vcpkg OpenSSL, nghttp2)
+      # ── Windows toolchain: vcpkg-managed OpenSSL + nghttp2 + NSIS ─────
+      # NSIS is what CPack -G NSIS shells out to. Choco install is the
+      # path the GitHub-supported runners document.
+      - name: Windows deps (vcpkg OpenSSL, nghttp2, NSIS)
         if: startsWith(matrix.os, 'windows-')
         shell: pwsh
         run: |
@@ -105,14 +111,22 @@ jobs:
             nghttp2:x64-windows-static
           echo "VCPKG_TARGET_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
           echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+          choco install -y --no-progress nsis
 
       # ── Configure ────────────────────────────────────────────────────
+      # MOHA_BUILD_PACKAGES=ON wires CPack into the build so the same
+      # `build/` dir produces the platform installer in the package step.
+      # MOHA_TARGET embeds the matrix target name into installer file
+      # names so .deb / .rpm / .dmg / .exe coexist on the release page
+      # under matching `moha-<ver>-<target>.<ext>` filenames.
       - name: Configure (Unix)
         if: "!startsWith(matrix.os, 'windows-')"
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DMOHA_STANDALONE=ON
+            -DMOHA_STANDALONE=ON \
+            -DMOHA_BUILD_PACKAGES=ON \
+            -DMOHA_TARGET=${{ matrix.target }}
 
       - name: Configure (Windows)
         if: startsWith(matrix.os, 'windows-')
@@ -121,6 +135,8 @@ jobs:
           cmake -B build -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
             -DMOHA_STANDALONE=ON `
+            -DMOHA_BUILD_PACKAGES=ON `
+            -DMOHA_TARGET=${{ matrix.target }} `
             -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" `
             -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
 
@@ -142,8 +158,10 @@ jobs:
           dir build\Release\moha.exe
           .\build\Release\moha.exe version
 
-      # ── Package ──────────────────────────────────────────────────────
-      - name: Package (Unix)
+      # ── Package — portable archive (always) ──────────────────────────
+      # Plain tarball / zip alongside the native installer. Some users
+      # prefer the no-install drop-in (sysadmins, CI, sandboxed envs).
+      - name: Package portable archive (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
           STAGE="moha-${{ matrix.target }}"
@@ -153,9 +171,8 @@ jobs:
           [ -f LICENSE ] && cp LICENSE "$STAGE/" || true
           tar czf "${STAGE}.tar.gz" "$STAGE"
           ls -lh "${STAGE}.tar.gz"
-          echo "ARTIFACT=${STAGE}.tar.gz" >> "$GITHUB_ENV"
 
-      - name: Package (Windows)
+      - name: Package portable archive (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
@@ -166,13 +183,71 @@ jobs:
           if (Test-Path LICENSE) { Copy-Item LICENSE $stage/ }
           Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip"
           Get-ChildItem "$stage.zip"
-          echo "ARTIFACT=$stage.zip" >> $env:GITHUB_ENV
 
-      - name: Upload artifact
+      # ── Package — native installer (per platform) ────────────────────
+      # CPack wraps the same install rules into the right format per
+      # platform: .deb + .rpm on Linux, .dmg on macOS, .exe (NSIS) on
+      # Windows. Output filenames are pinned via MOHA_TARGET (set at
+      # configure time) so all installer formats land as
+      # moha-<ver>-<target>.<ext> and coexist on the release page.
+      - name: Build installer (Linux DEB + RPM)
+        if: startsWith(matrix.os, 'ubuntu-')
+        working-directory: build
+        run: |
+          cpack -G DEB -B "$PWD/cpack-out"
+          cpack -G RPM -B "$PWD/cpack-out"
+          ls -lh cpack-out/
+
+      - name: Build installer (macOS DMG)
+        if: startsWith(matrix.os, 'macos-')
+        working-directory: build
+        run: |
+          cpack -G DragNDrop -B "$PWD/cpack-out"
+          ls -lh cpack-out/
+
+      - name: Build installer (Windows NSIS .exe)
+        if: startsWith(matrix.os, 'windows-')
+        shell: pwsh
+        working-directory: build
+        run: |
+          cpack -G NSIS -B "$PWD/cpack-out" -C Release
+          Get-ChildItem cpack-out\
+
+      # ── Stage all artifacts in one place for upload ──────────────────
+      # Both the portable archive and any native installer(s) — the
+      # release job downloads everything and attaches it to the GH
+      # Release. CPack lays out a `cpack-out/_CPack_Packages` work tree
+      # next to the actual installer files; we copy only the latter.
+      - name: Stage artifacts (Unix)
+        if: "!startsWith(matrix.os, 'windows-')"
+        run: |
+          mkdir -p artifacts
+          mv "moha-${{ matrix.target }}.tar.gz" artifacts/
+          # Move every installer file CPack wrote, regardless of the
+          # generator-specific subdirectory layout. _CPack_Packages
+          # (CPack's scratch dir) is excluded.
+          find build/cpack-out -maxdepth 2 -type f \
+               \( -name 'moha-*.deb' -o -name 'moha-*.rpm' \
+                  -o -name 'moha-*.dmg' \) \
+               -exec mv {} artifacts/ \;
+          ls -lh artifacts/
+
+      - name: Stage artifacts (Windows)
+        if: startsWith(matrix.os, 'windows-')
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts | Out-Null
+          Move-Item "moha-${{ matrix.target }}.zip" artifacts/
+          Get-ChildItem -Recurse build\cpack-out -Filter 'moha-*.exe' | `
+            Where-Object { $_.FullName -notmatch '_CPack_Packages' } | `
+            ForEach-Object { Move-Item $_.FullName artifacts/ }
+          Get-ChildItem artifacts\
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: moha-${{ matrix.target }}
-          path: ${{ env.ARTIFACT }}
+          path: artifacts/*
           if-no-files-found: error
           retention-days: 14
 
@@ -196,7 +271,14 @@ jobs:
         run: |
           cd dist
           ls -lh
-          sha256sum moha-*.tar.gz moha-*.zip 2>/dev/null > SHA256SUMS || true
+          # Cover every artifact extension the matrix can produce —
+          # archives + installers. Any new format added later just needs
+          # an additional `-o -name` clause.
+          find . -maxdepth 1 -type f \
+               \( -name 'moha-*.tar.gz' -o -name 'moha-*.zip' \
+                  -o -name 'moha-*.deb' -o -name 'moha-*.rpm' \
+                  -o -name 'moha-*.dmg' -o -name 'moha-*.exe' \) \
+               -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS
           cat SHA256SUMS
 
       - name: Publish GitHub Release
@@ -209,4 +291,8 @@ jobs:
           files: |
             dist/moha-*.tar.gz
             dist/moha-*.zip
+            dist/moha-*.deb
+            dist/moha-*.rpm
+            dist/moha-*.dmg
+            dist/moha-*.exe
             dist/SHA256SUMS
