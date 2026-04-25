@@ -107,6 +107,12 @@ enum class Kind : std::uint8_t {
     GitDiff,
     GitLog,
     GitCommit,
+    // ── Index-backed table-of-contents tools ───────────────────────────
+    Outline,      // one file's symbol map
+    RepoMap,      // the workspace-wide compact tree
+    Signatures,   // grep symbol names across the index
+    // ── Sub-agent ──────────────────────────────────────────────────────
+    Investigate,
 };
 
 inline constexpr std::array kCatalog = {
@@ -127,6 +133,14 @@ inline constexpr std::array kCatalog = {
     ToolSpec{"git_diff",        Kind::GitDiff,        {Effect::ReadFs},                     false,   detail::sec{30}},
     ToolSpec{"git_log",         Kind::GitLog,         {Effect::ReadFs},                     false,   detail::sec{20}},
     ToolSpec{"git_commit",      Kind::GitCommit,      {Effect::WriteFs},                    true,    detail::sec{30}},
+    // ── Tier-2 token-saver tools (index-backed table of contents) ──────
+    ToolSpec{"outline",         Kind::Outline,        {Effect::ReadFs},                     false,   detail::sec{15}},
+    ToolSpec{"repo_map",        Kind::RepoMap,        {Effect::ReadFs},                     false,   detail::sec{120}}, // first scan walks the tree
+    ToolSpec{"signatures",      Kind::Signatures,     {Effect::ReadFs},                     false,   detail::sec{30}},
+    // ── Tier-3 sub-agent. `Net` because it dials the model API; the
+    // read-only tool subset it may invoke is enforced inside
+    // investigate.cpp, not at the spec layer.
+    ToolSpec{"investigate",     Kind::Investigate,    {Effect::Net},                        true,    detail::sec{300}},
 };
 
 // Wire-string → Kind. `std::nullopt` for names not in the catalog so the
@@ -205,6 +219,8 @@ consteval bool kinds_bijective() {
         Kind::WebFetch, Kind::WebSearch, Kind::FindDefinition,
         Kind::Diagnostics, Kind::GitStatus, Kind::GitDiff,
         Kind::GitLog, Kind::GitCommit,
+        Kind::Outline, Kind::RepoMap, Kind::Signatures,
+        Kind::Investigate,
     };
     if (std::size(kAll) != kCatalog.size()) return false;
     for (auto k : kAll) {
@@ -273,6 +289,7 @@ consteval bool readonly_invariants() {
     constexpr std::string_view kReadOnly[] = {
         "read","grep","glob","list_dir","find_definition",
         "git_status","git_diff","git_log",
+        "outline","repo_map","signatures",
     };
     for (auto n : kReadOnly) {
         auto* s = lookup(n);
@@ -286,16 +303,18 @@ consteval bool readonly_invariants() {
 static_assert(readonly_invariants(),
               "a tool listed as read-only carries a write/exec/net capability");
 
-// Network tools must be exactly the web ones.
-consteval bool only_web_is_net() {
+// Network tools: the two web ones plus the sub-agent (which dials the
+// model API). Anything else carrying Net needs an explicit review.
+consteval bool only_known_net_tools() {
     for (const auto& s : kCatalog) {
         if (!s.effects.has(Effect::Net)) continue;
-        if (s.name != "web_fetch" && s.name != "web_search") return false;
+        if (s.name != "web_fetch" && s.name != "web_search"
+         && s.name != "investigate") return false;
     }
     return true;
 }
-static_assert(only_web_is_net(),
-              "Only web_fetch/web_search may carry Effect::Net");
+static_assert(only_known_net_tools(),
+              "Only web_fetch / web_search / investigate may carry Effect::Net");
 
 // ── Per-tool timeout proofs ─────────────────────────────────────────────
 // Pin the wall-clock-watchdog values so a careless edit (set 0 on the

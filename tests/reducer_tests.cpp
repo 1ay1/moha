@@ -17,6 +17,8 @@
 #include "moha/runtime/app/update.hpp"
 #include "moha/runtime/model.hpp"
 #include "moha/runtime/msg.hpp"
+#include "moha/runtime/picker.hpp"
+#include "moha/runtime/command_palette.hpp"
 
 namespace {
 
@@ -145,9 +147,9 @@ TEST(composer_paste_with_newline_expands) {
 TEST(model_picker_open_then_close) {
     auto m = blank_model();
     auto [m1, _] = moha::app::update(std::move(m), moha::OpenModelPicker{});
-    CHECK(m1.ui.model_picker.open);
+    CHECK(moha::ui::pick::opened(m1.ui.model_picker) != nullptr);
     auto [m2, __] = moha::app::update(std::move(m1), moha::CloseModelPicker{});
-    CHECK(!m2.ui.model_picker.open);
+    CHECK(moha::ui::pick::opened(m2.ui.model_picker) == nullptr);
 }
 
 TEST(model_picker_move_adjusts_index) {
@@ -156,14 +158,18 @@ TEST(model_picker_move_adjusts_index) {
         {moha::ModelId{"claude-opus-4-5"},   "Opus 4.5",   "anthropic", 200000, false});
     m.d.available_models.push_back(
         {moha::ModelId{"claude-sonnet-4-6"}, "Sonnet 4.6", "anthropic", 200000, false});
-    m.ui.model_picker.open = true;
+    // Open the picker first so moves are processed.
+    m.ui.model_picker = moha::ui::pick::OpenAt{0};
     auto [m1, _] = moha::app::update(std::move(m), moha::ModelPickerMove{+1});
-    CHECK(m1.ui.model_picker.index == 1);
+    auto* o1 = moha::ui::pick::opened(m1.ui.model_picker);
+    CHECK(o1 != nullptr);
+    if (o1) CHECK(o1->index == 1);
     auto [m2, __] = moha::app::update(std::move(m1), moha::ModelPickerMove{+1});
     // Clamps at the last entry; exact clamp style is implementation-defined,
     // but the index must stay within [0, size).
-    CHECK(m2.ui.model_picker.index >= 0);
-    CHECK(m2.ui.model_picker.index < static_cast<int>(m2.d.available_models.size()));
+    int idx2 = moha::ui::pick::index_or(m2.ui.model_picker, -1);
+    CHECK(idx2 >= 0);
+    CHECK(idx2 < static_cast<int>(m2.d.available_models.size()));
 }
 
 // ── profile ─────────────────────────────────────────────────────────────
@@ -208,9 +214,18 @@ TEST(toggle_tool_expanded_flips_match) {
 // ── stream events ───────────────────────────────────────────────────────
 
 TEST(stream_started_sets_active) {
+    // The phase transitions to Streaming in cmd_factory (the submit path)
+    // *before* the SSE loop fires StreamStarted. StreamStarted resets the
+    // watchdog/rate fields; active() is already true when it arrives.
+    // Test: pre-set Streaming phase, fire StreamStarted, verify active() holds
+    // and the per-stream accumulators are wiped (started is updated).
     auto m = blank_model();
+    m.s.phase = moha::phase::Streaming{};
+    auto t_before = std::chrono::steady_clock::now();
     auto [m1, _] = moha::app::update(std::move(m), moha::StreamStarted{});
-    CHECK(m1.s.active);
+    CHECK(m1.s.active());
+    CHECK(!m1.s.is_idle());
+    CHECK(m1.s.started >= t_before);
 }
 
 TEST(stream_text_delta_appends_to_assistant_streaming_text) {
@@ -225,11 +240,10 @@ TEST(stream_text_delta_appends_to_assistant_streaming_text) {
 
 TEST(stream_error_transitions_to_idle) {
     auto m = blank_model();
-    m.s.active = true;
-    m.s.phase  = moha::phase::Streaming{};
+    m.s.phase = moha::phase::Streaming{};
     auto [m1, _] = moha::app::update(std::move(m),
                                      moha::StreamError{"boom"});
-    CHECK(!m1.s.active);
+    CHECK(!m1.s.active());
     CHECK(m1.s.is_idle());
 }
 
@@ -253,17 +267,17 @@ TEST(noop_is_identity) {
 TEST(command_palette_open_close) {
     auto m = blank_model();
     auto [m1, _] = moha::app::update(std::move(m), moha::OpenCommandPalette{});
-    CHECK(m1.ui.command_palette.open);
+    CHECK(moha::is_open(m1.ui.command_palette));
     auto [m2, __] = moha::app::update(std::move(m1), moha::CloseCommandPalette{});
-    CHECK(!m2.ui.command_palette.open);
+    CHECK(!moha::is_open(m2.ui.command_palette));
 }
 
 TEST(todo_modal_open_close) {
     auto m = blank_model();
     auto [m1, _] = moha::app::update(std::move(m), moha::OpenTodoModal{});
-    CHECK(m1.ui.todo.open);
+    CHECK(std::holds_alternative<moha::ui::pick::OpenModal>(m1.ui.todo.open));
     auto [m2, __] = moha::app::update(std::move(m1), moha::CloseTodoModal{});
-    CHECK(!m2.ui.todo.open);
+    CHECK(std::holds_alternative<moha::ui::pick::Closed>(m2.ui.todo.open));
 }
 
 } // namespace

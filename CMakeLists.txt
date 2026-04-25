@@ -34,6 +34,15 @@ if(MSVC)
         string(REGEX REPLACE "/O2" "" ${flag_var} "${${flag_var}}")
         string(REGEX REPLACE "/Ob[0-3]" "" ${flag_var} "${${flag_var}}")
     endforeach()
+
+    # /utf-8 makes MSVC treat source files as UTF-8 AND emit narrow string
+    # literals as UTF-8 bytes. Without it, a `→` (→) in a string blows
+    # up with C4566 because the runtime code page is 1252 by default and
+    # the arrow doesn't round-trip. Setting it project-wide kills the
+    # whole class of universal-character-name warnings in one shot —
+    # cleaner than scattering #pragma warning suppressions through every
+    # view file that draws a Unicode glyph.
+    add_compile_options(/utf-8)
 endif()
 
 # ── Standalone binary plumbing ─────────────────────────────────────────
@@ -305,6 +314,18 @@ set(MOHA_TOOL_SOURCES
     src/tool/tools/find_definition.cpp
     src/tool/tools/diagnostics.cpp
     src/tool/tools/git.cpp
+    # Tier-2 token-saver tools (index-backed table of contents).
+    src/tool/tools/outline.cpp
+    src/tool/tools/repo_map.cpp
+    src/tool/tools/signatures.cpp
+    # Tier-3 sub-agent.
+    src/tool/tools/investigate.cpp
+)
+
+# Repo-symbol index — read at session start, queried by outline /
+# repo_map / signatures, and embedded into the system prompt.
+set(MOHA_INDEX_SOURCES
+    src/index/repo_index.cpp
 )
 
 # Everything except the entry point — so tests can link the same runtime
@@ -317,6 +338,7 @@ set(MOHA_RUNTIME_NOMAIN_SOURCES
     src/runtime/app/update/stream.cpp
     src/runtime/app/update/modal.cpp
     src/runtime/app/update/tool.cpp
+    src/runtime/app/update/compact.cpp
     src/runtime/app/update/login.cpp
     src/runtime/app/subscribe.cpp
 
@@ -344,6 +366,7 @@ add_executable(moha
     ${MOHA_IO_SOURCES}
     ${MOHA_PROVIDER_SOURCES}
     ${MOHA_DIFF_SOURCES}
+    ${MOHA_INDEX_SOURCES}
     ${MOHA_TOOL_SOURCES}
     ${MOHA_RUNTIME_SOURCES}
 )
@@ -357,6 +380,7 @@ if(MOHA_BUILD_TESTS)
         ${MOHA_IO_SOURCES}
         ${MOHA_PROVIDER_SOURCES}
         ${MOHA_DIFF_SOURCES}
+        ${MOHA_INDEX_SOURCES}
         ${MOHA_TOOL_SOURCES}
         ${MOHA_RUNTIME_NOMAIN_SOURCES}
         tests/reducer_tests.cpp

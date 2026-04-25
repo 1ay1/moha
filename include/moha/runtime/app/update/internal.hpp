@@ -52,6 +52,22 @@ Step           submit_message(Model m);
 maya::Cmd<Msg> maybe_virtualize(Model& m);
 void           persist_settings(const Model& m);
 
+// ── update/compact.cpp ───────────────────────────────────────────────────
+// Auto-compaction state machine. `auto_compact_if_due` is called from
+// finalize_turn after a clean stream end and decides whether the input-
+// token ratio crossed the trigger threshold; if so it returns a Cmd
+// that runs the Haiku summariser off-thread. `request_compact` is the
+// shared entry point for both the auto-trigger AND the manual
+// /compact command — both flows mutate model state identically.
+//
+// `apply_compact` writes the summary back into current.messages,
+// replacing the elided window with a single synthesized turn while
+// preserving the user's original task brief and the tail of recent
+// messages verbatim.
+maya::Cmd<Msg> auto_compact_if_due(Model& m);
+Step           request_compact(Model m);
+Step           apply_compact   (Model m, CompactCompleted&& ev);
+
 // Set a transient status toast that auto-clears after `ttl`. Returns a
 // Cmd that schedules the ClearStatus sentinel (stamp-matched so a newer
 // status overwrites without being wiped). Use for "no-op" feedback like

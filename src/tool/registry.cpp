@@ -104,6 +104,13 @@ std::vector<ToolDef> build_registry() {
     r.push_back(tool_git_diff());
     r.push_back(tool_git_log());
     r.push_back(tool_git_commit());
+    // Tier-2 (table-of-contents) tools listed *before* Tier-3 so the
+    // model's recall bias prefers the cheap structural lookups over the
+    // sub-agent for ordinary "what's in the codebase?" questions.
+    r.push_back(tool_outline());
+    r.push_back(tool_repo_map());
+    r.push_back(tool_signatures());
+    r.push_back(tool_investigate());
     return r;
 }
 

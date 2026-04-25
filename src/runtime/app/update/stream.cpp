@@ -532,6 +532,17 @@ maya::Cmd<Msg> finalize_turn(Model& m, StopReason stop_reason) {
         m = std::move(mm);
         return Cmd<Msg>::batch(std::vector<Cmd<Msg>>{std::move(kp), std::move(sub_cmd)});
     }
+
+    // Tier-4 token-saver: if input tokens crossed the auto-compact
+    // threshold (default 85 % of context_max), schedule a Haiku
+    // summarisation for the next tick. No-op when the threshold isn't
+    // met, when a compaction is already in flight, or when the thread
+    // is too short to be worth compacting. Returns Cmd::none() in all
+    // those cases so the batch below stays cheap.
+    if (auto compact_cmd = auto_compact_if_due(m); !compact_cmd.is_none()) {
+        return Cmd<Msg>::batch(std::vector<Cmd<Msg>>{
+            std::move(kp), std::move(compact_cmd)});
+    }
     return kp;
 }
 

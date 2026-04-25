@@ -54,6 +54,24 @@ struct Scheduled  {};
 } // namespace retry
 using RetryState = std::variant<retry::Fresh, retry::StallFired, retry::Scheduled>;
 
+// ── Auto-compaction state ──────────────────────────────────────
+// Fired when input-token usage crosses a fraction of the model's
+// context window (default 85 %). The reducer dispatches the actual
+// summarization Cmd; this variant is the lock that prevents a second
+// trigger from racing the first.
+//
+//   Idle    — no compaction in flight; eligible to trigger.
+//   Running — Haiku call out; wait for CompactCompleted / CompactFailed.
+//
+// Sum-type rather than a bool so a "post-compact cooldown" or "compact
+// scheduled but not started" state can be added later without
+// rewriting every read site.
+namespace compact {
+struct Idle    {};
+struct Running { std::chrono::steady_clock::time_point started_at{}; };
+} // namespace compact
+using CompactionState = std::variant<compact::Idle, compact::Running>;
+
 [[nodiscard]] constexpr std::string_view to_string(const Phase& p) noexcept {
     return std::visit([](const auto& v) -> std::string_view {
         using T = std::decay_t<decltype(v)>;
@@ -130,6 +148,16 @@ struct StreamState {
     [[nodiscard]] bool in_fresh()       const noexcept { return std::holds_alternative<retry::Fresh>(retry_state); }
     [[nodiscard]] bool in_stall_fired() const noexcept { return std::holds_alternative<retry::StallFired>(retry_state); }
     [[nodiscard]] bool in_scheduled()   const noexcept { return std::holds_alternative<retry::Scheduled>(retry_state); }
+
+    // Auto-compaction: hands-off conversation summarisation when input
+    // tokens approach the model's context cap. Compacting late (~85 %
+    // ratio) instead of mid-window beats the cache-bust cost of multiple
+    // earlier summarisations and preserves conversation fidelity for
+    // threads that finish before they overflow.
+    CompactionState compaction = compact::Idle{};
+    [[nodiscard]] bool is_compacting() const noexcept {
+        return std::holds_alternative<compact::Running>(compaction);
+    }
 
     // ── Phase predicates ─────────────────────────────────────────────────
     [[nodiscard]] bool is_idle()                const noexcept { return std::holds_alternative<phase::Idle>(phase); }

@@ -23,6 +23,7 @@ enum class Command : std::uint8_t {
     OpenModels,
     OpenThreads,
     OpenPlan,
+    Compact,
     Quit,
 };
 
@@ -41,6 +42,7 @@ inline constexpr std::array kCommands = std::array{
     CommandDef{Command::OpenModels,    "Open model picker",  "Switch the active model"},
     CommandDef{Command::OpenThreads,   "Open threads",       "Browse saved conversations"},
     CommandDef{Command::OpenPlan,      "Open plan",          "View task progress"},
+    CommandDef{Command::Compact,       "Compact thread",     "Summarise old turns into one synthetic message to free context"},
     CommandDef{Command::Quit,          "Quit",               "Exit moha"},
 };
 

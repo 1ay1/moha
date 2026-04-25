@@ -101,6 +101,32 @@ struct CancelStream {};
 // The user can intercept with Esc → CancelStream during the wait.
 struct RetryStream {};
 
+// ── Auto-compact ─────────────────────────────────────────────────────────
+// Conversation summarisation. Either auto-fired (when input tokens cross
+// the threshold after a clean stream end) or user-initiated via the
+// `/compact` command-palette entry.
+//
+//   CompactRequested  — kick off a Haiku summarisation Cmd over the
+//                       current.messages window. The reducer marks
+//                       `m.s.compaction = Running` and stamps the cut
+//                       point so a concurrent stream re-finish doesn't
+//                       fire a second compaction.
+//   CompactCompleted  — Haiku returned. `result` is `expected<summary,
+//                       error>` — success replaces the elided window
+//                       with one synthetic Assistant message; failure
+//                       silently leaves the conversation untouched and
+//                       logs a status toast.
+struct CompactRequested {};
+struct CompactCompleted {
+    std::expected<std::string, std::string> result;
+    // Range we asked Haiku to summarise: indices [first, last) in the
+    // current.messages vector at request time. Stamped so a second
+    // compaction in flight (shouldn't happen, the lock prevents it,
+    // but defense-in-depth) can verify it's writing the right slice.
+    std::size_t first = 0;
+    std::size_t last  = 0;
+};
+
 // ── In-app login modal ───────────────────────────────────────────────────
 // Shown when the user starts moha with no valid credentials, OR
 // triggered explicitly from the command palette to switch accounts.
@@ -217,6 +243,7 @@ using Msg = std::variant<
     StreamToolUseStart, StreamToolUseDelta, StreamToolUseEnd,
     StreamUsage, StreamFinished, StreamError, StreamHeartbeat,
     CancelStream, RetryStream,
+    CompactRequested, CompactCompleted,
     ToolExecOutput, ToolExecProgress, ToolTimeoutCheck,
     PermissionApprove, PermissionReject, PermissionApproveAlways,
     OpenModelPicker, CloseModelPicker, ModelPickerMove, ModelPickerSelect, ModelPickerToggleFavorite, ModelsLoaded,

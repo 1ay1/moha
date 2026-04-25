@@ -476,6 +476,10 @@ std::string tool_display_name(const std::string& n) {
     if (n == "git_diff")        return "Git Diff";
     if (n == "git_log")         return "Git Log";
     if (n == "git_commit")      return "Git Commit";
+    if (n == "outline")         return "Outline";
+    if (n == "repo_map")        return "Repo Map";
+    if (n == "signatures")      return "Signatures";
+    if (n == "investigate")     return "Investigate";
     return n;
 }
 
@@ -764,12 +768,34 @@ Element compact_tool_body(const ToolUse& tc) {
     if ((n == "read" || n == "list_dir" || n == "grep" || n == "glob"
          || n == "find_definition"
          || n == "web_fetch" || n == "web_search"
-         || n == "git_status" || n == "git_log" || n == "git_commit")
+         || n == "git_status" || n == "git_log" || n == "git_commit"
+         || n == "outline" || n == "repo_map" || n == "signatures")
         && tc.is_done())
     {
         const auto& out = tc.output();
         if (out.empty()) return text("");
         return preview_block(out, fg_dim(fg));
+    }
+
+    // ── investigate: live progress while running, synthesis when done ─
+    // Sub-agent runs can take 10-30 s; without a body the timeline
+    // event is just a header that says "investigating…" with nothing
+    // visible. Surface the streamed progress (turn boundaries, fan-
+    // out, synthesis text) so the user can follow along.
+    if (n == "investigate") {
+        if (tc.is_running() && !tc.progress_text().empty())
+            return preview_block(tc.progress_text(), fg_dim(fg));
+        if (tc.is_done() && !tc.output().empty()) {
+            // Strip the framing line if present so the timeline body
+            // shows the actual synthesis, not the metadata.
+            std::string body = tc.output();
+            if (body.starts_with("[investigate")) {
+                if (auto end = body.find("]\n\n"); end != std::string::npos)
+                    body = body.substr(end + 3);
+            }
+            return preview_block(body, fg_dim(fg));
+        }
+        return text("");
     }
 
     // ── git_diff: per-line diff coloring (+ / - / @@) ──────────────
@@ -1190,11 +1216,21 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
     // separate document." Settled panels dim further so they recede.
     bool all_done = (done == total && total > 0);
     Color border_c = all_done ? muted : rail_color;
+    // `grow(1.0f)` on the whole panel, not just its rows. The per-row
+    // grow (added earlier for edit diff/grep line widths) only expands
+    // rows *within* the panel — yoga still shrinks the panel itself to
+    // content width unless it's explicitly flexible in its parent. That
+    // leaves the bordered card narrower than the available message
+    // column, clipping long bash/grep/edit lines at an invisible
+    // boundary matching the longest header. With the outer grow, the
+    // panel stretches to fill the full message column width and the
+    // inner rows (already grow=1) fill that in turn.
     return (v(std::move(rows))
             | border(BorderStyle::Round)
             | bcolor(border_c)
             | btext(std::move(title), BorderTextPos::Top, BorderTextAlign::Start)
             | padding(0, 1, 0, 1)
+            | grow(1.0f)
            ).build();
 }
 

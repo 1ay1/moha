@@ -25,5 +25,11 @@ namespace moha::tools {
 [[nodiscard]] ToolDef tool_git_diff();
 [[nodiscard]] ToolDef tool_git_log();
 [[nodiscard]] ToolDef tool_git_commit();
+// ── Tier-2 token-saver tools (index-backed) ──────────────────────────────
+[[nodiscard]] ToolDef tool_outline();
+[[nodiscard]] ToolDef tool_repo_map();
+[[nodiscard]] ToolDef tool_signatures();
+// ── Tier-3 sub-agent ─────────────────────────────────────────────────────
+[[nodiscard]] ToolDef tool_investigate();
 
 } // namespace moha::tools

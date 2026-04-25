@@ -41,4 +41,14 @@ namespace moha::app::cmd {
                                             auth::PkceVerifier verifier,
                                             auth::OAuthState   state);
 
+// ── Auto-compact ────────────────────────────────────────────────────────
+// Off-thread Haiku call that summarises `messages[first..last)` into a
+// single dense paragraph. Dispatches `CompactCompleted` on the worker's
+// completion. Caller (the reducer) is responsible for flipping
+// `m.s.compaction = compact::Running{...}` *before* issuing the cmd
+// so a duplicate request can't slip in.
+[[nodiscard]] maya::Cmd<Msg> compact_thread(std::vector<Message> messages,
+                                            std::size_t first,
+                                            std::size_t last);
+
 } // namespace moha::app::cmd

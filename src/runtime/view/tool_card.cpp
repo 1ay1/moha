@@ -586,6 +586,282 @@ Element render_tool_call_uncached(const ToolUse& tc) {
         return tl.build();
     }
 
+    // ── outline(path) ───────────────────────────────────────────────
+    // Shows the file's symbol map: per-kind groups, line numbers, names.
+    // Cheap to render — the tool's output is already structured, we
+    // just colour the kind tags + line numbers and let names be plain.
+    if (tc.name == "outline") {
+        auto p = safe_arg(tc.args, "path");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name = "outline";
+        cfg.kind = ToolCallKind::Read;            // it's a read-shaped op
+        cfg.description = with_desc(p.empty() ? "outline" : p, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.output());
+            std::string line;
+            int row_count = 0;
+            constexpr int kMaxRows = 24;
+            while (std::getline(iss, line)) {
+                if (row_count >= kMaxRows) {
+                    rows.push_back(text("\xe2\x80\xa6 more (call `read` "
+                                        "for full file)", fg_dim(muted)));
+                    break;
+                }
+                if (line.empty()) continue;
+                // First line is "<path>  (N symbols)" — render small/dim.
+                if (rows.empty() && line.find("symbols)") != std::string::npos) {
+                    rows.push_back(text(line, fg_dim(muted)));
+                    continue;
+                }
+                // "[kind]" group header.
+                if (line.starts_with("[") && line.find(']') != std::string::npos) {
+                    rows.push_back(text(line, Style{}.with_fg(highlight).with_bold()));
+                    ++row_count;
+                    continue;
+                }
+                // "  L<line>  <name>    <signature>" rows.
+                rows.push_back(text(line, fg_of(fg)));
+                ++row_count;
+            }
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
+        return card.build();
+    }
+
+    // ── repo_map(path?, max_kb?) ──────────────────────────────────
+    // Two-section output (Most-referenced + Workspace tree) — render
+    // each line and colour-tag the section headers + the bracketed
+    // score prefixes so the eye finds the structure quickly.
+    if (tc.name == "repo_map") {
+        auto p = safe_arg(tc.args, "path");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name = "repo_map";
+        cfg.kind = ToolCallKind::Read;
+        cfg.description = with_desc(p.empty() ? "workspace" : p, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.output());
+            std::string line;
+            int row_count = 0;
+            // Tighter cap when collapsed; generous when expanded since
+            // repo_map is the table-of-contents the user explicitly asked
+            // to see in full.
+            const int kMaxRows = tc.expanded ? 60 : 14;
+            while (std::getline(iss, line) && row_count < kMaxRows) {
+                if (line.empty()) {
+                    rows.push_back(text(""));
+                    continue;
+                }
+                if (line.starts_with("# ")) {
+                    // Header comment line (preamble explaining the map).
+                    rows.push_back(text(line, fg_dim(muted)));
+                } else if (line.starts_with("## ")) {
+                    rows.push_back(text(line, Style{}.with_fg(accent).with_bold()));
+                } else if (line.starts_with("[") && line.find(']') != std::string::npos
+                           && line.find('/') != std::string::npos) {
+                    // "[score] path/to/file" — colour the score bracket.
+                    auto rb = line.find(']');
+                    rows.push_back(h(
+                        text(line.substr(0, rb + 1),
+                             Style{}.with_fg(highlight).with_bold()),
+                        text(line.substr(rb + 1), fg_of(fg))
+                    ).build());
+                } else if (line.ends_with("/")) {
+                    // Directory header in the tree.
+                    rows.push_back(text(line, Style{}.with_fg(info).with_bold()));
+                } else if (line.starts_with("    //")) {
+                    // Per-file description continuation.
+                    rows.push_back(text(line, fg_dim(muted).with_italic()));
+                } else {
+                    rows.push_back(text(line, fg_of(fg)));
+                }
+                ++row_count;
+            }
+            // Footer if we truncated.
+            std::string remainder;
+            int remaining_lines = 0;
+            while (std::getline(iss, line)) ++remaining_lines;
+            if (remaining_lines > 0) {
+                rows.push_back(text("\xe2\x80\xa6 +"
+                                    + std::to_string(remaining_lines)
+                                    + " more lines", fg_dim(muted)));
+            }
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
+        return card.build();
+    }
+
+    // ── signatures(pattern, limit?) ─────────────────────────────────
+    // Cross-file symbol grep. SearchResult would technically work, but
+    // the result rows are kind-tagged ("[fn] name", "[class] Bar")
+    // rather than literal-line matches — giving each hit the kind
+    // colour reads better than the generic search-result widget.
+    if (tc.name == "signatures") {
+        auto pat = safe_arg(tc.args, "pattern");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name = "signatures";
+        cfg.kind = ToolCallKind::Search;
+        cfg.description = with_desc(pat.empty() ? "signatures" : pat, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.output());
+            std::string line;
+            int row_count = 0;
+            const int kMaxRows = tc.expanded ? 40 : 12;
+            while (std::getline(iss, line) && row_count < kMaxRows) {
+                if (line.empty()) { rows.push_back(text("")); continue; }
+                if (line.starts_with("Symbols matching")) {
+                    rows.push_back(text(line, Style{}.with_fg(accent).with_bold()));
+                } else if (line.starts_with("## ")) {
+                    rows.push_back(text(line.substr(3),
+                                        Style{}.with_fg(info).with_bold()));
+                } else if (line.starts_with("  L")) {
+                    // "  L42  [fn] name    optional signature"
+                    rows.push_back(text(line, fg_of(fg)));
+                } else {
+                    rows.push_back(text(line, fg_dim(muted)));
+                }
+                ++row_count;
+            }
+            int remaining = 0;
+            while (std::getline(iss, line)) ++remaining;
+            if (remaining > 0)
+                rows.push_back(text("\xe2\x80\xa6 +" + std::to_string(remaining)
+                                    + " more rows", fg_dim(muted)));
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
+        return card.build();
+    }
+
+    // ── investigate(query, model?) ──────────────────────────────────
+    // The longest-running tool moha has — a 30-second multi-turn sub-
+    // agent that streams progress. The card has three personalities:
+    //   Running: surface the live progress text (turn boundaries,
+    //            fan-out announcements, the synthesis being written
+    //            in real time) so the user knows what's happening.
+    //   Done:    drop the framing line ("[investigate · …]"), render
+    //            the synthesis itself as the body. The framing data
+    //            (turn count / elapsed / model) lives in the card
+    //            header chrome instead.
+    //   Failed:  error text in danger color.
+    if (tc.name == "investigate") {
+        auto query = safe_arg(tc.args, "query");
+        auto model_short = safe_arg(tc.args, "model");
+        std::string head = query.size() > 80
+            ? query.substr(0, 77) + "..." : query;
+        maya::ToolCall::Config cfg;
+        cfg.tool_name = "investigate";
+        cfg.kind = ToolCallKind::Other;
+        std::string descr = head;
+        if (!model_short.empty()) descr += "  ·  " + model_short;
+        cfg.description = with_desc(std::move(descr), desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+
+        // Live: show the streamed progress transcript verbatim. The
+        // sub-agent already throttles emits at ~120 ms so we can paint
+        // every frame without flooding.
+        if (tc.is_running() && !tc.progress_text().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.progress_text());
+            std::string line;
+            int row_count = 0;
+            const int kMaxRows = tc.expanded ? 30 : 10;
+            // Show the *tail* of the progress, not the head — the
+            // user cares about what the sub-agent is doing now, not
+            // what it did 25 seconds ago.
+            std::vector<std::string> lines;
+            while (std::getline(iss, line)) lines.push_back(std::move(line));
+            std::size_t start = lines.size() > static_cast<std::size_t>(kMaxRows)
+                ? lines.size() - kMaxRows : 0;
+            if (start > 0)
+                rows.push_back(text("\xe2\x80\xa6 +" + std::to_string(start)
+                                    + " earlier", fg_dim(muted)));
+            for (std::size_t i = start; i < lines.size(); ++i) {
+                const auto& ln = lines[i];
+                if (ln.starts_with("[investigate ")) {
+                    rows.push_back(text(ln, fg_dim(muted)));
+                } else if (ln.starts_with("[turn ")) {
+                    rows.push_back(text(ln, Style{}.with_fg(info).with_bold()));
+                } else if (ln.starts_with("## synthesis")) {
+                    rows.push_back(text("\xe2\x96\xb6 synthesis",
+                                        Style{}.with_fg(accent).with_bold()));
+                } else {
+                    rows.push_back(text(ln, fg_of(fg)));
+                }
+                ++row_count;
+            }
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+            return card.build();
+        }
+
+        // Done: skip the framing line "[investigate · model · …]" if
+        // present (that data is in the chrome already) and surface the
+        // synthesis body. Failure path also lands here when the
+        // sub-agent emitted text before erroring — show it.
+        if (!tc.output().empty() && (tc.is_done() || tc.is_failed())) {
+            std::string body = tc.output();
+            // Strip the framing prefix if present. Format:
+            //   "[investigate · model · N turns · K tools · M ms · stop=…]\n\n<body>"
+            if (body.starts_with("[investigate")) {
+                auto end = body.find("]\n\n");
+                if (end != std::string::npos) body = body.substr(end + 3);
+            }
+            std::vector<Element> rows;
+            std::istringstream iss(body);
+            std::string line;
+            int row_count = 0;
+            const int kMaxRows = tc.expanded ? 60 : 16;
+            while (std::getline(iss, line) && row_count < kMaxRows) {
+                Style st = fg_of(fg);
+                if (line.starts_with("**") && line.ends_with("**"))
+                    st = Style{}.with_fg(accent).with_bold();
+                else if (line.starts_with("# "))
+                    st = Style{}.with_fg(highlight).with_bold();
+                else if (line.starts_with("- ") || line.starts_with("* "))
+                    st = fg_of(fg);
+                rows.push_back(text(line, tc.is_failed()
+                    ? Style{}.with_fg(danger) : st));
+                ++row_count;
+            }
+            int remaining = 0;
+            while (std::getline(iss, line)) ++remaining;
+            if (remaining > 0)
+                rows.push_back(text("\xe2\x80\xa6 +" + std::to_string(remaining)
+                                    + " more lines (expand or read full output)",
+                                    fg_dim(muted)));
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
+        return card.build();
+    }
+
     return tool_card(tc.name.value, ToolCallKind::Other,
         tc.args.is_object() && !tc.args.empty() ? tc.args_dump() : "",
         tc.status, tc.expanded, tc.output(), elapsed);

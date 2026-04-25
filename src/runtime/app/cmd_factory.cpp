@@ -258,6 +258,114 @@ Cmd<Msg> open_browser_async(std::string url) {
     });
 }
 
+Cmd<Msg> compact_thread(std::vector<Message> messages,
+                        std::size_t first,
+                        std::size_t last) {
+    // Why off-thread: Haiku's response is the gating factor (≈ 1-3 s on a
+    // dozen-turn window). Doing it on the UI thread freezes the spinner;
+    // doing it as a Cmd::task lets the user keep typing/scrolling and
+    // see a "compacting…" toast in the status bar.
+    return Cmd<Msg>::task(
+        [messages = std::move(messages), first, last]
+        (std::function<void(Msg)> dispatch) mutable {
+            using namespace std::string_literals;
+
+            // System prompt: instruct Haiku to produce a *retrieval-
+            // friendly* summary, not a press release. Bullet-style with
+            // explicit file paths, decisions, error states, and any
+            // open invariants the next turn might need to remember.
+            constexpr const char* kCompactorPrompt =
+                "You compress a coding-assistant conversation so the "
+                "main agent can carry on with much less context. Output "
+                "ONE plain-text summary, 250-700 words, no preamble, "
+                "no markdown headings. Cover, in this order:\n"
+                "  1. The user's overarching goal (1-2 sentences).\n"
+                "  2. Decisions made and the rationale (briefly).\n"
+                "  3. Every file path mentioned with a one-line note "
+                "on what was read / written / discussed.\n"
+                "  4. Any open errors, TODOs, or facts the next turn "
+                "needs (commands the user is waiting on, library "
+                "versions, build state, etc.).\n"
+                "Skip pleasantries, skip explaining what tools you would "
+                "have called, skip re-pasting code unless a 1-2 line "
+                "snippet is load-bearing. Pretend you are the assistant "
+                "writing a hand-off note to itself.";
+
+            // Append a final "now summarise" instruction. Putting it in
+            // a fresh user-turn keeps the conversation valid (alternation)
+            // and signals Haiku that the prior turns are *input*, not its
+            // own work to continue.
+            Message instruction;
+            instruction.role = Role::User;
+            instruction.text =
+                "Summarise the conversation above per the system "
+                "instructions. Return ONLY the summary text."s;
+            messages.push_back(std::move(instruction));
+
+            provider::anthropic::Request req;
+            // Haiku 4.5 — fastest + cheapest model in the family. The
+            // summarisation task is comprehension-heavy but doesn't need
+            // a frontier model; Haiku consistently produces dense,
+            // accurate hand-off notes within ~2 s.
+            req.model         = "claude-haiku-4-5-20251001";
+            req.system_prompt = kCompactorPrompt;
+            req.messages      = std::move(messages);
+            req.tools         = {};                     // no tool calls during compaction
+            req.max_tokens    = 4096;
+            req.auth_header   = deps().auth_header;
+            req.auth_style    = deps().auth_style;
+
+            std::string summary;
+            std::string error;
+            bool finished = false;
+
+            try {
+                provider::anthropic::run_stream_sync(std::move(req), [&](Msg m) {
+                    std::visit([&](auto&& e) {
+                        using T = std::decay_t<decltype(e)>;
+                        if constexpr (std::same_as<T, StreamTextDelta>) {
+                            summary += e.text;
+                        } else if constexpr (std::same_as<T, StreamFinished>) {
+                            finished = true;
+                        } else if constexpr (std::same_as<T, StreamError>) {
+                            error = e.message;
+                            finished = true;
+                        }
+                    }, m);
+                }, /*cancel*/{});
+            } catch (const std::exception& e) {
+                error = std::string{"compactor threw: "} + e.what();
+            } catch (...) {
+                error = "compactor threw: unknown exception";
+            }
+
+            if (!finished && error.empty())
+                error = "compactor: stream ended without a terminal event";
+
+            if (!error.empty()) {
+                dispatch(CompactCompleted{std::unexpected(std::move(error)),
+                                          first, last});
+                return;
+            }
+            // Strip leading/trailing whitespace; nothing valid is empty.
+            while (!summary.empty()
+                   && (summary.front() == ' ' || summary.front() == '\n'
+                    || summary.front() == '\r' || summary.front() == '\t'))
+                summary.erase(0, 1);
+            while (!summary.empty()
+                   && (summary.back() == ' ' || summary.back() == '\n'
+                    || summary.back() == '\r' || summary.back() == '\t'))
+                summary.pop_back();
+            if (summary.empty()) {
+                dispatch(CompactCompleted{
+                    std::unexpected(std::string{"compactor returned empty summary"}),
+                    first, last});
+                return;
+            }
+            dispatch(CompactCompleted{std::move(summary), first, last});
+        });
+}
+
 Cmd<Msg> oauth_exchange(auth::OAuthCode    code,
                         auth::PkceVerifier verifier,
                         auth::OAuthState   state) {

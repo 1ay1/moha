@@ -18,6 +18,7 @@
 #include <nlohmann/json.hpp>
 #include <simdjson.h>
 
+#include "moha/index/repo_index.hpp"
 #include "moha/io/http.hpp"
 #include "moha/tool/registry.hpp"
 
@@ -802,6 +803,18 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
     // cache_control regardless of auth style. OAuth additionally prepends
     // the immutable Claude Code preamble (cli.js line ~5641) so Anthropic's
     // edge accepts the OAuth token; API-key callers skip that preamble.
+    //
+    // The session-scoped repo-map (Tier-2 token-saver) is appended into the
+    // SAME cached system block. Two reasons it lives in the cached prefix:
+    //   1. The compact_map() output is deterministic given an unchanged
+    //      file set — same bytes every turn → prefix cache stays valid.
+    //   2. Bolting it on as a separate block would consume one of the
+    //      4 cache_control slots (already used by system + tools + last
+    //      two messages), tipping the request over Anthropic's per-request
+    //      breakpoint cap.
+    // The map is *frozen* once populated this session: per-tool refreshes
+    // are explicit (call `repo_map`) so a stream of `edit` mtime bumps
+    // doesn't shred the cache.
     {
         json sys = json::array();
         if (is_oauth) {
@@ -810,9 +823,29 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
                 {"text", "You are Claude Code, Anthropic's official CLI for Claude."}
             });
         }
+        std::string sys_text = req.system_prompt;
+        // Lazy first-run population. Subsequent calls re-use the cached
+        // index without re-walking the tree, so the compact_map call is
+        // an in-memory string build.
+        if (!index::shared().ready()) {
+            std::error_code ec;
+            auto cwd = std::filesystem::current_path(ec);
+            if (!ec) index::shared().refresh(cwd);
+        }
+        if (auto map = index::shared().compact_map(/*max_bytes=*/4096); !map.empty()) {
+            sys_text += "\n\n<repo-map>\n"
+                        "# Auto-generated table of contents for the workspace.\n"
+                        "# Lists every code file (C/C++, Py, JS/TS, Go, Rust) and the\n"
+                        "# top-level symbols it declares. Snapshot at session start —\n"
+                        "# call `repo_map` (refreshes), `outline(path)` (one file's\n"
+                        "# detail), or `signatures(name)` (cross-file symbol grep)\n"
+                        "# instead of running `read`/`grep` blind.\n";
+            sys_text += map;
+            sys_text += "</repo-map>";
+        }
         sys.push_back({
             {"type", "text"},
-            {"text", req.system_prompt},
+            {"text", std::move(sys_text)},
             {"cache_control", kCacheCtl}
         });
         body["system"] = std::move(sys);

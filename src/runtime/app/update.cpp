@@ -383,6 +383,12 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                     Msg{ClearStatus{stamp}})};
             }
         },
+        [&](CompactRequested) -> Step {
+            return detail::request_compact(std::move(m));
+        },
+        [&](CompactCompleted& e) -> Step {
+            return detail::apply_compact(std::move(m), std::move(e));
+        },
         [&](RetryStream) -> Step {
             // Scheduled retry fired. Transition back to Fresh so the
             // freshly-launched stream's own errors flow through the
@@ -695,6 +701,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
                 case Command::OpenModels:    return update(std::move(m), OpenModelPicker{});
                 case Command::OpenThreads:   return update(std::move(m), OpenThreadList{});
                 case Command::OpenPlan:      return update(std::move(m), OpenTodoModal{});
+                case Command::Compact:       return update(std::move(m), CompactRequested{});
                 case Command::Quit:          return update(std::move(m), Quit{});
             }
             return done(std::move(m));
