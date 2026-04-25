@@ -17,7 +17,9 @@
 // Storage: <workspace>/.moha/memos.json  (single JSON file, simple,
 // hand-editable, easy to git-ignore).
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <filesystem>
 #include <mutex>
@@ -113,6 +115,13 @@ public:
     // render a listing without needing to lock the store throughout.
     [[nodiscard]] std::vector<Memo> list_memos() const;
 
+    // Block until any async write triggered by add/add_batch/forget has
+    // completed. No-op when no write is pending. Call from app shutdown
+    // so the latest in-memory state lands on disk before the process
+    // exits — without it, a remember fired in the final turn could be
+    // lost to a racing process exit.
+    void flush() const;
+
 private:
     mutable std::mutex          mu_;
     std::filesystem::path       workspace_;
@@ -122,6 +131,21 @@ private:
     std::string                 cached_git_head_;          // current HEAD
     std::chrono::steady_clock::time_point cached_git_head_at_{};
 
+    // ── Async-persist machinery ────────────────────────────────────
+    // The whole point: tool foreground (add/add_batch/forget) finishes
+    // in microseconds — lock, mutate in-memory, signal, return. The
+    // disk write happens on a single detached writer thread. Multiple
+    // adds in flight coalesce into a single write of the latest state
+    // (the writer always serializes the freshest snapshot, never a
+    // stale intermediate). Lock ordering: any caller that holds `mu_`
+    // and then takes `persist_mu_` is fine; the writer never takes
+    // `mu_`, so no inversion is possible.
+    mutable std::mutex                       persist_mu_;
+    mutable std::condition_variable          persist_cv_;
+    mutable std::optional<std::vector<Memo>> pending_snapshot_;
+    mutable std::filesystem::path            pending_store_path_;
+    mutable bool                             writer_active_ = false;
+
     // Cap on number of memos stored. Older ones evicted in FIFO order
     // when adding past the cap. Keeping recency over comprehensiveness
     // assumes the user's recent investigations are more topical.
@@ -129,7 +153,15 @@ private:
 
     void load_locked_();
     void insert_locked_(Memo m);
-    void persist_locked_() const;
+    // Called with `mu_` held. Snapshots the current memos + path,
+    // queues them for the writer, spawns the writer if not running.
+    void schedule_persist_locked_();
+    // Pure write op: takes everything by value/const-ref so the writer
+    // can run without touching `mu_` or any class state besides the
+    // async-persist fields it owns. Static-like; "const" only because
+    // it does no mutation of MemoStore-visible state.
+    void persist_to_disk_(const std::vector<Memo>& memos,
+                          const std::filesystem::path& store_path) const;
     [[nodiscard]] std::string git_head_locked_();
 };
 

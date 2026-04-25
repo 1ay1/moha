@@ -14,6 +14,7 @@
 
 #include <maya/core/overload.hpp>
 
+#include "moha/memory/memo_store.hpp"
 #include "moha/provider/error_class.hpp"
 #include "moha/runtime/app/cmd_factory.hpp"
 #include "moha/runtime/app/deps.hpp"
@@ -981,6 +982,11 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
         },
         [&](Quit) -> Step {
             if (!m.d.current.messages.empty()) deps().save_thread(m.d.current);
+            // Drain the memo store's async writer so the most-recent
+            // remember/forget lands on disk before the process exits.
+            // Async writes are typically <50 ms; flush is a no-op when
+            // nothing is in flight, so this is safe to call always.
+            memory::shared().flush();
             return {std::move(m), Cmd<Msg>::quit()};
         },
         [&](NoOp) -> Step { return done(std::move(m)); },

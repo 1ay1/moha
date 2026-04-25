@@ -11,7 +11,9 @@
 #include <random>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #include <unordered_set>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -271,22 +273,28 @@ void MemoStore::load_locked_() {
     }
 }
 
-void MemoStore::persist_locked_() const {
-    if (workspace_.empty()) return;
+// Pure write op. Takes everything by value/const-ref so it can run on
+// the writer thread without touching mu_ or any class state besides
+// the async-persist fields it owns. Const for member-fn linkage only;
+// no MemoStore-visible state is mutated.
+void MemoStore::persist_to_disk_(const std::vector<Memo>& memos,
+                                  const fs::path& store_path) const {
+    if (store_path.empty()) return;
     std::error_code ec;
-    fs::create_directories(store_path_.parent_path(), ec);
+    fs::create_directories(store_path.parent_path(), ec);
     if (ec) {
         std::fprintf(stderr,
-            "moha: memos: cannot create %s/.moha (%s) — memos this "
+            "moha: memos: cannot create %s (%s) — memos this "
             "session will not persist\n",
-            workspace_.string().c_str(), ec.message().c_str());
+            store_path.parent_path().string().c_str(), ec.message().c_str());
         return;
     }
     json j;
     j["version"]   = 2;     // bumped: provenance fields added
-    j["workspace"] = workspace_.generic_string();
+    // Workspace is the parent of the .moha directory.
+    j["workspace"] = store_path.parent_path().parent_path().generic_string();
     j["memos"]     = json::array();
-    for (const auto& m : memos_) {
+    for (const auto& m : memos) {
         json mj;
         mj["id"]         = m.id;
         mj["query"]      = m.query;
@@ -300,10 +308,9 @@ void MemoStore::persist_locked_() const {
         j["memos"].push_back(std::move(mj));
     }
     // Atomic rename via tmp file so a partial write doesn't corrupt
-    // the store. fflush + fsync (where available) means a crash
-    // mid-rename can't leave us with a half-written file pretending
-    // to be the truth.
-    auto tmp = store_path_;
+    // the store. fflush + rename means a crash mid-write can't leave
+    // us with a half-written file pretending to be the truth.
+    auto tmp = store_path;
     tmp += ".tmp";
     bool wrote = false;
     {
@@ -322,23 +329,80 @@ void MemoStore::persist_locked_() const {
         fs::remove(tmp, ec);
         return;
     }
-    fs::rename(tmp, store_path_, ec);
+    fs::rename(tmp, store_path, ec);
     if (ec) {
         // Cross-device or Windows file-lock contention with the
         // previous file. Fall back to copy+delete; if THAT fails,
         // surface the error so the user knows the memo wasn't saved.
         std::error_code cec;
-        fs::copy_file(tmp, store_path_,
+        fs::copy_file(tmp, store_path,
                       fs::copy_options::overwrite_existing, cec);
         if (cec) {
             std::fprintf(stderr,
                 "moha: memos: rename %s -> %s failed (%s) and copy "
                 "fallback failed (%s) — memo NOT persisted\n",
-                tmp.string().c_str(), store_path_.string().c_str(),
+                tmp.string().c_str(), store_path.string().c_str(),
                 ec.message().c_str(), cec.message().c_str());
         }
         fs::remove(tmp, cec);
     }
+}
+
+// Caller holds mu_. Snapshot the current memos under that lock, hand
+// them to the writer queue, spawn the writer if it's not already
+// draining. Returns immediately — the actual disk write runs on a
+// detached thread, so a single remember/forget call costs ~µs of
+// foreground time instead of the previous ~10–50 ms (disk-bound).
+//
+// Coalescing: if an add lands while the writer is already mid-write,
+// the new snapshot replaces the queued one and the writer handles it
+// on its next iteration. Three remembers in rapid succession produce
+// at most two writes (the in-flight one + the latest coalesced).
+void MemoStore::schedule_persist_locked_() {
+    if (workspace_.empty()) return;
+    auto snapshot = memos_;            // copy under mu_
+    auto path     = store_path_;
+
+    bool spawn_writer = false;
+    {
+        std::lock_guard plk(persist_mu_);
+        pending_snapshot_   = std::move(snapshot);
+        pending_store_path_ = std::move(path);
+        if (!writer_active_) {
+            writer_active_ = true;
+            spawn_writer   = true;
+        }
+    }
+    if (!spawn_writer) return;          // existing writer will pick this up
+
+    // Detached: we don't track it. flush() uses the condvar to wait;
+    // process exit kills the thread (a torn temp file is fine — the
+    // canonical memos.json is whatever was last successfully renamed).
+    std::thread([this]{
+        while (true) {
+            std::vector<Memo> to_write;
+            fs::path          path;
+            {
+                std::lock_guard plk(persist_mu_);
+                if (!pending_snapshot_) {
+                    writer_active_ = false;
+                    persist_cv_.notify_all();   // wake any flush()
+                    return;
+                }
+                to_write = std::move(*pending_snapshot_);
+                path     = pending_store_path_;
+                pending_snapshot_.reset();
+            }
+            persist_to_disk_(to_write, path);
+        }
+    }).detach();
+}
+
+void MemoStore::flush() const {
+    std::unique_lock plk(persist_mu_);
+    persist_cv_.wait(plk, [this]{
+        return !writer_active_ && !pending_snapshot_;
+    });
 }
 
 std::string MemoStore::git_head_locked_() {
@@ -351,9 +415,12 @@ std::string MemoStore::git_head_locked_() {
     return cached_git_head_;
 }
 
-// Single-add path: lock + insert one + persist. Fine for the common
-// case (investigate writes one memo). For multi-add bursts (the
-// remember tool's batch shape), use add_batch to amortize the persist.
+// Single-add path: lock + insert one + schedule async persist. The
+// persist runs on a background writer thread; this call returns
+// once the in-memory state is updated, typically in microseconds. Any
+// later in-process read (compose_prompt_block, find_similar, ...)
+// sees the new memo immediately because the in-memory store IS the
+// source of truth — disk is just for cross-restart durability.
 void MemoStore::add(Memo m) {
     if (m.id.empty()) m.id = short_id();
     if (m.created_at.time_since_epoch().count() == 0)
@@ -361,22 +428,23 @@ void MemoStore::add(Memo m) {
     std::lock_guard lk(mu_);
     if (workspace_.empty()) return;     // not bound to a workspace
     insert_locked_(std::move(m));
-    persist_locked_();
+    schedule_persist_locked_();
 }
 
 void MemoStore::add_batch(std::vector<Memo> memos) {
     if (memos.empty()) return;
     std::lock_guard lk(mu_);
     if (workspace_.empty()) return;
-    // Insert all under one lock acquisition — no persist between adds,
-    // so the file is rewritten exactly once for the whole batch.
+    // Insert all under one lock acquisition; ONE async persist signal
+    // for the whole batch (the writer always serializes the freshest
+    // snapshot, so even if it's already running, our newer state wins).
     for (auto& m : memos) {
         if (m.id.empty()) m.id = short_id();
         if (m.created_at.time_since_epoch().count() == 0)
             m.created_at = std::chrono::system_clock::now();
         insert_locked_(std::move(m));
     }
-    persist_locked_();
+    schedule_persist_locked_();
 }
 
 // Common insert path used by add() / add_batch(). Caller must hold mu_.
@@ -573,7 +641,7 @@ std::size_t MemoStore::forget(std::string_view target) {
     auto [first, last] = std::ranges::remove_if(memos_, match);
     memos_.erase(first, last);
     std::size_t removed = before - memos_.size();
-    if (removed > 0) persist_locked_();
+    if (removed > 0) schedule_persist_locked_();
     return removed;
 }
 
