@@ -20,6 +20,7 @@
 #include <maya/widget/git_commit_tool.hpp>
 #include <maya/widget/git_graph.hpp>
 #include <maya/widget/git_status.hpp>
+#include <maya/widget/markdown.hpp>
 #include <maya/widget/read_tool.hpp>
 #include <maya/widget/search_result.hpp>
 #include <maya/widget/todo_list.hpp>
@@ -1302,6 +1303,8 @@ Element investigate_body(const ToolUse& tc, float elapsed) {
         bool        running = true;
         int         ms = 0;
         std::string err;
+        std::string arg_summary;     // one-line `arg` line content
+        std::string res_summary;     // one-line `res` line content
     };
     struct TurnView {
         int                    n = 0;
@@ -1415,8 +1418,24 @@ Element investigate_body(const ToolUse& tc, float elapsed) {
                     matched = true; break;
                 }
             }
-            if (!matched) t.tools.push_back({nm, ok, false, ms, err});
+            if (!matched) t.tools.push_back({nm, ok, false, ms, err, "", ""});
             if (ok) ++t.ok_count;
+        } else if (starts_with(rest, "arg ") || starts_with(rest, "res ")) {
+            bool is_arg = starts_with(rest, "arg ");
+            std::string body = rest.substr(4);
+            auto sp = body.find(' ');
+            if (sp == std::string::npos) continue;
+            std::string nm  = body.substr(0, sp);
+            std::string val = body.substr(sp + 1);
+            // Attach to the first tool of this name that doesn't already
+            // have the corresponding summary populated. Order-aligned with
+            // the dispatch list, so multiple `read` calls map correctly to
+            // their respective paths.
+            for (auto& tr : t.tools) {
+                if (tr.name != nm) continue;
+                std::string& slot = is_arg ? tr.arg_summary : tr.res_summary;
+                if (slot.empty()) { slot = val; break; }
+            }
         } else if (starts_with(rest, "done ")) {
             t.done = true;
         } else if (rest == "synthesis") {
@@ -1601,14 +1620,60 @@ Element investigate_body(const ToolUse& tc, float elapsed) {
                 icon = "\xe2\x9c\x97 ";
                 icon_st = Style{}.with_fg(danger).with_bold();
             }
+
+            // Hard cap on the combined arg + " · " + res text so a
+            // long path + verbose result hint can't blow the row
+            // width and force yoga to wrap mid-word. The producer
+            // (investigate.cpp:tool_arg_summary / _result_summary)
+            // already truncates each piece to ~50 chars, but this
+            // belt-and-suspenders cap protects against future tools
+            // emitting long summaries we forgot about.
+            std::string arg_disp = tr.arg_summary;
+            std::string res_disp = tr.res_summary;
+            constexpr std::size_t kCombinedCap = 90;
+            std::size_t want = arg_disp.size() + res_disp.size()
+                             + (res_disp.empty() ? 0 : 4);   // "  · "
+            if (want > kCombinedCap) {
+                // Drop res first (it's secondary); then truncate arg.
+                std::size_t over = want - kCombinedCap;
+                if (!res_disp.empty()) {
+                    if (over >= res_disp.size() + 4) {
+                        over -= res_disp.size() + 4;
+                        res_disp.clear();
+                    } else {
+                        res_disp.resize(res_disp.size() - over - 1);
+                        res_disp += "\xe2\x80\xa6";          // …
+                        over = 0;
+                    }
+                }
+                if (over > 0 && over < arg_disp.size()) {
+                    arg_disp.resize(arg_disp.size() - over - 1);
+                    arg_disp += "\xe2\x80\xa6";
+                }
+            }
+
             std::vector<Element> tcells;
             tcells.push_back(text(rail, rail_st));
             tcells.push_back(text("    " + icon, icon_st));
             tcells.push_back(text(pad_right(tr.name, name_w),
                 Style{}.with_fg(kind_color(tr.name))));
+            // Arg summary (path / pattern / query / etc.) — the *what*
+            // of this call. Bright fg so it reads as the primary
+            // content of the row, not metadata.
+            if (!arg_disp.empty()) {
+                tcells.push_back(text("  " + arg_disp,
+                                      Style{}.with_fg(fg)));
+            }
+            // Result summary — what came back (match count, line count,
+            // branch name, etc.). Dim cyan so it's distinguishable from
+            // the arg without competing with it.
+            if (!res_disp.empty()) {
+                tcells.push_back(text("  \xc2\xb7  " + res_disp,
+                                      Style{}.with_fg(highlight).with_dim()));
+            }
             if (!tr.ok && !tr.running && !tr.err.empty()) {
                 std::string e = tr.err;
-                if (e.size() > 50) { e.resize(47); e += "..."; }
+                if (e.size() > 40) { e.resize(37); e += "..."; }
                 tcells.push_back(text("  " + e,
                     Style{}.with_fg(danger).with_dim()));
             }
@@ -1643,13 +1708,6 @@ Element investigate_body(const ToolUse& tc, float elapsed) {
         rows.push_back(text(""));
 
         const std::string& body = synth ? synth->synthesis : fallback_body;
-        std::vector<std::string> body_lines;
-        {
-            std::istringstream bit(body);
-            std::string bline;
-            while (std::getline(bit, bline)) body_lines.push_back(std::move(bline));
-        }
-        int total_lines = static_cast<int>(body_lines.size());
 
         // Word count for the live indicator. Approximate: split by
         // whitespace runs. Cheap; runs once per render.
@@ -1682,53 +1740,51 @@ Element investigate_body(const ToolUse& tc, float elapsed) {
         ) | grow(1.0f)).build());
 
         // ── Body rendering policy ─────────────────────────────────
-        // Streaming → show the LIVE TAIL (last N lines). The full
-        //   answer will land in the parent's tool_result the moment
-        //   the sub-agent finishes; growing the tool card to 200
-        //   lines as the synthesis writes itself is exactly what the
-        //   user complained about.
-        // Done     → show a tight HEAD preview + "expand" hint so the
-        //   card stays compact and the parent's follow-up turn is
-        //   what the user actually reads. Full text is still in
-        //   tc.output() (returned to the model and visible if you
-        //   expand the card).
-        // Failed   → same head policy in danger color.
-        const int kStreamingTail = 6;       // lines of LIVE tail
-        const int kDoneHead      = tc.expanded ? 12 : 5;
-
-        auto style_for = [&](const std::string& bline) {
-            if (tc.is_failed() && !synth) return Style{}.with_fg(danger);
-            if (bline.starts_with("**") && bline.ends_with("**")
-                && bline.size() >= 4)
-                return Style{}.with_fg(accent).with_bold();
-            if (bline.starts_with("# "))
-                return Style{}.with_fg(highlight).with_bold();
-            return fg_of(fg);
-        };
-
-        if (tc.is_running()) {
-            // Streaming: show the TAIL.
-            int start = std::max(0, total_lines - kStreamingTail);
-            if (start > 0) {
-                rows.push_back(text("\xe2\x80\xa6 +" + std::to_string(start)
-                                    + " earlier lines", fg_dim(muted)));
+        // Layout-stability rule: during streaming we render NO body
+        // text at all — only the banner above with its live word
+        // counter. This is the user's complaint fix: the previous
+        // "live tail" would re-flow on every delta as new lines
+        // arrived and old lines fell off the tail window, causing
+        // the card height to shrink/grow many times per second and
+        // pushing everything below it around the screen.
+        //
+        // The cost: while streaming you don't see the synthesis text
+        // accumulating — but the banner ticks "writing… 312 words" so
+        // there's clear progress feedback, and the FULL answer lands
+        // in the parent's tool_result the instant the sub-agent
+        // finishes. The body renders once, statically, when done.
+        //
+        // When complete, render markdown HEAD preview (~800 chars
+        // collapsed, ~4000 expanded) snapped to a line boundary so we
+        // never slice a fenced code block or mid-list. `maya::markdown`
+        // gives us proper headings / bold / inline code / fences.
+        if (!tc.is_running()) {
+            const std::size_t kHeadChars = tc.expanded ? 4000 : 800;
+            auto snap_before_newline = [](std::string_view s,
+                                          std::size_t pos) -> std::size_t {
+                if (pos == 0) return 0;
+                auto nl = s.rfind('\n', pos - 1);
+                if (nl == std::string_view::npos) return pos;
+                return nl + 1;
+            };
+            std::string snippet;
+            std::size_t hidden_chars = 0;
+            if (body.size() <= kHeadChars) {
+                snippet = body;
+            } else {
+                std::size_t cut = snap_before_newline(body, kHeadChars);
+                if (cut == 0) cut = kHeadChars;
+                snippet = body.substr(0, cut);
+                hidden_chars = body.size() - cut;
             }
-            for (int i = start; i < total_lines; ++i) {
-                rows.push_back(text(body_lines[static_cast<std::size_t>(i)],
-                                    style_for(body_lines[static_cast<std::size_t>(i)])));
+            if (!snippet.empty()) {
+                rows.push_back(maya::markdown(snippet));
             }
-        } else {
-            // Terminal: HEAD with expand hint.
-            int shown = std::min(total_lines, kDoneHead);
-            for (int i = 0; i < shown; ++i) {
-                rows.push_back(text(body_lines[static_cast<std::size_t>(i)],
-                                    style_for(body_lines[static_cast<std::size_t>(i)])));
-            }
-            int rem = total_lines - shown;
-            if (rem > 0) {
+            if (hidden_chars > 0) {
+                int approx_words = static_cast<int>(hidden_chars / 5);
                 rows.push_back(text(
-                    "\xe2\x80\xa6 +" + std::to_string(rem)
-                    + " more lines (full text returned to parent)",
+                    "\xe2\x80\xa6 +" + std::to_string(approx_words)
+                    + " more words (full text returned to parent)",
                     fg_dim(muted)));
             }
         }

@@ -20,6 +20,7 @@
 
 #include "moha/index/repo_index.hpp"
 #include "moha/io/http.hpp"
+#include "moha/memory/memo_store.hpp"
 #include "moha/tool/registry.hpp"
 
 namespace moha::provider::anthropic {
@@ -842,6 +843,42 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
                         "# instead of running `read`/`grep` blind.\n";
             sys_text += map;
             sys_text += "</repo-map>";
+        }
+
+        // Persistent codebase memory — every successful `investigate`
+        // run writes its synthesis to <workspace>/.moha/memos.json.
+        // We inject the rolling memo block here so EVERY future
+        // request sees what was previously learned. The cached prefix
+        // means the cost amortises: pay once when a memo is added,
+        // free on every turn afterwards. The instructions inside the
+        // block tell the model to ANSWER FROM MEMORY when a memo
+        // covers the question, instead of re-running investigate.
+        if (auto memos = memory::shared().compose_prompt_block(/*max_bytes=*/8192);
+            !memos.empty()) {
+            sys_text +=
+                "\n\n<learned-about-this-workspace>\n"
+                "# *** READ THIS FIRST. ***\n"
+                "# This block is the workspace's persistent memory — facts\n"
+                "# the agent has discovered in past sessions, cached on\n"
+                "# Anthropic's side so it is essentially free per turn.\n"
+                "#\n"
+                "# RULES:\n"
+                "#   1. Before calling `investigate` / `grep` / `read` to\n"
+                "#      learn something, scan this block. If a memo\n"
+                "#      already covers the question, ANSWER FROM IT.\n"
+                "#      Do not re-investigate ground we already covered.\n"
+                "#   2. When you discover a fact worth keeping (a hard-won\n"
+                "#      architectural insight, a non-obvious relationship,\n"
+                "#      a subtle invariant), call `remember(topic, content)`\n"
+                "#      so future turns inherit it.\n"
+                "#   3. If a memo here contradicts what you've just observed,\n"
+                "#      call `forget(id)` to drop it, then `remember` the\n"
+                "#      corrected fact.\n"
+                "#   4. Use `memos()` to list everything currently stored\n"
+                "#      (with freshness markers).\n"
+                "#\n";
+            sys_text += memos;
+            sys_text += "</learned-about-this-workspace>";
         }
         sys.push_back({
             {"type", "text"},

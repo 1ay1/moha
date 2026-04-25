@@ -113,6 +113,10 @@ enum class Kind : std::uint8_t {
     Signatures,   // grep symbol names across the index
     // ── Sub-agent ──────────────────────────────────────────────────────
     Investigate,
+    // ── Persistent codebase-memory tools ──────────────────────────────
+    Remember,
+    Forget,
+    Memos,
 };
 
 inline constexpr std::array kCatalog = {
@@ -141,6 +145,15 @@ inline constexpr std::array kCatalog = {
     // read-only tool subset it may invoke is enforced inside
     // investigate.cpp, not at the spec layer.
     ToolSpec{"investigate",     Kind::Investigate,    {Effect::Net},                        true,    detail::sec{300}},
+    // ── Persistent workspace-memory tools (in-process, no I/O cost) ────
+    // `remember` writes to <workspace>/.moha/memos.json — local FS; we
+    // tag it WriteFs so the policy gates on it under stricter profiles
+    // (the user should know when knowledge is being persisted to disk).
+    // `forget` mutates the store the same way → WriteFs.
+    // `memos` is read-only over the in-memory store + JSON file.
+    ToolSpec{"remember",        Kind::Remember,       {Effect::WriteFs},                    true,    detail::sec{5}},
+    ToolSpec{"forget",          Kind::Forget,         {Effect::WriteFs},                    false,   detail::sec{5}},
+    ToolSpec{"memos",           Kind::Memos,          {Effect::ReadFs},                     false,   detail::sec{5}},
 };
 
 // Wire-string → Kind. `std::nullopt` for names not in the catalog so the
@@ -221,6 +234,7 @@ consteval bool kinds_bijective() {
         Kind::GitLog, Kind::GitCommit,
         Kind::Outline, Kind::RepoMap, Kind::Signatures,
         Kind::Investigate,
+        Kind::Remember, Kind::Forget, Kind::Memos,
     };
     if (std::size(kAll) != kCatalog.size()) return false;
     for (auto k : kAll) {
@@ -289,7 +303,7 @@ consteval bool readonly_invariants() {
     constexpr std::string_view kReadOnly[] = {
         "read","grep","glob","list_dir","find_definition",
         "git_status","git_diff","git_log",
-        "outline","repo_map","signatures",
+        "outline","repo_map","signatures","memos",
     };
     for (auto n : kReadOnly) {
         auto* s = lookup(n);

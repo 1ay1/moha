@@ -111,6 +111,14 @@ std::vector<ToolDef> build_registry() {
     r.push_back(tool_repo_map());
     r.push_back(tool_signatures());
     r.push_back(tool_investigate());
+    // Workspace-memory tools — listed late on purpose. The model
+    // discovers them via tool descriptions; the system-prompt block
+    // already advertises that memos are read at every turn, so the
+    // tools are mostly for explicit curation (`remember` to bank a
+    // hard-won fact, `forget` to drop a stale one, `memos` to audit).
+    r.push_back(tool_remember());
+    r.push_back(tool_forget());
+    r.push_back(tool_memos());
     return r;
 }
 

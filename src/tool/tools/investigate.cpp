@@ -30,10 +30,13 @@
 //   * Higher turn cap (20) so deep investigations don't truncate.
 //   * Self-recursion blocked (excluded from the tool subset).
 
+#include "moha/memory/file_card_store.hpp"
+#include "moha/memory/memo_store.hpp"
 #include "moha/tool/spec.hpp"
 #include "moha/tool/tool.hpp"
 #include "moha/tool/tools.hpp"
 #include "moha/tool/util/arg_reader.hpp"
+#include "moha/tool/util/fs_helpers.hpp"
 #include "moha/tool/util/tool_args.hpp"
 #include "moha/tool/util/utf8.hpp"
 
@@ -45,6 +48,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <unordered_set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -338,6 +342,190 @@ dispatch_line(int turn, const std::vector<ToolUse>& tcs) {
     return o.str();
 }
 
+// Relativize an absolute path against the workspace root so the
+// display is "src/auth.cpp" not "C:/Users/.../moha/src/auth.cpp".
+// Falls back to the original string when the path isn't under the
+// workspace (or canonicalisation fails — be lenient).
+[[nodiscard]] std::string
+relpath(std::string s) {
+    if (s.empty()) return s;
+    std::error_code ec;
+    auto root = tools::util::workspace_root();
+    if (root.empty()) return s;
+    auto abs = std::filesystem::weakly_canonical(s, ec);
+    if (ec) return s;
+    auto rel = std::filesystem::relative(abs, root, ec);
+    if (ec) return s;
+    auto out = rel.generic_string();
+    if (out.empty() || out == ".") return s;
+    if (out.starts_with("..")) return s;     // outside workspace
+    return out;
+}
+
+// One-line summary of a tool call's primary argument(s) — what the
+// renderer wants to put next to the tool name so the user can tell
+// `read src/auth.cpp` apart from `read src/oauth.hpp`. Falls back to
+// "" when the tool has no surface-level noun (e.g. todo). Capped TIGHT
+// because the row also has to fit a name column, a result summary,
+// and a right-aligned timing — collectively they need to live within
+// a single terminal line so yoga doesn't wrap them mid-word.
+[[nodiscard]] std::string
+tool_arg_summary(const std::string& name, const nlohmann::json& args) {
+    if (!args.is_object()) return "";
+    auto sval = [&](std::initializer_list<const char*> keys) -> std::string {
+        for (auto k : keys) {
+            if (auto it = args.find(k); it != args.end() && it->is_string())
+                return it->template get<std::string>();
+        }
+        return "";
+    };
+    // Tighter cap (was 70). 50 chars is enough for "src/runtime/app/
+    // update/stream.cpp" comfortably, and forces longer paths to
+    // truncate cleanly with an ellipsis instead of overflowing the
+    // row width when paired with a result summary + timing.
+    auto truncate = [](std::string s, std::size_t cap = 50) {
+        if (s.size() > cap) { s.resize(cap - 3); s += "..."; }
+        return s;
+    };
+    if (name == "read") {
+        // Just the (relative) path. The "L<a>-<b>" range info now
+        // lives in the RESULT summary so we don't double-show it
+        // (and don't blow the row width when the model paged a
+        // big file).
+        return truncate(relpath(sval({"path","file_path","filepath","filename"})));
+    }
+    if (name == "edit" || name == "write")
+        return truncate(relpath(sval({"path","file_path","filepath","filename"})));
+    if (name == "grep") {
+        auto pat = sval({"pattern"});
+        auto root = sval({"path"});
+        auto glob = sval({"glob"});
+        std::string out = "\"" + pat + "\"";
+        if (!glob.empty())                          out += " " + glob;
+        else if (!root.empty() && root != ".")      out += " " + relpath(root);
+        return truncate(out);
+    }
+    if (name == "glob")            return truncate(sval({"pattern"}));
+    if (name == "list_dir") {
+        auto p = sval({"path"});
+        return truncate(p.empty() ? std::string{"."} : relpath(p));
+    }
+    if (name == "find_definition") return truncate(sval({"symbol"}));
+    if (name == "outline")         return truncate(relpath(sval({"path"})));
+    if (name == "repo_map") {
+        auto p = sval({"path"});
+        return p.empty() ? std::string{"workspace"} : truncate(relpath(p));
+    }
+    if (name == "signatures")      return truncate("\"" + sval({"pattern"}) + "\"");
+    if (name == "web_fetch")       return truncate(sval({"url"}));
+    if (name == "web_search")      return truncate("\"" + sval({"query"}) + "\"");
+    if (name == "git_log") {
+        auto r = sval({"ref"});
+        return r.empty() ? std::string{} : truncate(r);
+    }
+    if (name == "git_diff") {
+        auto r = sval({"ref"});
+        auto p = sval({"path"});
+        std::string out;
+        if (!r.empty()) out = r;
+        if (!p.empty()) out += (out.empty() ? "" : " ") + relpath(p);
+        return truncate(out);
+    }
+    if (name == "git_commit")      return truncate(sval({"message"}));
+    if (name == "bash" || name == "diagnostics")
+        return truncate(sval({"command"}));
+    return "";
+}
+
+// One-line *result* summary derived from the tool's output. Tells the
+// user what the call FOUND, not just what it asked for. Cheap parses;
+// returns "" when the tool's output doesn't lend itself to a tagline.
+[[nodiscard]] std::string
+tool_result_summary(const ToolUse& tc) {
+    if (!tc.is_done()) return "";
+    const auto& out = tc.output();
+    if (out.empty()) return "";
+    const std::string& n = tc.name.value;
+
+    // Helper: count newlines in a string.
+    auto count_lines = [](std::string_view s) {
+        int n_ = 0;
+        for (char c : s) if (c == '\n') ++n_;
+        if (!s.empty() && s.back() != '\n') ++n_;
+        return n_;
+    };
+
+    if (n == "read") {
+        // Read's `[showing lines A-B of T; K more — pass offset=…]`
+        // hint is verbose. We want JUST the "A-B of T" part — the
+        // "pass offset=…" suffix is for the model's offset choice and
+        // would otherwise blow the row width when shown in the card.
+        if (auto p = out.find("[showing lines "); p != std::string::npos) {
+            auto end = out.find(']', p);
+            if (end != std::string::npos) {
+                auto inner = out.substr(p + 15, end - (p + 15));
+                // Take through the first ";" only.
+                if (auto sc = inner.find(';'); sc != std::string::npos)
+                    inner.resize(sc);
+                // Trim trailing whitespace.
+                while (!inner.empty() && (inner.back() == ' '
+                                       || inner.back() == '\n'
+                                       || inner.back() == '\r'))
+                    inner.pop_back();
+                return "L" + inner;
+            }
+        }
+        return std::to_string(count_lines(out)) + " lines";
+    }
+    if (n == "grep" || n == "find_definition") {
+        if (auto p = out.find("Found "); p != std::string::npos) {
+            auto end = out.find('.', p);
+            if (end != std::string::npos)
+                return out.substr(p + 6, end - (p + 6));
+        }
+        if (out.starts_with("No matches")) return "no matches";
+        return std::to_string(count_lines(out)) + " lines";
+    }
+    if (n == "glob")     return std::to_string(count_lines(out)) + " files";
+    if (n == "list_dir") return std::to_string(count_lines(out)) + " entries";
+    if (n == "outline" || n == "signatures") {
+        if (auto p = out.find('('); p != std::string::npos) {
+            auto end = out.find(')', p);
+            if (end != std::string::npos)
+                return out.substr(p + 1, end - p - 1);
+        }
+        return "";
+    }
+    if (n == "repo_map") return std::to_string(count_lines(out)) + " lines";
+    if (n == "web_fetch" || n == "web_search") {
+        // First line is "HTTP <status> ..." for fetch; for search just
+        // count result lines.
+        if (auto nl = out.find('\n'); nl != std::string::npos)
+            return out.substr(0, std::min<std::size_t>(nl, 50));
+        return "";
+    }
+    if (n == "git_status") {
+        // Look for `# branch.head <name>` and count entry lines.
+        std::string branch;
+        int dirty = 0;
+        std::istringstream iss(out);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (line.starts_with("# branch.head "))
+                branch = line.substr(14);
+            else if (!line.empty() && (line[0] == '1' || line[0] == '2'
+                                    || line[0] == '?'))
+                ++dirty;
+        }
+        if (branch.empty() && dirty == 0) return "";
+        std::ostringstream o;
+        if (!branch.empty()) o << branch;
+        if (dirty > 0) o << (branch.empty() ? "" : " · ") << dirty << " dirty";
+        return o.str();
+    }
+    return "";
+}
+
 // Format a per-tool result line in the structured vocabulary.
 //   T3 ok outline 120ms
 //   T3 err grep 0ms no match
@@ -364,6 +552,27 @@ ExecResult run_investigate(const InvestigateArgs& a) {
     if (d.auth_header.empty())
         return std::unexpected(ToolError::network(
             "investigate: parent session is not authenticated"));
+
+    // ── Layer 2: investigation cache lookup ─────────────────────────
+    // Before spawning the sub-agent, ask the memo store if we've
+    // already answered a similar question and the answer is still
+    // fresh (git HEAD unchanged or referenced files un-modified). On
+    // a hit, return the cached synthesis instantly — zero sub-agent
+    // turns, zero tokens. The framing tag tells the user (and the
+    // model) that this is replayed memory, not a fresh run.
+    if (auto cached = memory::shared().find_similar(a.query);
+        cached && memory::shared().is_fresh(*cached)) {
+        std::ostringstream o;
+        o << "[investigate · CACHED · 0 turns · 0 tool calls "
+          << "· instant · matched memo " << cached->id
+          << " stored " << std::chrono::duration_cast<std::chrono::seconds>(
+                 std::chrono::system_clock::now() - cached->created_at).count()
+          << "s ago]\n\n" << cached->synthesis;
+        std::string body = o.str();
+        if (!a.display_description.empty())
+            body = a.display_description + "\n\n" + body;
+        return ToolOutput{std::move(body), std::nullopt};
+    }
 
     const std::string model_id = resolve_model(a.model);
     Progress progress;
@@ -428,16 +637,34 @@ ExecResult run_investigate(const InvestigateArgs& a) {
         total_tools += static_cast<int>(assistant.tool_calls.size());
         progress.line(dispatch_line(turn + 1, assistant.tool_calls));
 
+        // Per-tool ARG lines — emitted before execution so the user sees
+        // *what* each tool is about to do, not just its name. Format:
+        //   T<n> arg <name> <one-line summary>
+        // Parser matches lines to tool rows in dispatch order.
+        for (const auto& tc : assistant.tool_calls) {
+            auto sum = tool_arg_summary(tc.name.value, tc.args);
+            if (sum.empty()) continue;
+            progress.line("T" + std::to_string(turn + 1)
+                          + " arg " + tc.name.value + " " + sum);
+        }
+
         // Concurrent dispatch — read-only by construction, no permission
         // gate or cross-effect serialisation needed inside the sub-agent.
         // The parent's effect-aware scheduler still handles the parent-
         // level interaction (the investigate Cmd itself).
         execute_calls_parallel(assistant.tool_calls);
 
-        // Per-tool result lines — gives the view per-tool ✓/✗ + ms.
+        // Per-tool result + result-summary lines — gives the view both
+        // ✓/✗ + ms AND a short "what was found" tag (e.g. "12 matches
+        // in 4 files", "src/foo.cpp 1.2 KB", "no matches"). The arg
+        // tells you what was asked; the res tells you what came back.
         int ok_count = 0, err_count = 0;
         for (const auto& tc : assistant.tool_calls) {
             progress.line(result_line(turn + 1, tc));
+            if (auto rsum = tool_result_summary(tc); !rsum.empty()) {
+                progress.line("T" + std::to_string(turn + 1)
+                              + " res " + tc.name.value + " " + rsum);
+            }
             if (tc.is_done()) ++ok_count; else ++err_count;
         }
         progress.line("T" + std::to_string(turn + 1) + " done "
@@ -481,6 +708,111 @@ ExecResult run_investigate(const InvestigateArgs& a) {
                     + "-turn cap without a final answer. Last partial:\n"
                     + partial),
             std::nullopt};
+    }
+
+    // ── Layer 1: persist memo ────────────────────────────────────
+    // Walk the sub-agent's message history and harvest every file
+    // path it touched (read / outline / signatures / etc.). These
+    // become the memo's `file_refs` — used both by the freshness
+    // check (have any of them changed?) and by Layer 3 (repo_map
+    // surfacing "this file was discussed in investigation X").
+    if (!final_text.empty()) {
+        memory::Memo memo;
+        memo.query     = a.query;
+        memo.synthesis = final_text;
+        memo.created_at = std::chrono::system_clock::now();
+
+        // Extract file_refs from BOTH the sub-agent's tool args AND
+        // the tool OUTPUTS — this is the richer signal. A grep
+        // doesn't have a single "path" arg but its output names every
+        // file with matches; same for glob and find_definition. The
+        // freshness check then knows about every file the agent
+        // actually inspected, not just the entry points.
+        std::unordered_set<std::string> seen;
+        auto add_path = [&](std::string s) {
+            if (s.empty()) return;
+            // Normalise to forward-slash workspace-relative.
+            std::error_code ec;
+            std::filesystem::path abs = std::filesystem::weakly_canonical(s, ec);
+            if (ec) abs = s;
+            std::filesystem::path rel = std::filesystem::relative(
+                abs, tools::util::workspace_root(), ec);
+            std::string out = ec ? abs.generic_string() : rel.generic_string();
+            // Reject stuff outside the workspace (`../something`) and
+            // duplicates. Cap total file_refs to keep memos compact.
+            if (out.empty() || seen.contains(out)) return;
+            if (out.size() >= 2 && out[0] == '.' && out[1] == '.') return;
+            if (memo.file_refs.size() >= 32) return;
+            seen.insert(out);
+            memo.file_refs.push_back(std::move(out));
+        };
+        // Pull anything that LOOKS like a workspace-relative path from
+        // a string. Heuristic: extension-bearing tokens (`foo.cpp`,
+        // `src/runtime/main.cpp`) plus `path:line:` line prefixes
+        // (find_definition / legacy grep output).
+        auto harvest_paths = [&](std::string_view body) {
+            // 1. `## Matches in <path>` — grep markdown header.
+            std::size_t pos = 0;
+            while ((pos = body.find("## Matches in ", pos)) != std::string::npos) {
+                pos += 14;
+                auto end = body.find('\n', pos);
+                std::string p{body.substr(pos,
+                    end == std::string_view::npos ? body.size() - pos : end - pos)};
+                while (!p.empty() && (p.back() == ' ' || p.back() == '\r')) p.pop_back();
+                if (p.starts_with("./")) p = p.substr(2);
+                add_path(std::move(p));
+                pos = end == std::string_view::npos ? body.size() : end;
+            }
+            // 2. `path:line:content` — find_definition + legacy grep.
+            pos = 0;
+            while (pos < body.size()) {
+                auto nl = body.find('\n', pos);
+                std::string_view line = body.substr(pos,
+                    nl == std::string_view::npos ? body.size() - pos : nl - pos);
+                pos = nl == std::string_view::npos ? body.size() : nl + 1;
+                auto c1 = line.find(':');
+                if (c1 == std::string_view::npos || c1 == 0) continue;
+                if (c1 + 1 >= line.size() || !std::isdigit(static_cast<unsigned char>(line[c1+1])))
+                    continue;
+                std::string_view path = line.substr(0, c1);
+                if (path.find('.') == std::string_view::npos) continue;
+                if (path.starts_with("./")) path.remove_prefix(2);
+                add_path(std::string{path});
+            }
+        };
+        for (const auto& msg : messages) {
+            for (const auto& tc : msg.tool_calls) {
+                if (!tc.args.is_object()) continue;
+                // Args path.
+                for (const char* k : {"path","file_path","filepath","filename"}) {
+                    if (auto it = tc.args.find(k);
+                        it != tc.args.end() && it->is_string()) {
+                        std::string s = it->get<std::string>();
+                        // Skip directory args ("." / "src/" etc.) — they
+                        // create false positives in freshness checks.
+                        if (s == "." || s == "" || s.back() == '/') continue;
+                        add_path(std::move(s));
+                    }
+                }
+                // Output path harvest — far richer signal than args alone.
+                if (tc.is_done() || tc.is_failed()) {
+                    harvest_paths(tc.output());
+                }
+            }
+        }
+        // Layer 3 trigger: now that we know which files this
+        // investigation touched, queue them for async knowledge-card
+        // distillation. The worker calls Haiku in the background,
+        // saves the card to <workspace>/.moha/cards/, and the next
+        // turn's repo_map will surface the cards inline. Cheap
+        // (Haiku ~$0.0008/file) and one-time per file:mtime.
+        for (const auto& rel : memo.file_refs) {
+            std::filesystem::path abs = tools::util::workspace_root() / rel;
+            std::error_code ec;
+            if (std::filesystem::exists(abs, ec))
+                memory::shared_cards().request(abs);
+        }
+        memory::shared().add(std::move(memo));
     }
 
     return ToolOutput{framing("investigate", final_text), std::nullopt};

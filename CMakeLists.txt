@@ -320,12 +320,23 @@ set(MOHA_TOOL_SOURCES
     src/tool/tools/signatures.cpp
     # Tier-3 sub-agent.
     src/tool/tools/investigate.cpp
+    # Persistent workspace memory — explicit-curation tools.
+    src/tool/tools/memos.cpp
 )
 
 # Repo-symbol index — read at session start, queried by outline /
 # repo_map / signatures, and embedded into the system prompt.
 set(MOHA_INDEX_SOURCES
     src/index/repo_index.cpp
+)
+
+# Persistent codebase memory — every successful `investigate` writes a
+# memo to <workspace>/.moha/memos.json; the system-prompt builder
+# injects the rolling memo set so future turns answer from accumulated
+# knowledge instead of re-running the same investigation.
+set(MOHA_MEMORY_SOURCES
+    src/memory/memo_store.cpp
+    src/memory/file_card_store.cpp
 )
 
 # Everything except the entry point — so tests can link the same runtime
@@ -367,6 +378,7 @@ add_executable(moha
     ${MOHA_PROVIDER_SOURCES}
     ${MOHA_DIFF_SOURCES}
     ${MOHA_INDEX_SOURCES}
+    ${MOHA_MEMORY_SOURCES}
     ${MOHA_TOOL_SOURCES}
     ${MOHA_RUNTIME_SOURCES}
 )
@@ -381,6 +393,7 @@ if(MOHA_BUILD_TESTS)
         ${MOHA_PROVIDER_SOURCES}
         ${MOHA_DIFF_SOURCES}
         ${MOHA_INDEX_SOURCES}
+        ${MOHA_MEMORY_SOURCES}
         ${MOHA_TOOL_SOURCES}
         ${MOHA_RUNTIME_NOMAIN_SOURCES}
         tests/reducer_tests.cpp

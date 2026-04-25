@@ -1,5 +1,7 @@
 #include "moha/index/repo_index.hpp"
 
+#include "moha/memory/file_card_store.hpp"
+#include "moha/memory/memo_store.hpp"
 #include "moha/tool/util/fs_helpers.hpp"
 
 #include <algorithm>
@@ -677,6 +679,12 @@ std::string RepoIndex::compact_map(std::size_t max_bytes) const {
         }
         return s.name;
     };
+    // Layer-3 cross-index: which files have past investigations
+    // discussed? Computed once for this map render; the lookup is
+    // O(1) per file. Each file's row gets a "(seen-in: <topic>)"
+    // badge when present so the model knows there's prior knowledge.
+    auto file_to_memos = memory::shared().file_to_memo_ids();
+
     // Render a file row with up to `budget` bytes of inline symbol list.
     // Returns (rendered_line, bytes_consumed). Skips noise + private
     // symbols here too so the compact view reads as the public surface.
@@ -699,8 +707,41 @@ std::string RepoIndex::compact_map(std::size_t max_bytes) const {
         if (!syms.empty()) row += "  [" + syms;
         if (over > 0) row += ", +" + std::to_string(over) + " more";
         if (!syms.empty()) row += "]";
-        if (include_description && !fi.description.empty()) {
+        // Layer 3a: surface the LLM-distilled file card if we have one.
+        // This is the "model knows what each file does" payoff — one
+        // paragraph per file, cached on disk, regenerated on mtime
+        // change. Falls back to the regex-extracted file description
+        // (the leading prose comment) when no card has been generated
+        // yet for this file.
+        if (auto card = memory::shared_cards().get(fi.path);
+            card && !card->summary.empty()) {
+            row += "\n        // " + card->summary;
+        } else if (include_description && !fi.description.empty()) {
             row += "\n        // " + fi.description;
+        }
+        // Memo cross-index annotation. We try a couple of relative-path
+        // forms because the memo store stores workspace-relative paths
+        // and the file index uses absolute paths under `root`.
+        if (!file_to_memos.empty()) {
+            std::error_code ec;
+            std::string rel = std::filesystem::relative(fi.path, root, ec)
+                              .generic_string();
+            auto it = file_to_memos.find(rel);
+            if (it != file_to_memos.end() && !it->second.empty()) {
+                std::string topics;
+                std::size_t n = 0;
+                for (const auto& mid : it->second) {
+                    if (auto m = memory::shared().by_id(mid)) {
+                        if (!topics.empty()) topics += "; ";
+                        std::string q = m->query;
+                        if (q.size() > 50) q = q.substr(0, 47) + "...";
+                        topics += "\"" + q + "\"";
+                        if (++n >= 2) break;
+                    }
+                }
+                if (!topics.empty())
+                    row += "  (memo: " + topics + ")";
+            }
         }
         row += "\n";
         return row;

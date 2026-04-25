@@ -37,6 +37,8 @@
 #include "moha/runtime/app/program.hpp"
 #include "moha/auth/auth.hpp"
 #include "moha/io/persistence.hpp"
+#include "moha/memory/file_card_store.hpp"
+#include "moha/memory/memo_store.hpp"
 #include "moha/provider/anthropic/provider.hpp"
 #include "moha/tool/util/fs_helpers.hpp"
 #include "moha/tool/util/sandbox.hpp"
@@ -175,6 +177,18 @@ int main(int argc, char** argv) {
         if (!ec) tools::util::set_workspace_root(std::move(cwd));
     }
 
+    // Bind the persistent memo store to the active workspace so the
+    // <learned-about-this-workspace> block in the system prompt is
+    // populated from <workspace>/.moha/memos.json on the very first
+    // turn. Without this the first request of a session never sees
+    // prior memos even though they're sitting on disk.
+    moha::memory::shared().set_workspace(tools::util::workspace_root());
+    // Same for the per-file knowledge cards. The card store also
+    // needs the auth header so its background worker can call Haiku
+    // to distill new files. We bind the auth right after the
+    // provider is wired below.
+    moha::memory::shared_cards().set_workspace(tools::util::workspace_root());
+
     // ── Bash / diagnostics sandbox ──────────────────────────────────────
     // Wraps shell commands in bwrap (Linux) or sandbox-exec (macOS) so an
     // approved bash call can't read ~/.ssh, write /etc, or `rm -rf ~`.
@@ -231,6 +245,17 @@ int main(int argc, char** argv) {
     provider::anthropic::AnthropicProvider provider;
     io::FsStore                            store;
     app::install(provider, store, auth::header_value(creds), auth::style(creds));
+
+    // Hand the same auth handle to the file-card store so its
+    // background worker can call Haiku to distill files. Without
+    // this, card generation silently no-ops (the worker checks for
+    // an empty header and skips the request).
+    {
+        auto style_str = (auth::style(creds) == auth::Style::Bearer)
+                       ? std::string{"Bearer"} : std::string{"ApiKey"};
+        moha::memory::shared_cards().set_auth(
+            auth::header_value(creds), std::move(style_str));
+    }
 
     // Pre-warm TLS to api.anthropic.com on a detached background thread.
     // The first prompt the user types will reuse the SSL session + DNS +

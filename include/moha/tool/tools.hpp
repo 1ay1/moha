@@ -32,4 +32,9 @@ namespace moha::tools {
 // ── Tier-3 sub-agent ─────────────────────────────────────────────────────
 [[nodiscard]] ToolDef tool_investigate();
 
+// ── Persistent workspace memory ──────────────────────────────────────────
+[[nodiscard]] ToolDef tool_remember();
+[[nodiscard]] ToolDef tool_forget();
+[[nodiscard]] ToolDef tool_memos();
+
 } // namespace moha::tools
