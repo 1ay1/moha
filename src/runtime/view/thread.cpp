@@ -310,22 +310,137 @@ std::string tool_timeline_detail(const ToolUse& tc) {
         }
         return detail;
     }
-    if (n == "find_definition") return safe("symbol");
-    if (n == "web_fetch")       return safe("url");
-    if (n == "web_search")      return safe("query");
+    if (n == "find_definition") {
+        std::string detail = safe("symbol");
+        if (tc.is_done()) {
+            // Output uses the same `path:line:content` markdown grep
+            // format, so "## Matches in" lines correlate to file hits
+            // and the rest are individual matches. Cheap proxy.
+            int hits = 0;
+            const auto& out = tc.output();
+            for (std::size_t p = 0; (p = out.find("## Matches in ", p)) != std::string::npos; p += 14)
+                ++hits;
+            if (hits > 0) detail += "  \xc2\xb7  " + std::to_string(hits)
+                                 + (hits == 1 ? " file" : " files");
+        }
+        return detail;
+    }
+    if (n == "web_fetch") {
+        std::string detail = safe("url");
+        if (tc.is_done()) {
+            // Output's first line is "HTTP <code> (<content-type>)"
+            // — surface it inline so the user sees status without
+            // expanding. Truncate URL middle if it crowds out the chip.
+            const auto& out = tc.output();
+            auto nl = out.find('\n');
+            if (nl != std::string::npos && out.starts_with("HTTP ")) {
+                auto sp = out.find(' ', 5);
+                if (sp != std::string::npos)
+                    detail += "  \xc2\xb7  " + out.substr(5, sp - 5);
+            }
+        }
+        return detail;
+    }
+    if (n == "web_search") {
+        std::string detail = safe("query");
+        if (tc.is_done()) {
+            // Each result starts with a numbered bullet ("1. " etc.).
+            // Counting them is more reliable than parsing the body.
+            int hits = 0;
+            const auto& out = tc.output();
+            for (std::size_t p = 0; p + 1 < out.size(); ++p) {
+                if ((p == 0 || out[p - 1] == '\n')
+                    && std::isdigit(static_cast<unsigned char>(out[p]))
+                    && (out[p+1] == '.' || (p + 2 < out.size() && out[p+2] == '.')))
+                    ++hits;
+            }
+            if (hits > 0) detail += "  \xc2\xb7  " + std::to_string(hits)
+                                 + (hits == 1 ? " result" : " results");
+        }
+        return detail;
+    }
     if (n == "git_commit") {
         auto msg = safe("message");
         if (auto nl = msg.find('\n'); nl != std::string::npos)
             msg = msg.substr(0, nl);
+        if (tc.is_done()) {
+            // Output line shape: "[main abc1234] commit subject" — pull
+            // the short hash so the user can see *which* commit landed
+            // without expanding.
+            const auto& out = tc.output();
+            auto open = out.find('[');
+            if (open != std::string::npos) {
+                auto close = out.find(']', open);
+                auto sp = out.find(' ', open + 1);
+                if (sp != std::string::npos && sp < close) {
+                    auto hash = out.substr(sp + 1, close - sp - 1);
+                    if (!hash.empty() && hash.size() <= 12)
+                        msg += "  \xc2\xb7  " + hash;
+                }
+            }
+        }
         return msg;
+    }
+    if (n == "git_status" && tc.is_done()) {
+        // Parse the porcelain v2 output into a compact "branch · M+ S± U?".
+        // Walks the output once; cheap.
+        const auto& out = tc.output();
+        std::string branch;
+        int modified = 0, staged = 0, untracked = 0;
+        std::size_t lo = 0;
+        while (lo < out.size()) {
+            auto eol = out.find('\n', lo);
+            std::string_view line{out.data() + lo,
+                (eol == std::string::npos ? out.size() : eol) - lo};
+            if (line.starts_with("# branch.head ")) branch = std::string{line.substr(14)};
+            else if (line.size() >= 4 && line[0] == '?')             ++untracked;
+            else if (line.size() >= 4 && (line[0] == '1' || line[0] == '2')) {
+                if (line[2] != '.') ++staged;
+                if (line[3] == 'M' || line[3] == 'D') ++modified;
+            }
+            if (eol == std::string::npos) break;
+            lo = eol + 1;
+        }
+        std::string detail = branch.empty() ? std::string{"(detached)"} : branch;
+        if (modified || staged || untracked) {
+            detail += "  \xc2\xb7  ";
+            bool first = true;
+            auto add = [&](int n_, const char* suffix) {
+                if (n_ <= 0) return;
+                if (!first) detail += " ";
+                detail += std::to_string(n_) + suffix;
+                first = false;
+            };
+            add(modified,  "M");
+            add(staged,    "S");
+            add(untracked, "?");
+        } else {
+            detail += "  \xc2\xb7  clean";
+        }
+        return detail;
     }
     if (n == "git_diff" || n == "git_log" || n == "git_status")
         return path_pp.empty() ? std::string{"."} : path_pp;
     if (n == "todo") {
+        // "N items" loses the most useful signal (how much of the plan
+        // is done). Show "done/total" so a glance tells the user the
+        // model is making progress, not just bookkeeping.
         if (tc.args.is_object()) {
             auto it = tc.args.find("todos");
-            if (it != tc.args.end() && it->is_array())
-                return std::to_string(it->size()) + " items";
+            if (it != tc.args.end() && it->is_array() && !it->empty()) {
+                int total = 0, done = 0, in_progress = 0;
+                for (const auto& td : *it) {
+                    if (!td.is_object()) continue;
+                    ++total;
+                    auto st = td.value("status", std::string{"pending"});
+                    if (st == "completed")        ++done;
+                    else if (st == "in_progress") ++in_progress;
+                }
+                std::string detail = std::to_string(done) + "/" + std::to_string(total);
+                if (in_progress > 0)
+                    detail += "  \xc2\xb7  " + std::to_string(in_progress) + " in progress";
+                return detail;
+            }
         }
         return "\xe2\x80\xa6";
     }
@@ -511,8 +626,14 @@ Element compact_tool_body(const ToolUse& tc) {
         // the function I'm editing" without letting a 200-line replacement
         // dominate the timeline; head+tail keeps the closing brace / last
         // logical line visible so the diff frames the change.
-        constexpr int kHeadPerSide = 3;
-        constexpr int kTailPerSide = 1;
+        // Generous-but-bounded preview. Most real edits the model
+        // makes are 5-15 lines; the previous 3+1 was so tight that
+        // anything over 4 rows immediately collapsed into "… N hidden"
+        // and the user couldn't see the actual change. 6+2 keeps short
+        // edits fully visible (≤ 8 rows shown raw) while still
+        // capping the worst case (200-line replacement) at ~10 rows.
+        constexpr int kHeadPerSide = 6;
+        constexpr int kTailPerSide = 2;
 
         auto count_lines_in = [](std::string_view s) {
             if (s.empty()) return 0;
@@ -568,7 +689,7 @@ Element compact_tool_body(const ToolUse& tc) {
         if (auto it = tc.args.find("edits");
             it != tc.args.end() && it->is_array() && !it->empty())
         {
-            constexpr int kMaxHunksShown = 3;
+            constexpr int kMaxHunksShown = 4;
             int total = static_cast<int>(it->size());
             int shown = 0;
             for (const auto& e : *it) {
@@ -633,13 +754,59 @@ Element compact_tool_body(const ToolUse& tc) {
         return preview_block(tc.progress_text(), fg_dim(fg));
     }
 
-    // ── Read / list_dir / grep / glob: head+tail of output ─────────
-    if ((n == "read" || n == "list_dir" || n == "grep" || n == "glob")
+    // ── Read / list_dir / grep / glob / find_definition / web /
+    //    git_log / git_status / git_commit: head+tail preview of
+    //    the textual output. Each tool produces structured-but-
+    //    line-oriented text that the head+tail helper handles
+    //    well; specialising each one to a custom widget here
+    //    would be over-design for what the timeline is — a
+    //    glanceable summary, not a viewer.
+    if ((n == "read" || n == "list_dir" || n == "grep" || n == "glob"
+         || n == "find_definition"
+         || n == "web_fetch" || n == "web_search"
+         || n == "git_status" || n == "git_log" || n == "git_commit")
         && tc.is_done())
     {
         const auto& out = tc.output();
         if (out.empty()) return text("");
         return preview_block(out, fg_dim(fg));
+    }
+
+    // ── git_diff: per-line diff coloring (+ / - / @@) ──────────────
+    // preview_block uses a single style; a real diff wants green
+    // additions, red removals, dim hunk headers. Same head+tail
+    // elision shape so a 500-line diff doesn't take over.
+    if (n == "git_diff" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty() || out == "no changes") return text("");
+        constexpr int kHead = 4;
+        constexpr int kTail = 3;
+        auto p = head_tail_lines(out, kHead, kTail);
+        std::vector<Element> rows;
+        auto add_st = Style{}.with_fg(success);
+        auto rem_st = Style{}.with_fg(danger);
+        auto hdr_st = fg_dim(muted);
+        auto ctx_st = fg_dim(fg);
+        for (int i = 0; i < static_cast<int>(p.lines.size()); ++i) {
+            if (p.elided > 0 && i == kHead) {
+                rows.push_back(text("\xc2\xb7 \xc2\xb7 \xc2\xb7  "
+                                    + std::to_string(p.elided)
+                                    + " hidden  \xc2\xb7 \xc2\xb7 \xc2\xb7",
+                                    fg_dim(muted)));
+            }
+            std::string_view ln = p.lines[static_cast<std::size_t>(i)];
+            // Pick per-line style by the diff line marker. Skip the
+            // hunk index headers (`@@ -X,Y +A,B @@`) into a dim color
+            // so they read as structural metadata.
+            Style st = ctx_st;
+            if      (ln.starts_with("+++") || ln.starts_with("---")
+                  || ln.starts_with("diff "))                 st = hdr_st;
+            else if (ln.starts_with("@@"))                    st = hdr_st;
+            else if (!ln.empty() && ln[0] == '+')             st = add_st;
+            else if (!ln.empty() && ln[0] == '-')             st = rem_st;
+            rows.push_back(text(std::string{ln}, st));
+        }
+        return v(std::move(rows)).build();
     }
 
     // ── Todo: list each item with its status icon ─────────────────
@@ -926,14 +1093,20 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
 
         Element body_el = compact_tool_body(tc);
         bool body_has_content = false;
+        // `grow(1.0f)` on each body row makes it expand to fill the
+        // Actions panel's width. Without it the row was content-width
+        // — long edit/diff/grep lines clipped against an invisible
+        // boundary that matched the longest header above instead of
+        // growing the card to accommodate them. The user reported the
+        // edit "toolbox doesn't grow"; this is the cause.
         if (auto* bx = maya::as_box(body_el)) {
             for (const auto& child : bx->children) {
-                rows.push_back(h(body_rule, child).build());
+                rows.push_back((h(body_rule, child) | grow(1.0f)).build());
                 body_has_content = true;
             }
         } else if (auto* t = maya::as_text(body_el)) {
             if (!t->content.empty()) {
-                rows.push_back(h(body_rule, body_el).build());
+                rows.push_back((h(body_rule, body_el) | grow(1.0f)).build());
                 body_has_content = true;
             }
         }
