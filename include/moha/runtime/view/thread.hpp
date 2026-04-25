@@ -11,4 +11,11 @@ namespace moha::ui {
                                            int turn_num, const Model& m);
 [[nodiscard]] maya::Element render_tool_call(const ToolUse& tc);
 
+// Inline-timeline body for one tool event — the compact rendering placed
+// under the timeline event's `│` connector. Lives in the same TU as
+// `render_tool_call` (src/runtime/view/tool_card.cpp) so per-tool
+// rendering is single-source-of-truth: the rich card and the compact
+// body for any given tool sit next to each other, not in separate files.
+[[nodiscard]] maya::Element render_tool_compact(const ToolUse& tc);
+
 } // namespace moha::ui

@@ -12,7 +12,7 @@
 namespace moha::app::detail {
 
 void apply_tool_output(Model& m, const ToolCallId& id,
-                       std::expected<std::string, tools::ToolError>&& result) {
+                       std::expected<tools::ToolOutput, tools::ToolError>&& result) {
     for (auto& msg : m.d.current.messages)
         for (auto& tc : msg.tool_calls)
             if (tc.id == id) {
@@ -34,7 +34,11 @@ void apply_tool_output(Model& m, const ToolCallId& id,
                 auto now = std::chrono::steady_clock::now();
                 auto started = tc.started_at();
                 if (result) {
-                    tc.status = ToolUse::Done{started, now, std::move(*result)};
+                    tc.status = ToolUse::Done{
+                        started, now,
+                        std::move(result->text),
+                        std::move(result->change),
+                    };
                 } else {
                     // Render typed error as "[kind] detail" so the category
                     // is visible in tool-card / history without losing the

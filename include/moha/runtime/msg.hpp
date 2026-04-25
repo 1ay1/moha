@@ -155,7 +155,7 @@ struct LoginExchanged   { moha::auth::TokenResult result; };
 // to the view, where it could drive different rendering per category.
 struct ToolExecOutput {
     ToolCallId id;
-    std::expected<std::string, tools::ToolError> result;
+    std::expected<tools::ToolOutput, tools::ToolError> result;
 };
 // Live progress snapshot from a running tool (e.g. bash stdout+stderr so far).
 // Contains the FULL accumulated output, not a delta — the update handler can

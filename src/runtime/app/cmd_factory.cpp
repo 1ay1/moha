@@ -98,7 +98,7 @@ Cmd<Msg> run_tool(ToolCallId id, ToolName tool_name, nlohmann::json args) {
             try {
                 auto result = tool::DynamicDispatch::execute(name.value, args);
                 if (result) {
-                    dispatch(ToolExecOutput{id, std::move(result->text)});
+                    dispatch(ToolExecOutput{id, std::move(*result)});
                 } else {
                     dispatch(ToolExecOutput{id,
                         std::unexpected(std::move(result).error())});

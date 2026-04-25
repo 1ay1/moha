@@ -16,6 +16,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "moha/diff/diff.hpp"
 #include "moha/domain/id.hpp"
 
 namespace moha {
@@ -60,6 +61,12 @@ struct ToolUse {
         std::chrono::steady_clock::time_point started_at{};
         std::chrono::steady_clock::time_point finished_at{};
         std::string output;
+        // Structured per-tool result. Edit/write tools populate this with
+        // a FileChange so the view can render a unified diff with line
+        // numbers / hunk headers / context, instead of re-deriving from
+        // the streaming partial JSON. Empty for tools that don't produce
+        // a file mutation (read, grep, bash, etc.).
+        std::optional<FileChange> change;
     };
     struct Failed {
         std::chrono::steady_clock::time_point started_at{};
@@ -126,6 +133,14 @@ struct ToolUse {
         static const std::string empty;
         if (auto* r = std::get_if<Running>(&status)) return r->progress_text;
         return empty;
+    }
+    // Structured FileChange if the tool produced one (edit/write today).
+    // Returns nullptr when absent or when status isn't Done — call sites
+    // can branch on the pointer without first checking the discriminator.
+    [[nodiscard]] const FileChange* change() const noexcept {
+        if (auto* d = std::get_if<Done>(&status); d && d->change)
+            return &*d->change;
+        return nullptr;
     }
     [[nodiscard]] std::chrono::steady_clock::time_point started_at() const noexcept {
         return std::visit([](const auto& s) -> std::chrono::steady_clock::time_point {

@@ -79,7 +79,7 @@ maya::Cmd<Msg> set_status_toast(Model& m, std::string text,
 
 // ── update_tool.cpp ──────────────────────────────────────────────────────
 void apply_tool_output(Model& m, const ToolCallId& id,
-                       std::expected<std::string, tools::ToolError>&& result);
+                       std::expected<tools::ToolOutput, tools::ToolError>&& result);
 void mark_tool_rejected(Model& m, const ToolCallId& id,
                         std::string_view reason);
 

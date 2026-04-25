@@ -27,6 +27,7 @@
 #include <maya/widget/tool_call.hpp>
 #include <maya/widget/write_tool.hpp>
 
+#include "moha/diff/diff.hpp"
 #include "moha/runtime/view/cache.hpp"
 #include "moha/runtime/view/helpers.hpp"
 #include "moha/runtime/view/palette.hpp"
@@ -66,6 +67,161 @@ maya::ToolCallStatus tc_status(const ToolUse::Status& s) {
 std::string with_desc(std::string_view title, const std::string& desc) {
     if (desc.empty()) return std::string{title};
     return desc + "  \u00B7  " + std::string{title};
+}
+
+// Split a string into lines (without owning them). Used by the head+
+// tail truncator so we can pick lines from front and back of the body.
+std::vector<std::string_view> split_lines_view(const std::string& s) {
+    std::vector<std::string_view> out;
+    std::size_t start = 0;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\n') {
+            out.emplace_back(s.data() + start, i - start);
+            start = i + 1;
+        }
+    }
+    if (start < s.size()) out.emplace_back(s.data() + start, s.size() - start);
+    return out;
+}
+
+// Smart head+tail elision: for content longer than `cap_lines`, show
+// `head` lines from the start, an elision marker, and `tail` lines from
+// the end. Reads like a `git diff` smart-context block — far more
+// useful than just showing the first N and dropping the conclusion.
+// Returns the stitched preview and the count of elided lines (0 when
+// nothing was elided).
+struct ElidedPreview {
+    std::vector<std::string> lines;
+    int elided = 0;
+};
+
+ElidedPreview head_tail_lines(const std::string& s, int head, int tail) {
+    auto all = split_lines_view(s);
+    int total = static_cast<int>(all.size());
+    ElidedPreview out;
+    int cap = head + tail;
+    if (total <= cap) {
+        out.lines.reserve(static_cast<std::size_t>(total));
+        for (auto v : all) out.lines.emplace_back(v);
+        return out;
+    }
+    out.lines.reserve(static_cast<std::size_t>(cap));
+    for (int i = 0; i < head; ++i) out.lines.emplace_back(all[static_cast<std::size_t>(i)]);
+    out.elided = total - head - tail;
+    for (int i = total - tail; i < total; ++i)
+        out.lines.emplace_back(all[static_cast<std::size_t>(i)]);
+    return out;
+}
+
+// Format an elapsed-seconds value the way the maya widgets do — keeps the
+// edit card visually consistent with the rest of the timeline. Sub-second
+// reads as "230ms", under a minute as "0.4s", longer as "2m04s".
+std::string format_elapsed_secs(float secs) {
+    char buf[32];
+    if (secs < 1.0f) {
+        std::snprintf(buf, sizeof(buf), "%.0fms", static_cast<double>(secs * 1000.0f));
+    } else if (secs < 60.0f) {
+        std::snprintf(buf, sizeof(buf), "%.1fs", static_cast<double>(secs));
+    } else {
+        int mins = static_cast<int>(secs) / 60;
+        float rem = secs - static_cast<float>(mins * 60);
+        std::snprintf(buf, sizeof(buf), "%dm%02ds", mins, static_cast<int>(rem));
+    }
+    return buf;
+}
+
+// Done edit card with a structured FileChange — renders the actual unified
+// diff (line numbers, hunk headers, context) via maya's DiffView, wrapped
+// in chrome that mirrors EditTool's look (✓ Edit border, green on success
+// / red on failure) plus a styled "+N -M" line-delta in the header.
+//
+// Falls back to the streaming-style EditTool widget at the call site when
+// the change isn't available yet (still streaming, applying, or the rare
+// no-op edit that produced zero hunks).
+Element render_edit_diff_card(const FileChange& ch,
+                              const std::string& header_text,
+                              float elapsed,
+                              bool failed,
+                              std::string_view error_text) {
+    // Header row: "<path>   +12 -3   0.4s"
+    //   path : default fg
+    //   +N   : green
+    //   -M   : red
+    //   ts   : dim
+    std::string line = header_text;
+    std::vector<StyledRun> runs;
+
+    {
+        std::string plus = "  +" + std::to_string(ch.added);
+        auto plus_off = line.size();
+        line += plus;
+        // Skip the two leading spaces in the styled run so only "+N" is colored.
+        runs.push_back(StyledRun{plus_off + 2, plus.size() - 2,
+                                  Style{}.with_fg(Color::green())});
+    }
+    {
+        std::string minus = " -" + std::to_string(ch.removed);
+        auto minus_off = line.size();
+        line += minus;
+        runs.push_back(StyledRun{minus_off + 1, minus.size() - 1,
+                                  Style{}.with_fg(Color::red())});
+    }
+    if (elapsed > 0.0f) {
+        std::string ts = "  " + format_elapsed_secs(elapsed);
+        auto ts_off = line.size();
+        line += ts;
+        runs.push_back(StyledRun{ts_off, ts.size(), Style{}.with_dim()});
+    }
+
+    Element header_elem{TextElement{
+        .content = std::move(line),
+        .style = {},
+        .wrap = TextWrap::NoWrap,
+        .runs = std::move(runs),
+    }};
+
+    // Body — the unified diff. show_border=false so our outer chrome owns
+    // the border; show_line_numbers=true is the whole point of this card.
+    // We render hunks directly rather than calling diff::render_unified()
+    // because the latter prefixes `--- a/path` / `+++ b/path` lines that
+    // DiffView would re-color as red/green rows — duplicating the path
+    // info already in the border label and header.
+    std::string body_diff;
+    body_diff.reserve(256);
+    for (const auto& h : ch.hunks) {
+        body_diff += "@@ -" + std::to_string(h.old_start) + ","
+                   + std::to_string(h.old_len) + " +"
+                   + std::to_string(h.new_start) + ","
+                   + std::to_string(h.new_len) + " @@\n";
+        body_diff += h.patch;
+    }
+    DiffView::Config dvc;
+    dvc.show_border = false;
+    dvc.show_line_numbers = true;
+    DiffView dv(ch.path, std::move(body_diff), std::move(dvc));
+
+    // Choose chrome by terminal status.
+    auto border_color = failed ? Color::red() : Color::green();
+    auto border_style = failed ? BorderStyle::Dashed : BorderStyle::Round;
+    std::string border_label = failed ? " \xe2\x9c\x97 Edit "      // ✗
+                                       : " \xe2\x9c\x93 Edit ";    // ✓
+
+    std::vector<Element> rows;
+    rows.push_back(std::move(header_elem));
+    rows.push_back(dv.build());
+    if (failed && !error_text.empty()) {
+        rows.push_back(Element{TextElement{
+            .content = "\xe2\x9c\x97 " + std::string{error_text},
+            .style = Style{}.with_fg(Color::red()),
+            .wrap = TextWrap::Wrap,
+        }});
+    }
+
+    return (dsl::v(std::move(rows))
+        | dsl::border(border_style)
+        | dsl::bcolor(border_color)
+        | dsl::btext(border_label, BorderTextPos::Top, BorderTextAlign::Start)
+        | dsl::padding(0, 1, 0, 1)).build();
 }
 
 Element tool_card(const std::string& name, ToolCallKind kind,
@@ -253,6 +409,18 @@ Element render_tool_call_uncached(const ToolUse& tc) {
         if (tc.is_rejected()) {
             return tool_card("edit", ToolCallKind::Edit,
                 header, tc.status, tc.expanded, tc.output(), elapsed);
+        }
+        // Rich-diff card: terminal Done/Failed with a structured FileChange.
+        // The tool already computed line-numbered hunks (src/diff/diff.cpp);
+        // we render via maya's DiffView for the line-numbered, hunk-headed,
+        // context-aware view. Skips the "no actual hunks" edge case (an edit
+        // whose old==new produced a zero-hunk change) and falls through to
+        // the streaming widget so the user still sees what the model tried.
+        if (tc.is_terminal()) {
+            if (auto* ch = tc.change(); ch && !ch->hunks.empty()) {
+                return render_edit_diff_card(*ch, header, elapsed,
+                                             tc.is_failed(), tc.output());
+            }
         }
         EditTool et(header);
         // Edit cards stay expanded permanently — the diff is the whole point
@@ -798,6 +966,304 @@ Element render_tool_call_uncached(const ToolUse& tc) {
         card.set_status(tc_status(tc.status));
         card.set_elapsed(elapsed);
         card.set_content(investigate_body(tc, elapsed));
+        return card.build();
+    }
+
+    // ── recall(topic|id) ────────────────────────────────────────────
+    // One memo's full content. Header: the topic the model asked for.
+    // Body: the memo's `# title` + body, rendered as styled rows so the
+    // title pops and the body reads like prose.
+    if (tc.name == "recall") {
+        auto topic = safe_arg(tc.args, "topic");
+        if (topic.empty()) topic = safe_arg(tc.args, "id");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name   = "recall";
+        cfg.kind        = ToolCallKind::Read;
+        cfg.description = with_desc(topic.empty() ? "recall" : topic, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.output());
+            std::string line;
+            int row_count = 0;
+            constexpr int kMaxRows = 24;
+            while (std::getline(iss, line) && row_count < kMaxRows) {
+                if (line.starts_with("# ")) {
+                    rows.push_back(text(line.substr(2),
+                        Style{}.with_fg(highlight).with_bold()));
+                } else if (line.starts_with("[")) {
+                    // [meta: model, freshness, ...]
+                    rows.push_back(text(line, fg_dim(muted)));
+                } else {
+                    rows.push_back(text(line, fg_of(fg)));
+                }
+                ++row_count;
+            }
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
+        return card.build();
+    }
+
+    // ── memos(filter?) ─────────────────────────────────────────────
+    // List of stored memos with status icons (✓ fresh, ⚠ stale), topic,
+    // and the per-memo metadata line. Each memo's body excerpt indents
+    // under the header so the eye can group rows by memo.
+    if (tc.name == "memos") {
+        auto filter = safe_arg(tc.args, "filter");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name   = "memos";
+        cfg.kind        = ToolCallKind::Read;
+        std::string title = filter.empty() ? std::string{"memos"} : "memos · " + filter;
+        cfg.description = with_desc(title, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.output());
+            std::string line;
+            int row_count = 0;
+            constexpr int kMaxRows = 30;
+            while (std::getline(iss, line) && row_count < kMaxRows) {
+                if (line.starts_with("Workspace memory")) {
+                    rows.push_back(text(line, fg_dim(muted)));
+                } else if (line.starts_with("\xe2\x9c\x93 ")) {       // ✓ fresh memo header
+                    rows.push_back(text(line,
+                        Style{}.with_fg(success).with_bold()));
+                } else if (line.starts_with("\xe2\x9a\xa0 ")) {       // ⚠ stale memo header
+                    rows.push_back(text(line,
+                        Style{}.with_fg(warn).with_bold()));
+                } else if (line.starts_with("   Q:") || line.starts_with("   files:")) {
+                    rows.push_back(text(line, fg_dim(fg)));
+                } else if (line.empty()) {
+                    rows.push_back(text("", {}));
+                } else {
+                    rows.push_back(text(line, fg_of(fg)));
+                }
+                ++row_count;
+            }
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
+        return card.build();
+    }
+
+    // ── remember(topic, content) ──────────────────────────────────
+    // Confirmation card: shows the topic that was banked + the
+    // workspace memo count. Card style is "edit-like" (it mutates
+    // .moha/memos.json) so the green border on success matches the
+    // edit/write semantics.
+    if (tc.name == "remember") {
+        auto topic = safe_arg(tc.args, "topic");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name   = "remember";
+        cfg.kind        = ToolCallKind::Edit;
+        cfg.description = with_desc(topic.empty() ? "remember" : topic, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.output());
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (line.empty()) continue;
+                if (line.starts_with("\xe2\x9c\x93 ")) {
+                    rows.push_back(text(line,
+                        Style{}.with_fg(success).with_bold()));
+                } else if (line.starts_with("  \xc2\xb7  ")) {        // "  ·  ..." metadata line
+                    rows.push_back(text(line, fg_dim(muted)));
+                } else {
+                    rows.push_back(text(line, fg_dim(fg)));
+                }
+            }
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
+        return card.build();
+    }
+
+    // ── forget(target) ────────────────────────────────────────────
+    if (tc.name == "forget") {
+        auto target = safe_arg(tc.args, "target");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name   = "forget";
+        cfg.kind        = ToolCallKind::Delete;
+        cfg.description = with_desc(target.empty() ? "forget" : target, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            // Output is a one-liner: "✗ forgot N memos matching 'x'" or
+            // "no memo matched 'x'". Color the leading glyph by outcome.
+            const auto& out = tc.output();
+            Style st = out.starts_with("\xe2\x9c\x97 ")
+                ? Style{}.with_fg(danger).with_bold()
+                : fg_dim(muted);
+            card.set_content(text(out, st));
+        }
+        return card.build();
+    }
+
+    // ── find_usages(symbol) ───────────────────────────────────────
+    // Header: the symbol. Body: the file list with reference counts.
+    // Useful enough on its own that we want it to stand out — the
+    // model often calls it before a refactor and the user wants to
+    // glance at the blast radius.
+    if (tc.name == "find_usages") {
+        auto sym = safe_arg(tc.args, "symbol");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name   = "find_usages";
+        cfg.kind        = ToolCallKind::Search;
+        cfg.description = with_desc(sym.empty() ? "find_usages" : sym, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.output());
+            std::string line;
+            int row_count = 0;
+            constexpr int kMaxRows = 20;
+            while (std::getline(iss, line) && row_count < kMaxRows) {
+                if (line.starts_with("Symbol ")) {
+                    rows.push_back(text(line,
+                        Style{}.with_fg(highlight).with_bold()));
+                } else if (line.starts_with("(Use ")) {
+                    rows.push_back(text(line, fg_dim(muted)));
+                } else if (line.empty()) {
+                    continue;   // collapse blank rows
+                } else {
+                    // "  path  (N refs)" rows.
+                    rows.push_back(text(line, fg_of(fg)));
+                }
+                ++row_count;
+            }
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
+        return card.build();
+    }
+
+    // ── mine_adrs(since?) ─────────────────────────────────────────
+    if (tc.name == "mine_adrs") {
+        auto since = safe_arg(tc.args, "since");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name   = "mine_adrs";
+        cfg.kind        = ToolCallKind::Agent;
+        std::string title = since.empty() ? std::string{"mine_adrs"}
+                                          : "mine_adrs · since " + since;
+        cfg.description = with_desc(title, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.output());
+            std::string line;
+            int row_count = 0;
+            constexpr int kMaxRows = 30;
+            while (std::getline(iss, line) && row_count < kMaxRows) {
+                if (line.starts_with("# ")) {
+                    rows.push_back(text(line.substr(2),
+                        Style{}.with_fg(highlight).with_bold()));
+                } else if (line.starts_with("\xe2\x9c\x93 ")) {
+                    rows.push_back(text(line,
+                        Style{}.with_fg(success).with_bold()));
+                } else if (line.empty()) {
+                    rows.push_back(text("", {}));
+                } else {
+                    rows.push_back(text(line, fg_dim(fg)));
+                }
+                ++row_count;
+            }
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
+        return card.build();
+    }
+
+    // ── navigate(question) ────────────────────────────────────────
+    // Ranked semantic finder. Output has "## Likely modules" / "## Top
+    // files" / "## Top symbols" sections with scored rows. Render the
+    // section headers in accent color and rows in default fg with
+    // [score] in highlight so the scores read as the salient signal.
+    if (tc.name == "navigate") {
+        auto q = safe_arg(tc.args, "question");
+        maya::ToolCall::Config cfg;
+        cfg.tool_name   = "navigate";
+        cfg.kind        = ToolCallKind::Search;
+        std::string head = q.size() > 70 ? q.substr(0, 67) + "..." : q;
+        cfg.description = with_desc(head.empty() ? "navigate" : head, desc);
+        maya::ToolCall card(cfg);
+        card.set_expanded(tc.expanded);
+        card.set_status(tc_status(tc.status));
+        card.set_elapsed(elapsed);
+        if (tc.is_failed() && !tc.output().empty()) {
+            card.set_content(text(tc.output(), Style{}.with_fg(danger)));
+            return card.build();
+        }
+        if (tc.is_done() && !tc.output().empty()) {
+            std::vector<Element> rows;
+            std::istringstream iss(tc.output());
+            std::string line;
+            int row_count = 0;
+            constexpr int kMaxRows = 30;
+            while (std::getline(iss, line) && row_count < kMaxRows) {
+                if (line.starts_with("Navigation results")) {
+                    rows.push_back(text(line, fg_dim(muted)));
+                } else if (line.starts_with("## ")) {
+                    rows.push_back(text(line.substr(3),
+                        Style{}.with_fg(accent).with_bold()));
+                } else if (line.starts_with("  [")) {
+                    // "  [score] body" — surface the score.
+                    auto rb = line.find(']');
+                    if (rb != std::string::npos) {
+                        rows.push_back(h(
+                            text(line.substr(0, rb + 1),
+                                 Style{}.with_fg(highlight).with_bold()),
+                            text(line.substr(rb + 1), fg_of(fg))
+                        ).build());
+                    } else {
+                        rows.push_back(text(line, fg_of(fg)));
+                    }
+                } else if (line.empty()) {
+                    continue;
+                } else {
+                    rows.push_back(text(line, fg_dim(fg)));
+                }
+                ++row_count;
+            }
+            if (!rows.empty()) card.set_content(v(std::move(rows)).build());
+        }
         return card.build();
     }
 
@@ -1821,6 +2287,674 @@ Element investigate_body(const ToolUse& tc, float elapsed) {
 
     if (rows.empty()) return text("");
     return v(std::move(rows)).build();
+}
+
+// Render compact body content for a single tool event — placed under the
+// timeline event's `│` connector. Tool-specific so each row carries
+// real, glanceable information: a few lines of read content, the diff
+// hunks for an edit, the head of bash output, etc. Empty Element when
+// nothing useful exists yet (still streaming) — caller handles spacing.
+//
+// Lives in the same TU as render_tool_call so per-tool branches for the
+// compact and rich-card views are co-located. When you change a tool's
+// rendering, this is the only file you should need to touch.
+Element render_tool_compact(const ToolUse& tc) {
+    const auto& n = tc.name.value;
+    constexpr int kMaxLines = 6;
+
+    auto code_line = [](std::string_view ln, Style st) {
+        return text(std::string{ln}, st);
+    };
+
+    // ── Edit: unified-diff-style preview, per-hunk head+tail ───
+    // The inline timeline body trades exact reviewability for visual
+    // density — a 200-line replacement would dominate the panel and
+    // push later events off-screen. Each side gets a 6-line head + 2-
+    // line tail so a short edit shows in full while a long one
+    // collapses to "head … N hidden … tail". The full diff is always
+    // available in the rounded rich card path (render_edit_diff_card
+    // → DiffView) when terminal+done with a structured FileChange.
+    if (n == "edit" && tc.args.is_object()) {
+        std::vector<Element> rows;
+        auto rem      = Style{}.with_fg(danger);
+        auto add      = Style{}.with_fg(success);
+        auto rem_pre  = Style{}.with_fg(danger).with_dim();
+        auto add_pre  = Style{}.with_fg(success).with_dim();
+
+        // Per-side cap. 6+2 keeps short edits fully visible (≤ 8 rows)
+        // while still capping the worst case (200-line replacement) at
+        // ~10 rows — enough to recognize the function being edited
+        // (head) and how it ends (tail) without overrunning the panel.
+        constexpr int kHeadPerSide = 6;
+        constexpr int kTailPerSide = 2;
+
+        auto count_lines_in = [](std::string_view s) {
+            if (s.empty()) return 0;
+            int n_ = 1;
+            for (char c : s) if (c == '\n') ++n_;
+            // Trailing newline shouldn't count as an extra empty line.
+            if (s.back() == '\n') --n_;
+            return std::max(0, n_);
+        };
+
+        auto push_side = [&](std::string_view body, char marker,
+                             Style mark_style, Style line_style) {
+            if (body.empty()) return;
+            auto p = head_tail_lines(std::string{body},
+                                     kHeadPerSide, kTailPerSide);
+            for (int i = 0; i < static_cast<int>(p.lines.size()); ++i) {
+                if (p.elided > 0 && i == kHeadPerSide) {
+                    rows.push_back(h(
+                        text(std::string{marker} + " ", mark_style),
+                        text("\xe2\x80\xa6 " + std::to_string(p.elided)
+                             + " hidden", fg_dim(muted))
+                    ).build());
+                }
+                rows.push_back(h(
+                    text(std::string{marker} + " ", mark_style),
+                    code_line(p.lines[static_cast<std::size_t>(i)], line_style)
+                ).build());
+            }
+        };
+
+        auto push_hunk = [&](int hunk_idx, int hunk_total,
+                             std::string_view old_text,
+                             std::string_view new_text) {
+            int minus = count_lines_in(old_text);
+            int plus  = count_lines_in(new_text);
+            // Per-hunk header: `edit i/N  ·  −k / +m`. Skipped on
+            // single-edit calls where the decoration would be noise.
+            if (hunk_total > 1) {
+                std::string tag = "edit " + std::to_string(hunk_idx + 1)
+                                + "/" + std::to_string(hunk_total)
+                                + "  \xc2\xb7  ";
+                std::string stat = "\xe2\x88\x92" + std::to_string(minus)
+                                 + " / +" + std::to_string(plus);
+                rows.push_back(h(
+                    text(std::move(tag),  fg_dim(muted)),
+                    text(std::move(stat), fg_dim(muted))
+                ).build());
+            }
+            push_side(old_text, '-', rem_pre, rem);
+            push_side(new_text, '+', add_pre, add);
+        };
+
+        if (auto it = tc.args.find("edits");
+            it != tc.args.end() && it->is_array() && !it->empty())
+        {
+            constexpr int kMaxHunksShown = 4;
+            int total = static_cast<int>(it->size());
+            int shown = 0;
+            for (const auto& e : *it) {
+                if (shown >= kMaxHunksShown) {
+                    rows.push_back(text(
+                        "\xe2\x80\xa6 "
+                            + std::to_string(total - shown) + " more edits",
+                        fg_dim(muted)));
+                    break;
+                }
+                if (!e.is_object()) continue;
+                auto ot = e.value("old_text", e.value("old_string", std::string{}));
+                auto nt = e.value("new_text", e.value("new_string", std::string{}));
+                push_hunk(shown, total, ot, nt);
+                ++shown;
+            }
+        } else {
+            // Top-level legacy single-edit shape.
+            auto ot = safe_arg(tc.args, "old_text"); if (ot.empty()) ot = safe_arg(tc.args, "old_string");
+            auto nt = safe_arg(tc.args, "new_text"); if (nt.empty()) nt = safe_arg(tc.args, "new_string");
+            if (!ot.empty() || !nt.empty()) push_hunk(0, 1, ot, nt);
+        }
+        if (rows.empty()) return text("");
+        return v(std::move(rows)).build();
+    }
+
+    // Render an elided head+tail preview as a vertical stack with a
+    // dim "··· N hidden ···" centered marker. Reads like `git diff`'s
+    // smart context: top of file, gap, bottom of file — far more
+    // informative than only the first N lines.
+    auto preview_block = [&](const std::string& body, Style line_style) -> Element {
+        constexpr int kHead = 4;
+        constexpr int kTail = 3;
+        auto p = head_tail_lines(body, kHead, kTail);
+        std::vector<Element> rows;
+        for (int i = 0; i < static_cast<int>(p.lines.size()); ++i) {
+            if (p.elided > 0 && i == kHead) {
+                rows.push_back(text("\xc2\xb7 \xc2\xb7 \xc2\xb7  "
+                                    + std::to_string(p.elided) + " hidden  \xc2\xb7 \xc2\xb7 \xc2\xb7",
+                                    fg_dim(muted)));
+            }
+            rows.push_back(text(p.lines[static_cast<std::size_t>(i)], line_style));
+        }
+        return v(std::move(rows)).build();
+    };
+
+    // ── Write: head+tail of the streaming/written content ──────────
+    if (n == "write") {
+        std::string content = safe_arg(tc.args, "content");
+        if (content.empty()) return text("");
+        return preview_block(content, fg_dim(fg));
+    }
+
+    // ── Bash / diagnostics: head+tail of output ────────────────────
+    if ((n == "bash" || n == "diagnostics") && tc.is_terminal()) {
+        auto out = strip_bash_output_fence(tc.output());
+        if (out.empty()) return text("");
+        return preview_block(out, fg_dim(fg));
+    }
+    // Live bash progress (running stdout snapshot).
+    if (n == "bash" && tc.is_running() && !tc.progress_text().empty()) {
+        return preview_block(tc.progress_text(), fg_dim(fg));
+    }
+
+    // ── Per-tool structured bodies (Actions-panel inline) ─────────
+    // Each branch produces a header row (primary noun + counts) plus a
+    // body matched to the tool's output shape — coloured kind tags,
+    // file-grouped matches, iconified directory entries, etc. The
+    // Actions panel is moha's primary tool surface; treating each tool
+    // as a glance-card here is much higher leverage than the standalone
+    // tool-card path (which fires only when the assistant's turn has a
+    // single tool call).
+    //
+    // Local helpers — keep them inside the function so each tool branch
+    // can compose its rows without per-tool boilerplate.
+    auto meta_row = [&](std::string_view glyph, Color glyph_c,
+                        std::string_view primary,
+                        std::string_view stats) {
+        std::vector<Element> cells;
+        cells.push_back(text(std::string{glyph} + " ",
+                             Style{}.with_fg(glyph_c).with_bold()));
+        if (!primary.empty()) {
+            cells.push_back(text(std::string{primary},
+                                 Style{}.with_fg(fg).with_bold()));
+        }
+        if (!stats.empty()) {
+            cells.push_back(text("  \xc2\xb7  " + std::string{stats},
+                                 fg_dim(muted)));
+        }
+        return (h(std::move(cells)) | grow(1.0f)).build();
+    };
+
+    // ── read ─────────────────────────────────────────────────────
+    // Header: "▸ <path> · L<a>-<b> of <total>" + a tighter preview
+    // of the file body with subtle line numbering coloured cyan so
+    // the eye can scan to the relevant line at a glance.
+    if (n == "read" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        auto path = pick_arg(tc.args, {"path","file_path","filepath","filename"});
+        // Detect the "[showing lines A-B of T]" footer the read tool
+        // emits when paged.
+        std::string range;
+        if (auto p = out.find("[showing lines "); p != std::string::npos) {
+            auto end = out.find(']', p);
+            if (end != std::string::npos)
+                range = out.substr(p + 15, end - (p + 15));
+        }
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", info,
+                                path, range.empty() ? "" : "L" + range));
+        // Body: head+tail. Existing preview_block is fine here — the
+        // file body's own `cat -n` numbering is already styled by the
+        // read tool itself.
+        rows.push_back(preview_block(out, fg_dim(fg)));
+        return v(std::move(rows)).build();
+    }
+
+    // ── grep / find_definition ──────────────────────────────────
+    // Header: "▸ <pattern> · N matches in K files".
+    // Body:   per-file groups, file path in info-bold, then up to 2
+    //         match rows per group with `Lnnn` line numbers in cyan.
+    if ((n == "grep" || n == "find_definition") && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        std::string_view kind = (n == "grep" ? "pattern" : "symbol");
+        auto needle = safe_arg(tc.args, kind.data());
+        // Pull "Found N matches across K files" if present (grep emits it).
+        std::string stats;
+        if (auto p = out.find("Found "); p != std::string::npos) {
+            auto end = out.find('.', p);
+            if (end != std::string::npos)
+                stats = out.substr(p + 6, end - (p + 6));
+        }
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", info, needle, stats));
+
+        // Walk the markdown-ish output and emit colour-tagged rows.
+        // Format produced by grep.cpp:
+        //   ## Matches in <path>
+        //   ### L<s>-<e>
+        //   ```
+        //   <line>
+        //   <line>
+        //   ```
+        std::istringstream iss(out);
+        std::string line;
+        int row_count = 0;
+        const int kCap = 14;
+        bool in_code = false;
+        int code_no = 0;
+        while (std::getline(iss, line) && row_count < kCap) {
+            if (line.starts_with("Found ") || line.starts_with("Showing ")
+             || line.empty()) continue;
+            if (line.starts_with("## Matches in ")) {
+                rows.push_back(text("  " + line.substr(14),
+                    Style{}.with_fg(info).with_bold()));
+                ++row_count;
+                in_code = false;
+                continue;
+            }
+            if (line.starts_with("### L")) {
+                try { code_no = std::stoi(line.substr(5)); } catch (...) { code_no = 0; }
+                continue;
+            }
+            if (line == "```") { in_code = !in_code; continue; }
+            if (in_code && code_no > 0) {
+                std::ostringstream lr;
+                lr << "    L" << code_no << "  " << line;
+                rows.push_back(text(lr.str(), fg_dim(fg)));
+                ++code_no;
+                ++row_count;
+                continue;
+            }
+            // Legacy `path:line:content` (find_definition).
+            if (auto c1 = line.find(':'); c1 != std::string::npos) {
+                if (auto c2 = line.find(':', c1 + 1); c2 != std::string::npos) {
+                    rows.push_back(h(
+                        text("  " + line.substr(0, c1),
+                             Style{}.with_fg(info).with_bold()),
+                        text(":" + line.substr(c1 + 1, c2 - c1 - 1),
+                             Style{}.with_fg(highlight)),
+                        text("  " + line.substr(c2 + 1), fg_dim(fg))
+                    ).build());
+                    ++row_count;
+                    continue;
+                }
+            }
+            // Anything else.
+            rows.push_back(text(line, fg_dim(muted)));
+            ++row_count;
+        }
+        if (row_count >= kCap)
+            rows.push_back(text("  \xe2\x80\xa6 more (use offset)",
+                                fg_dim(muted)));
+        return v(std::move(rows)).build();
+    }
+
+    // ── glob ────────────────────────────────────────────────────
+    // Header: "▸ <pattern> · N files".
+    // Body:   numbered file rows.
+    if (n == "glob" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        auto pat = safe_arg(tc.args, "pattern");
+        // Count non-empty lines as a rough match count (the glob tool
+        // doesn't emit a Found-N preamble).
+        int total = 0;
+        for (char c : out) if (c == '\n') ++total;
+        if (!out.empty() && out.back() != '\n') ++total;
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", info, pat,
+            std::to_string(total) + (total == 1 ? " file" : " files")));
+        std::istringstream iss(out);
+        std::string line;
+        int row_count = 0;
+        const int kCap = 8;
+        while (std::getline(iss, line) && row_count < kCap) {
+            if (line.empty()) continue;
+            if (line.starts_with("./")) line = line.substr(2);
+            rows.push_back(h(
+                text("  \xe2\x97\x8b ", fg_dim(muted)),     // ○
+                text(line, fg_of(fg))
+            ).build());
+            ++row_count;
+        }
+        if (total > row_count)
+            rows.push_back(text("  \xe2\x80\xa6 +"
+                                + std::to_string(total - row_count)
+                                + " more", fg_dim(muted)));
+        return v(std::move(rows)).build();
+    }
+
+    // ── list_dir ────────────────────────────────────────────────
+    // Header: "▸ <path> · M dirs / N files".
+    // Body:   iconified rows — folders in info-bold, files in fg.
+    if (n == "list_dir" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        auto path = safe_arg(tc.args, "path");
+        if (path.empty()) path = ".";
+        int dirs = 0, files = 0;
+        std::istringstream count_iss(out);
+        std::string s;
+        while (std::getline(count_iss, s)) {
+            // Trim leading spaces so nested entries are counted too.
+            std::size_t pos = 0;
+            while (pos < s.size() && s[pos] == ' ') ++pos;
+            if (pos >= s.size()) continue;
+            auto trimmed = std::string_view{s}.substr(pos);
+            // Heuristic: line ending in "/" is a directory; line with
+            // "  <size>" suffix is a file.
+            if (!trimmed.empty() && trimmed.back() == '/') ++dirs;
+            else if (trimmed.find("  ") != std::string_view::npos) ++files;
+        }
+        std::ostringstream stat;
+        stat << dirs << (dirs == 1 ? " dir" : " dirs")
+             << " / " << files << (files == 1 ? " file" : " files");
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", info, path, stat.str()));
+        std::istringstream iss(out);
+        std::string line;
+        int row_count = 0;
+        const int kCap = tc.expanded ? 20 : 10;
+        while (std::getline(iss, line) && row_count < kCap) {
+            if (line.empty()) continue;
+            // Preserve indent.
+            std::size_t pos = 0;
+            while (pos < line.size() && line[pos] == ' ') ++pos;
+            std::string indent = line.substr(0, pos);
+            std::string body = line.substr(pos);
+            if (!body.empty() && body.back() == '/') {
+                rows.push_back(h(
+                    text("  " + indent + "\xe2\x96\xb6 ",  // ▶
+                         Style{}.with_fg(info)),
+                    text(body, Style{}.with_fg(info).with_bold())
+                ).build());
+            } else {
+                // Split off the trailing size for dim styling.
+                auto sz = body.rfind("  ");
+                if (sz != std::string::npos) {
+                    rows.push_back(h(
+                        text("  " + indent + "  ", {}),
+                        text(body.substr(0, sz), fg_of(fg)),
+                        text(body.substr(sz), fg_dim(muted))
+                    ).build());
+                } else {
+                    rows.push_back(text("  " + indent + "  " + body,
+                                        fg_of(fg)));
+                }
+            }
+            ++row_count;
+        }
+        return v(std::move(rows)).build();
+    }
+
+    // ── outline ─────────────────────────────────────────────────
+    // Header: "▸ <path> · N symbols".
+    // Body:   kind-grouped rows with "L<n>" cyan.
+    if (n == "outline" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        auto path = safe_arg(tc.args, "path");
+        // First line is "<path>  (N symbols)" — pull the count.
+        std::string stats;
+        if (auto p = out.find("("); p != std::string::npos) {
+            auto end = out.find(')', p);
+            if (end != std::string::npos) stats = out.substr(p + 1, end - p - 1);
+        }
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", info, path, stats));
+        std::istringstream iss(out);
+        std::string line;
+        int row_count = 0;
+        const int kCap = tc.expanded ? 20 : 10;
+        bool past_header = false;
+        while (std::getline(iss, line) && row_count < kCap) {
+            if (!past_header) {
+                if (line.find("symbols)") != std::string::npos) {
+                    past_header = true; continue;
+                }
+                continue;
+            }
+            if (line.empty()) continue;
+            if (line.starts_with("[") && line.find(']') != std::string::npos) {
+                rows.push_back(text("  " + line,
+                    Style{}.with_fg(highlight).with_bold()));
+            } else {
+                rows.push_back(text("  " + line, fg_dim(fg)));
+            }
+            ++row_count;
+        }
+        return v(std::move(rows)).build();
+    }
+
+    // ── signatures ──────────────────────────────────────────────
+    if (n == "signatures" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        auto pat = safe_arg(tc.args, "pattern");
+        // "Symbols matching '<pat>' (N hits, ...)"
+        std::string stats;
+        if (auto p = out.find("("); p != std::string::npos) {
+            auto end = out.find(',', p);
+            if (end != std::string::npos) stats = out.substr(p + 1, end - p - 1);
+        }
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", info, pat, stats));
+        std::istringstream iss(out);
+        std::string line;
+        int row_count = 0;
+        const int kCap = tc.expanded ? 20 : 10;
+        while (std::getline(iss, line) && row_count < kCap) {
+            if (line.empty() || line.starts_with("Symbols matching")) continue;
+            if (line.starts_with("## ")) {
+                rows.push_back(text("  " + line.substr(3),
+                    Style{}.with_fg(info).with_bold()));
+                ++row_count;
+            } else if (line.starts_with("  L")) {
+                rows.push_back(text("  " + line, fg_dim(fg)));
+                ++row_count;
+            }
+        }
+        return v(std::move(rows)).build();
+    }
+
+    // ── repo_map ────────────────────────────────────────────────
+    if (n == "repo_map" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        auto path = safe_arg(tc.args, "path");
+        if (path.empty()) path = "workspace";
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", info, path, ""));
+        std::istringstream iss(out);
+        std::string line;
+        int row_count = 0;
+        const int kCap = tc.expanded ? 30 : 12;
+        while (std::getline(iss, line) && row_count < kCap) {
+            if (line.empty()) continue;
+            if (line.starts_with("# Repo map")) continue;
+            if (line.starts_with("# ")) {
+                rows.push_back(text("  " + line, fg_dim(muted)));
+            } else if (line.starts_with("## ")) {
+                rows.push_back(text("  " + line,
+                    Style{}.with_fg(accent).with_bold()));
+            } else if (line.starts_with("[") && line.find(']') != std::string::npos
+                    && line.find('/') != std::string::npos) {
+                auto rb = line.find(']');
+                rows.push_back(h(
+                    text("  " + line.substr(0, rb + 1),
+                         Style{}.with_fg(highlight).with_bold()),
+                    text(line.substr(rb + 1), fg_of(fg))
+                ).build());
+            } else if (line.ends_with("/")) {
+                rows.push_back(text("  " + line,
+                    Style{}.with_fg(info).with_bold()));
+            } else {
+                rows.push_back(text("  " + line, fg_dim(fg)));
+            }
+            ++row_count;
+        }
+        return v(std::move(rows)).build();
+    }
+
+    // ── web_fetch ───────────────────────────────────────────────
+    // Header: "▸ <url> · status · type".
+    // Body:   first lines of the body block (after the HTTP status line).
+    if (n == "web_fetch" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        auto url = safe_arg(tc.args, "url");
+        // First line is "HTTP <status> (content-type)".
+        std::string status_line;
+        std::string body;
+        if (auto nl = out.find('\n'); nl != std::string::npos) {
+            status_line = out.substr(0, nl);
+            auto bs = out.find("\n\n");
+            body = bs != std::string::npos ? out.substr(bs + 2) : out.substr(nl + 1);
+        } else {
+            body = out;
+        }
+        // Trim the URL display (full URL too long for the row).
+        std::string short_url = url;
+        if (short_url.size() > 60) short_url = short_url.substr(0, 57) + "...";
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", info, short_url, status_line));
+        if (!body.empty()) rows.push_back(preview_block(body, fg_dim(fg)));
+        return v(std::move(rows)).build();
+    }
+
+    // ── web_search ──────────────────────────────────────────────
+    if (n == "web_search" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        auto q = safe_arg(tc.args, "query");
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", info, q, ""));
+        rows.push_back(preview_block(out, fg_dim(fg)));
+        return v(std::move(rows)).build();
+    }
+
+    // ── git_status / git_log / git_commit ───────────────────────
+    if ((n == "git_status" || n == "git_log" || n == "git_commit")
+        && tc.is_done())
+    {
+        const auto& out = tc.output();
+        if (out.empty()) return text("");
+        std::string title;
+        if (n == "git_status")  title = "git status";
+        else if (n == "git_log") {
+            title = "git log";
+            if (auto r = safe_arg(tc.args, "ref"); !r.empty())
+                title += "  \xc2\xb7  " + r;
+        } else {
+            title = "git commit";
+            if (auto m = safe_arg(tc.args, "message"); !m.empty()) {
+                if (m.size() > 60) m = m.substr(0, 57) + "...";
+                title += "  \xc2\xb7  " + m;
+            }
+        }
+        std::vector<Element> rows;
+        rows.push_back(meta_row("\xe2\x96\xb8", highlight, title, ""));
+        rows.push_back(preview_block(out, fg_dim(fg)));
+        return v(std::move(rows)).build();
+    }
+
+    // ── investigate: rich per-turn timeline + synthesis ──────────────
+    // Delegates to the same renderer the standalone tool card uses, so
+    // the in-Actions-panel body and the dedicated card show identical
+    // structure — pull-quote question, animated stats row, vertical
+    // rail with per-turn cells, and the synthesis banner. Without this
+    // delegation the panel body fell back to a head/tail preview of
+    // the raw transcript text and looked like a debug log dump.
+    if (n == "investigate")
+        return investigate_body(tc, tool_elapsed(tc));
+
+    // ── git_diff: per-line diff coloring (+ / - / @@) ──────────────
+    // preview_block uses a single style; a real diff wants green
+    // additions, red removals, dim hunk headers. Same head+tail
+    // elision shape so a 500-line diff doesn't take over.
+    if (n == "git_diff" && tc.is_done()) {
+        const auto& out = tc.output();
+        if (out.empty() || out == "no changes") return text("");
+        constexpr int kHead = 4;
+        constexpr int kTail = 3;
+        auto p = head_tail_lines(out, kHead, kTail);
+        std::vector<Element> rows;
+        auto add_st = Style{}.with_fg(success);
+        auto rem_st = Style{}.with_fg(danger);
+        auto hdr_st = fg_dim(muted);
+        auto ctx_st = fg_dim(fg);
+        for (int i = 0; i < static_cast<int>(p.lines.size()); ++i) {
+            if (p.elided > 0 && i == kHead) {
+                rows.push_back(text("\xc2\xb7 \xc2\xb7 \xc2\xb7  "
+                                    + std::to_string(p.elided)
+                                    + " hidden  \xc2\xb7 \xc2\xb7 \xc2\xb7",
+                                    fg_dim(muted)));
+            }
+            std::string_view ln = p.lines[static_cast<std::size_t>(i)];
+            // Pick per-line style by the diff line marker. Skip the
+            // hunk index headers (`@@ -X,Y +A,B @@`) into a dim color
+            // so they read as structural metadata.
+            Style st = ctx_st;
+            if      (ln.starts_with("+++") || ln.starts_with("---")
+                  || ln.starts_with("diff "))                 st = hdr_st;
+            else if (ln.starts_with("@@"))                    st = hdr_st;
+            else if (!ln.empty() && ln[0] == '+')             st = add_st;
+            else if (!ln.empty() && ln[0] == '-')             st = rem_st;
+            rows.push_back(text(std::string{ln}, st));
+        }
+        return v(std::move(rows)).build();
+    }
+
+    // ── Todo: list each item with its status icon ─────────────────
+    // The Timeline header already shows "N items"; this body lists
+    // them so the user can read the actual plan inline without
+    // popping the dedicated todo modal. Cap the visible list so a
+    // 30-item plan doesn't blow out the panel; surplus collapses to
+    // a "… N more" footer.
+    if (n == "todo" && tc.args.is_object()) {
+        auto it = tc.args.find("todos");
+        if (it == tc.args.end() || !it->is_array() || it->empty())
+            return text("");
+        constexpr int kMaxRows = 8;
+        std::vector<Element> rows;
+        int total = static_cast<int>(it->size());
+        int shown = 0;
+        for (const auto& td : *it) {
+            if (shown >= kMaxRows) break;
+            if (!td.is_object()) continue;
+            std::string body = td.value("content", "");
+            std::string st   = td.value("status", std::string{"pending"});
+            const char* glyph;
+            Style icon_st, body_st;
+            if (st == "completed") {
+                glyph   = "\xe2\x9c\x93";   // ✓
+                icon_st = Style{}.with_fg(success).with_bold();
+                body_st = fg_dim(muted);    // crossed-out feel via dim
+            } else if (st == "in_progress") {
+                glyph   = "\xe2\x97\x8d";   // ◍
+                icon_st = Style{}.with_fg(info).with_bold();
+                body_st = Style{}.with_fg(fg);
+            } else {
+                glyph   = "\xe2\x97\x8b";   // ○
+                icon_st = fg_dim(muted);
+                body_st = fg_dim(fg);
+            }
+            rows.push_back(h(
+                text(std::string{glyph} + " ", icon_st),
+                text(std::move(body), body_st)
+            ).build());
+            ++shown;
+        }
+        if (total > shown) {
+            rows.push_back(text("\xe2\x80\xa6 " + std::to_string(total - shown)
+                                + " more", fg_dim(muted)));
+        }
+        return v(std::move(rows)).build();
+    }
+
+    // ── Failure: surface the error message inline so it isn't hidden
+    if (tc.is_failed() && !tc.output().empty()) {
+        // Failures use the danger color so the error stands out, but
+        // still through the elided preview path so a 200-line stderr
+        // dump doesn't take over the panel.
+        return preview_block(tc.output(),
+                             Style{}.with_fg(danger));
+    }
+
+    (void)kMaxLines;
+    return text("");
 }
 
 // Terminal-state card cache. A chat with 40 tool calls rebuilds 40 borders

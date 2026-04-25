@@ -158,15 +158,20 @@ inline constexpr std::array kCatalog = {
     ToolSpec{"remember",        Kind::Remember,       {Effect::WriteFs},                    true,    detail::sec{5}},
     ToolSpec{"forget",          Kind::Forget,         {Effect::WriteFs},                    false,   detail::sec{5}},
     ToolSpec{"memos",           Kind::Memos,          {Effect::ReadFs},                     false,   detail::sec{5}},
-    // `recall` is read-only over the in-memory memo cache.
-    ToolSpec{"recall",          Kind::Recall,         {Effect::ReadFs},                     false,   detail::sec{5}},
-    // `find_usages` reads the in-memory symbol graph.
-    ToolSpec{"find_usages",     Kind::FindUsages,     {Effect::ReadFs},                     false,   detail::sec{5}},
+    // `recall`, `find_usages`, `navigate` operate purely on in-memory
+    // caches (memo store / symbol graph / semantic index that the agent
+    // populated earlier). They never touch the filesystem at call time,
+    // so tagging them as ReadFs would force them to wait behind any
+    // in-flight WriteFs/Exec sibling for no real reason — the user would
+    // see them sit "queued" while an `edit` finishes. Empty effects =
+    // pure = parallel-safe with everything, including WriteFs.
+    ToolSpec{"recall",          Kind::Recall,         {} /* pure */,                        false,   detail::sec{5}},
+    ToolSpec{"find_usages",     Kind::FindUsages,     {} /* pure */,                        false,   detail::sec{5}},
     // `mine_adrs` calls git + Haiku → Net effect (model API) and may
     // write memos; long-running because it can scan up to 200 commits.
     ToolSpec{"mine_adrs",       Kind::MineAdrs,       {Effect::Net, Effect::WriteFs},       false,   detail::sec{120}},
     // Pure-cpp semantic finder over the in-memory index. Cheap.
-    ToolSpec{"navigate",        Kind::Navigate,       {Effect::ReadFs},                     false,   detail::sec{10}},
+    ToolSpec{"navigate",        Kind::Navigate,       {} /* pure */,                        false,   detail::sec{10}},
 };
 
 // Wire-string → Kind. `std::nullopt` for names not in the catalog so the

@@ -299,6 +299,7 @@ void execute_calls_parallel(std::vector<ToolUse>& tcs) {
             tc.status = ToolUse::Done{
                 t_start, t_end,
                 util::to_valid_utf8(std::move(result->text)),
+                std::move(result->change),
             };
         } else {
             tc.status = ToolUse::Failed{
