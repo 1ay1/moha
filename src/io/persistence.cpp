@@ -91,6 +91,73 @@ static Role role_from_string(const std::string& s) {
     return Role::User;
 }
 
+// Serialize a Hunk's status enum to a stable string tag. Mirrors the
+// shape we use for ToolUse::Status — strings round-trip across version
+// renumberings of the underlying enum.
+static std::string_view hunk_status_to_string(Hunk::Status s) {
+    switch (s) {
+        case Hunk::Status::Pending:  return "pending";
+        case Hunk::Status::Accepted: return "accepted";
+        case Hunk::Status::Rejected: return "rejected";
+    }
+    return "pending";
+}
+static Hunk::Status hunk_status_from_string(std::string_view s) {
+    if (s == "accepted") return Hunk::Status::Accepted;
+    if (s == "rejected") return Hunk::Status::Rejected;
+    return Hunk::Status::Pending;
+}
+
+// Serialize the *render-relevant* slice of a FileChange. We deliberately
+// skip `original_contents` / `new_contents` — those are only consumed by
+// `diff::apply_accepted` (the stubbed diff-review-pane feature) and would
+// double the on-disk size of every edit-heavy thread for no current win.
+// The rich edit card (render_edit_diff_card) reads only path / counts /
+// hunks, so reloaded threads render the structured diff identically.
+// When the diff-review pane lands, add the contents fields here.
+static json file_change_to_json(const FileChange& c) {
+    json j;
+    j["path"]    = tools::util::to_valid_utf8(c.path);
+    j["added"]   = c.added;
+    j["removed"] = c.removed;
+    json hunks = json::array();
+    for (const auto& h : c.hunks) {
+        json hj;
+        hj["old_start"] = h.old_start;
+        hj["old_len"]   = h.old_len;
+        hj["new_start"] = h.new_start;
+        hj["new_len"]   = h.new_len;
+        hj["patch"]     = tools::util::to_valid_utf8(h.patch);
+        hj["status"]    = std::string{hunk_status_to_string(h.status)};
+        hunks.push_back(std::move(hj));
+    }
+    j["hunks"] = std::move(hunks);
+    return j;
+}
+
+static FileChange file_change_from_json(const json& j) {
+    FileChange c;
+    c.path    = j.value("path", std::string{});
+    c.added   = j.value("added", 0);
+    c.removed = j.value("removed", 0);
+    if (auto it = j.find("hunks"); it != j.end() && it->is_array()) {
+        c.hunks.reserve(it->size());
+        for (const auto& hj : *it) {
+            if (!hj.is_object()) continue;
+            Hunk h;
+            h.old_start = hj.value("old_start", 0);
+            h.old_len   = hj.value("old_len", 0);
+            h.new_start = hj.value("new_start", 0);
+            h.new_len   = hj.value("new_len", 0);
+            h.patch     = hj.value("patch", std::string{});
+            h.status    = hunk_status_from_string(
+                hj.value("status", std::string{"pending"}));
+            c.hunks.push_back(std::move(h));
+        }
+    }
+    return c;
+}
+
 static json message_to_json(const Message& m) {
     // Belt-and-suspenders UTF-8 scrub. Tool output and freeform text can
     // contain raw bytes from arbitrary files (Latin-1 .htm, Shift-JIS logs)
@@ -111,6 +178,13 @@ static json message_to_json(const Message& m) {
         t["args"] = tc.args;
         t["output"] = tools::util::to_valid_utf8(tc.output()); // empty unless terminal
         t["status"] = std::string{tc.status_name()};
+        // Structured per-tool result (FileChange today, populated by
+        // edit/write). Persisted so a reloaded thread renders the rich
+        // diff card instead of falling back to the streaming-style
+        // EditTool widget. Only present when the Done arm carries one.
+        if (auto* ch = tc.change()) {
+            t["change"] = file_change_to_json(*ch);
+        }
         tcs.push_back(std::move(t));
     }
     j["tool_calls"] = std::move(tcs);
@@ -142,12 +216,15 @@ std::string DeserializeError::render() const {
 }
 
 static std::expected<ToolUse::Status, DeserializeError>
-parse_tool_status(std::string_view status_tag, std::string&& output) {
+parse_tool_status(std::string_view status_tag,
+                  std::string&& output,
+                  std::optional<FileChange>&& change) {
     // Reconstruct the variant. Persisted threads only ever land in
     // terminal states (in-flight tools are never serialized), so the
     // intermediate states reset to a no-arg-time-stamp default.
     if (status_tag == "done")
-        return ToolUse::Status{ToolUse::Done{{}, {}, std::move(output)}};
+        return ToolUse::Status{ToolUse::Done{
+            {}, {}, std::move(output), std::move(change)}};
     if (status_tag == "failed" || status_tag == "error")
         return ToolUse::Status{ToolUse::Failed{{}, {}, std::move(output)}};
     if (status_tag == "rejected") return ToolUse::Status{ToolUse::Rejected{{}}};
@@ -206,7 +283,17 @@ static std::expected<Message, DeserializeError> parse_message(const json& j) {
                         ? std::string{legacy[idx]} : std::string{"pending"};
                 }
             }
-            auto status = parse_tool_status(status_tag, std::move(output));
+            // Optional structured FileChange from edit/write. Only
+            // present in threads written after the rich-edit-card
+            // landing; older threads silently default to nullopt and
+            // the view falls back to the streaming-style EditTool
+            // widget (same behaviour as before this field existed).
+            std::optional<FileChange> change;
+            if (auto cit = t.find("change"); cit != t.end() && cit->is_object()) {
+                change = file_change_from_json(*cit);
+            }
+            auto status = parse_tool_status(status_tag, std::move(output),
+                                             std::move(change));
             if (!status) return std::unexpected(std::move(status).error());
             tc.status = std::move(*status);
             m.tool_calls.push_back(std::move(tc));

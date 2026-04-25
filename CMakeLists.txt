@@ -430,6 +430,43 @@ if(MOHA_BUILD_TESTS)
     endif()
 endif()
 
+# Wire smoke test — fires one real /v1/messages request through the same
+# provider/transport path production uses, to detect when our Claude
+# Code CLI impersonation falls out of date with what api.anthropic.com
+# accepts. Opt-in (needs network + credentials) and intentionally NOT
+# linked into MOHA_BUILD_TESTS so the unit test build stays offline.
+# See tests/wire_smoke.cpp for exit-code semantics.
+option(MOHA_BUILD_WIRE_TESTS "Build the API wire-format smoke test" OFF)
+if(MOHA_BUILD_WIRE_TESTS)
+    # transport.cpp pulls index + memory (cached system-prompt block) +
+    # the util subset of the tool layer (read_file / run_argv_s used by
+    # the index/hot-files refresh paths). Link the same source sets the
+    # production binary uses so the smoke test fires a production-shaped
+    # request, not a stripped-down one.
+    add_executable(moha_wire_smoke
+        ${MOHA_IO_SOURCES}
+        ${MOHA_PROVIDER_SOURCES}
+        ${MOHA_INDEX_SOURCES}
+        ${MOHA_MEMORY_SOURCES}
+        ${MOHA_TOOL_SOURCES}
+        tests/wire_smoke.cpp
+    )
+    target_include_directories(moha_wire_smoke PRIVATE
+        include
+        "${CMAKE_CURRENT_BINARY_DIR}/include")
+    target_link_libraries(moha_wire_smoke PRIVATE
+        nlohmann_json::nlohmann_json
+        simdjson::simdjson
+        nghttp2::nghttp2
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        Threads::Threads
+    )
+    if(WIN32)
+        target_link_libraries(moha_wire_smoke PRIVATE ws2_32 crypt32 shell32)
+    endif()
+endif()
+
 target_include_directories(moha PRIVATE
     include
     "${CMAKE_CURRENT_BINARY_DIR}/include")  # generated version.hpp
