@@ -264,13 +264,14 @@ jobs:
     container:
       image: archlinux:latest
     steps:
-      - name: Install Arch packaging deps (base-devel + git)
+      - name: Install Arch packaging deps (base-devel + git + cmake)
         run: |
-          # Refresh keys + install build group. --noconfirm + Override
-          # NOPROGRESSBAR so output stays grep-able in CI logs.
+          # cmake here only to run the configure_file step that
+          # generates the PKGBUILD with PROJECT_VERSION baked in —
+          # we don't actually compile anything in this job.
           pacman-key --init
           pacman -Sy --noconfirm
-          pacman -S --noconfirm --needed base-devel git
+          pacman -S --noconfirm --needed base-devel git cmake
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -281,21 +282,34 @@ jobs:
           name: moha-linux-x86_64
           path: artifacts-linux-x64
 
-      - name: Stage tarball where makepkg expects it
+      - name: Generate PKGBUILD from PKGBUILD.in (PROJECT_VERSION baked in)
+        # MOHA_BUILD_PACKAGES=ON triggers configure_file(PKGBUILD.in →
+        # build/packaging/arch/PKGBUILD). Configure-only — no compile —
+        # because we already have the binary tarball from the
+        # linux-x86_64 build. Avoids duplicating the version string in
+        # the PKGBUILD: the cmake project() line is the sole source.
+        run: |
+          cmake -B build -DMOHA_BUILD_PACKAGES=ON \
+                         -DCMAKE_BUILD_TYPE=Release
+          ls -lh build/packaging/arch/PKGBUILD
+          grep -E '^(pkgname|pkgver|pkgrel)=' build/packaging/arch/PKGBUILD
+
+      - name: Stage tarball + generated PKGBUILD where makepkg expects them
         # makepkg dedupes by filename: any `source=()` entry that already
         # exists in $startdir is reused instead of fetched. This lets the
         # CI build reference the just-uploaded artifact instead of trying
         # to download from a release that doesn't exist yet at this point.
         run: |
-          ls -lh artifacts-linux-x64/
-          cp artifacts-linux-x64/moha-*-linux-x86_64.tar.gz \
-             packaging/arch/
+          mkdir -p arch-build
+          cp build/packaging/arch/PKGBUILD arch-build/
+          cp artifacts-linux-x64/moha-*-linux-x86_64.tar.gz arch-build/
+          ls -lh arch-build/
 
       - name: Build .pkg.tar.zst (makepkg as nobody)
         # makepkg refuses to run as root; the Arch image's default user
         # is root inside CI, so we drop to `nobody` for the actual build
         # step and chown the working tree first.
-        working-directory: packaging/arch
+        working-directory: arch-build
         run: |
           chown -R nobody:nobody .
           su nobody -s /bin/bash -c '
@@ -307,7 +321,7 @@ jobs:
       - name: Stage Arch package as artifact
         run: |
           mkdir -p artifacts
-          mv packaging/arch/*.pkg.tar.zst artifacts/
+          mv arch-build/*.pkg.tar.zst artifacts/
           ls -lh artifacts/
 
       - name: Upload Arch artifact

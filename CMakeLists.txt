@@ -730,6 +730,17 @@ set(MOHA_TARGET "" CACHE STRING
 # configure for development doesn't pull in CPack's machinery.
 option(MOHA_BUILD_PACKAGES "Configure CPack installer generators" OFF)
 if(MOHA_BUILD_PACKAGES)
+    # Generate the Arch PKGBUILD with PROJECT_VERSION baked in. Same
+    # template-then-configure pattern as include/moha/version.hpp.in;
+    # the source of truth for the version is the project() line above.
+    # The generated PKGBUILD lives in the build tree; the CI workflow's
+    # package-arch job points makepkg at it.
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/packaging/arch/PKGBUILD.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/packaging/arch/PKGBUILD"
+        @ONLY
+    )
+
     install(TARGETS moha
         RUNTIME DESTINATION bin)
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
