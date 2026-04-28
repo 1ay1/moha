@@ -1,20 +1,20 @@
 #include "moha/runtime/view/changes.hpp"
 
-#include <maya/widget/changes_strip.hpp>
-
 #include "moha/runtime/view/palette.hpp"
 
 namespace moha::ui {
 
-using namespace maya;
+maya::ChangesStrip::Config changes_strip_config(const Model& m) {
+    maya::ChangesStrip::Config cfg;
+    cfg.border_color = warn;
+    cfg.text_color   = fg;
+    cfg.accept_color = success;
+    cfg.reject_color = danger;
+    if (m.d.pending_changes.empty()) return cfg;
 
-Element changes_strip(const Model& m) {
-    if (m.d.pending_changes.empty()) return Element{TextElement{}};
-
-    std::vector<maya::FileChange> changes;
-    changes.reserve(m.d.pending_changes.size());
+    cfg.changes.reserve(m.d.pending_changes.size());
     for (const auto& c : m.d.pending_changes) {
-        changes.push_back({
+        cfg.changes.push_back({
             .path          = c.path,
             .kind          = c.original_contents.empty()
                                ? maya::FileChangeKind::Created
@@ -23,14 +23,7 @@ Element changes_strip(const Model& m) {
             .lines_removed = c.removed,
         });
     }
-
-    return maya::ChangesStrip{{
-        .changes      = std::move(changes),
-        .border_color = warn,
-        .text_color   = fg,
-        .accept_color = success,
-        .reject_color = danger,
-    }}.build();
+    return cfg;
 }
 
 } // namespace moha::ui

@@ -323,7 +323,6 @@ set(MOHA_RUNTIME_NOMAIN_SOURCES
     src/runtime/view/cache.cpp
     src/runtime/view/helpers.cpp
     src/runtime/view/tool_args.cpp
-    src/runtime/view/tool_card.cpp
     src/runtime/view/thread.cpp
     src/runtime/view/composer.cpp
     src/runtime/view/statusbar.cpp

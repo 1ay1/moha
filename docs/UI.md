@@ -1,489 +1,680 @@
-# Moha UI — Maya primitive reference
+# moha UI — maya widget reference
 
-How the moha terminal UI is built, primitive by primitive. Every example here is copied from the moha source — file:line citations point you at the real call site.
+What every widget in moha's UI accepts (Config schema) and what moha
+fills in. Read this alongside [`RENDERING.md`](RENDERING.md), which
+walks the visual hierarchy and data flow.
 
-For the full conversation rendering pipeline (how a `Thread` becomes terminal cells, function by function), see [`RENDERING.md`](RENDERING.md). This file is the maya-primitive catalog the pipeline is built on.
+The architectural rule:
 
-The whole UI lives under `src/runtime/view/`. Every file in that directory pulls in `maya::dsl` via:
+> moha builds **widget Configs** from `Model` state. maya widgets own
+> all rendering. moha constructs no Elements.
 
-```cpp
-using namespace maya;
-using namespace maya::dsl;
-```
-
-Anything in the `dsl::` namespace becomes unqualified inside `moha::ui`. That's why you see `text(...)`, `h(...)`, `v(...)`, `border(...)` rather than `maya::dsl::text(...)`.
-
----
-
-## 1. Top-level shape
-
-The whole screen is composed in [`view.cpp:17-43`](../src/runtime/view/view.cpp). One vertical stack with optional centered overlay:
-
-```cpp
-auto base = (v(
-    v(thread_panel(m)) | grow(1.0f),
-    changes_strip(m),
-    composer(m),
-    status_bar(m)
-) | pad<1> | grow(1.0f)).build();
-
-if (has_overlay)
-    return zstack({std::move(base),
-        vstack().align_items(Align::Center).justify(Justify::End)(
-            vstack().bg(Color::default_color())(std::move(overlay)))});
-return base;
-```
-
-That's the whole tour: thread panel grows to fill, then the changes strip / composer / status bar pin to the bottom. Modals are layered with `zstack` and centered with the runtime `vstack` builder.
-
-The runtime entry point is at [`runtime/main.cpp:223`](../src/runtime/main.cpp):
-
-```cpp
-maya::run<app::MohaApp>({.title = "moha", .fps = 0, .mode = maya::Mode::Inline});
-```
-
-`Mode::Inline` means the canvas lives in the terminal's native scrollback; `fps = 0` means renders are pure event-driven (no idle redraws). The Tick subscription supplies frames during streaming.
+Concrete: `src/runtime/view/{view,thread,composer,changes,statusbar,permission}.cpp`
+contain zero `Element{...}`, zero `dsl::v(...)`, zero `dsl::text(...)`.
+Each file is a function `Model → SomeWidget::Config`. The single
+`view(m)` call materializes everything via one
+`maya::AppLayout{...}.build()`.
 
 ---
 
-## 2. DSL builders (compile-time tree)
-
-These are constexpr factories in `maya::dsl`. They build a node tree that materializes via `.build()` to a `maya::Element`.
-
-### `v(children...)` — vertical stack
-Source: [`maya/include/maya/dsl.hpp:620`](../maya/include/maya/dsl.hpp). `BoxNode<FlexDirection::Column, …>`. Used to stack rows.
+## 1. Top-level entry — `view(m)`
 
 ```cpp
-// src/runtime/view/login.cpp:84
-return v(std::move(rows)).build();
-```
-
-### `h(children...)` — horizontal stack
-Source: [`maya/include/maya/dsl.hpp:628`](../maya/include/maya/dsl.hpp). `BoxNode<FlexDirection::Row, …>`. Used for inline rows.
-
-```cpp
-// src/runtime/view/thread.cpp:130-137  — turn header
-return (h(
-    text(style.glyph, fg_of(style.color)),
-    text(" ", {}),
-    text(std::move(style.label), Style{}.with_fg(style.color).with_bold()),
-    spacer(),
-    text(std::move(meta), fg_dim(muted)),
-    text(" ", {})
-) | grow(1.0f)).build();
-```
-
-### `text(content, style?)` — runtime text node
-Source: [`dsl.hpp:280`](../maya/include/maya/dsl.hpp). Returns `RuntimeTextNode` (deduces `string_view`/`string`/`int`/`double`). Pipeable. Defaults to `TextWrap::Wrap`; pass `TextWrap::TruncateEnd` as third arg for ellipsizing single-line cells.
-
-```cpp
-// src/runtime/view/login.cpp:75
-text(std::string{"\xE2\x9A\xA0 "} + std::string{fail_msg}, fg_of(danger))
-```
-
-### `spacer()` — flex-grow gap
-Source: [`dsl.hpp:342`](../maya/include/maya/dsl.hpp). Empty box with `grow=1.0f`. Inside a row it pushes its right siblings to the right edge.
-
-```cpp
-// src/runtime/view/diff_review.cpp:44-46
-h(text(fc.path, fg_bold(fg)),
-  spacer(),
-  text(std::format("+{}", fc.added), fg_of(success)), …)
-```
-
-### `sep` — horizontal rule
-Source: [`dsl.hpp:321`](../maya/include/maya/dsl.hpp). Single-line top/bottom border on a hollow box. Used as a visual divider inside modals.
-
-```cpp
-// src/runtime/view/diff_review.cpp:54
-rows.push_back(sep);
-```
-
-### `vstack()` / `hstack()` / `zstack()` — runtime fluent builders
-Source: `dsl.hpp` re-exports from `maya::detail` ([`dsl.hpp:648-653`](../maya/include/maya/dsl.hpp)). Use these when you need to set layout properties (e.g. `align_items`, `justify`, `bg`) before passing children.
-
-```cpp
-// src/runtime/view/view.cpp:38-40  — overlay centered at bottom
-zstack({std::move(base),
-    vstack().align_items(Align::Center).justify(Justify::End)(
-        vstack().bg(Color::default_color())(std::move(overlay)))});
-
-// src/runtime/view/statusbar.cpp:440 — status bar parts
-auto left  = hstack()(std::move(lparts));
-```
-
-`zstack` takes a list/initializer-list of children; each child is a layer painted bottom-to-top.
-
----
-
-## 3. Runtime pipes (`|` operators)
-
-Source: [`dsl.hpp:760-953`](../maya/include/maya/dsl.hpp). Each pipe wraps the node in a `WrappedNode` that applies layout/style modifiers when `.build()` runs. Multiple pipes compose:
-
-```cpp
-// src/runtime/view/login.cpp:152-156
-auto content = (v(std::move(body)) | padding(1, 2) | width(70));
-return (v(content.build())
-        | border(BorderStyle::Round) | bcolor(accent)
-        | btext(" Sign in to moha ", BorderTextPos::Top, BorderTextAlign::Center)
-        ).build();
-```
-
-Catalog:
-
-| Pipe | Effect |
-|---|---|
-| `padding(all)` / `padding(v,h)` / `padding(t,r,b,l)` | Inner padding in cells. `pad<N>` is the compile-time form. |
-| `margin(all)` / `margin(v,h)` / `margin(t,r,b,l)` | Outer margin. |
-| `gap(n)` | Spacing between children. |
-| `grow(f)` | Flex-grow factor. `grow(1.0f)` is "fill remaining space." |
-| `width(n)` / `height(n)` | Fixed cell dimensions. |
-| `border(BorderStyle)` | Sets the border glyph style (Round / Single / Bold / Double). |
-| `bcolor(Color)` | Border color. Requires a border to be set. |
-| `btext(s, pos?, align?)` | Border label inset into the top or bottom edge. |
-| `fgc(Color)` / `bgc(Color)` | Foreground / background style on the wrapped node. |
-| `align(Align)` | Cross-axis child alignment (Start / Center / End / Stretch). |
-| `justify(Justify)` | Main-axis child distribution (Start / Center / End / SpaceBetween / SpaceAround). |
-| `overflow(Overflow)` | Clip behavior. |
-
-Compile-time variants exist as templates (`pad<1>`, `border_<Round>`, `bcol<R,G,B>`, `grow_<1>`); moha mostly uses the runtime variants because colors come from the palette helpers.
-
-The `pad<1>` form on the outer view ([`view.cpp:23`](../src/runtime/view/view.cpp)) is compile-time — 1 cell of padding on every side, baked into the node type.
-
----
-
-## 4. Element types and downcasts
-
-Source: [`maya/include/maya/element/`](../maya/include/maya/element/). `maya::Element` is a variant over `TextElement`, `BoxElement`, `ElementList`, `ComponentElement`. Moha builds each variant directly when the DSL doesn't fit:
-
-### `TextElement` — direct construction
-Used to inject `StyledRun` cells where each character has its own color. The status bar's context gauge does this so the bar can transition green→amber→red across a single line:
-
-```cpp
-// src/runtime/view/statusbar.cpp:92-96
-return Element{TextElement{
-    .content = std::move(content),
-    .style = {},
-    .runs = std::move(runs),
-}};
-```
-
-### `ComponentElement` — width-aware lambda
-The render closure is invoked by maya at layout time with the available `(w, h)`. Lets the view make decisions (truncate / drop columns / change layout) based on terminal size.
-
-```cpp
-// src/runtime/view/thread.cpp:163-178  — inter-turn divider
-Element{ComponentElement{
-    .render = [](int w, int /*h*/) -> Element {
-        std::string line;
-        int indent = 3;
-        for (int i = 0; i < indent; ++i) line += ' ';
-        for (int i = indent; i < w; ++i) line += "\xe2\x94\x80";  // ─
-        return Element{TextElement{
-            .content = std::move(line),
-            .style = Style{}.with_fg(Color::bright_black()).with_dim(),
-        }};
-    },
-    .layout = {},
-}};
-```
-
-The composer's hint row uses the same pattern to drop secondary shortcuts on narrow widths ([`composer.cpp:263-274`](../src/runtime/view/composer.cpp)). The status bar's right-side group is another big example ([`statusbar.cpp:589-636`](../src/runtime/view/statusbar.cpp)).
-
-### `maya::detail::box()` — low-level builder
-When the DSL borders aren't expressive enough (e.g. asymmetric border sides). Used to draw the per-turn left rail:
-
-```cpp
-// src/runtime/view/thread.cpp:147-156
-Element with_turn_rail(Element content, Color rail_color) {
-    return maya::detail::box()
-        .direction(FlexDirection::Row)
-        .border(BorderStyle::Bold, rail_color)
-        .border_sides({.top = false, .right = false,
-                       .bottom = false, .left = true})
-        .padding(0, 0, 0, 2)
-        .grow(1.0f)
-      (std::move(content));
+// src/runtime/view/view.cpp
+maya::Element view(const Model& m) {
+    return maya::AppLayout{{
+        .thread        = thread_config(m),
+        .changes_strip = changes_strip_config(m),
+        .composer      = composer_config(m),
+        .status_bar    = status_bar_config(m),
+        .overlay       = pick_overlay(m),
+    }}.build();
 }
 ```
 
-`border_sides({…})` lets you turn individual edges on/off — only the left bar is drawn, in the speaker's color, running the full height of the turn.
-
-### Downcasts
-`maya::as_text(e)`, `maya::as_box(e)`, `maya::as_list(e)` return a typed pointer when the variant matches, otherwise `nullptr`. Moha uses them in the assistant-timeline body cascade ([`thread.cpp:1102-1112`](../src/runtime/view/thread.cpp#L1102)) to flatten a per-tool body element into individual rows so each line gets its own `│` stripe:
-
-```cpp
-Element body_el = compact_tool_body(tc);
-if (auto* bx = maya::as_box(body_el)) {
-    for (const auto& child : bx->children)
-        rows.push_back((h(body_rule, child) | grow(1.0f)).build());
-} else if (auto* t = maya::as_text(body_el)) {
-    if (!t->content.empty())
-        rows.push_back((h(body_rule, body_el) | grow(1.0f)).build());
-}
-```
+That's the entire host-side view layer. The body is one declarative
+struct expression — no imperative composition, no `if` branches around
+layout primitives.
 
 ---
 
-## 5. Styles and the moha palette
+## 2. `maya::AppLayout` — top-level frame
 
-### `maya::Style` — fluent style builder
-Source: [`maya/include/maya/style/style.hpp`](../maya/include/maya/style/style.hpp). Chainable: `with_fg`, `with_bg`, `with_bold`, `with_dim`, `with_italic`, `with_underline`, `with_strikethrough`, `with_inverse`. Used directly when a chip needs a combo not in the palette helpers:
-
-```cpp
-// src/runtime/view/statusbar.cpp:430-432  — status-bar leading rail
-Style rail_style = breathing
-    ? Style{}.with_fg(pcolor).with_bold()
-    : Style{}.with_fg(pcolor).with_dim();
-```
-
-### Palette (moha-side)
-Source: [`include/moha/runtime/view/palette.hpp`](../include/moha/runtime/view/palette.hpp). Named ANSI only — the user's terminal theme always wins.
-
-| Name | ANSI color | Role |
-|---|---|---|
-| `fg` | `bright_white` | Primary body text (max contrast) |
-| `muted` | `bright_black` | Chrome, metadata, dim labels |
-| `accent` | `magenta` | Brand / Write profile |
-| `info` | `blue` | Ask profile / threads / "in progress" |
-| `success` | `green` | Done / accepted / on-track |
-| `warn` | `yellow` | Pending / caution |
-| `danger` | `red` | Errors / rejected / "stalling" |
-| `highlight` | `cyan` | Command palette / queue depth / mentions |
-
-### Palette helpers
-Same file. Compose `Style` instances so call sites stay tight:
-
-| Helper | Returns |
-|---|---|
-| `fg_of(c)` | `Style{}.with_fg(c)` |
-| `fg_bold(c)` | `Style{}.with_fg(c).with_bold()` |
-| `fg_dim(c)` | `Style{}.with_fg(c).with_dim()` — except for `muted` (already bright_black; stacking dim makes it unreadable on dark themes), which returns the plain color |
-| `fg_italic(c)` | `Style{}.with_fg(c).with_italic()` |
-| `dim()` / `bold()` / `italic()` | Style with that attribute, no fg override (terminal default) |
+`maya/include/maya/widget/app_layout.hpp`
 
 ```cpp
-// src/runtime/view/diff_review.cpp:45-49
-h(text(fc.path, fg_bold(fg)),               // bright bold
-  spacer(),
-  text(std::format("+{}", fc.added), fg_of(success)),
-  text(" "),
-  text(std::format("-{}", fc.removed), fg_of(danger)))
+struct AppLayout::Config {
+    Thread::Config         thread;
+    ChangesStrip::Config   changes_strip;
+    Composer::Config       composer;
+    StatusBar::Config      status_bar;
+    std::optional<Element> overlay;          // nullopt = no overlay
+};
 ```
 
-### Phase-driven colors
-[`helpers.cpp:42-55`](../src/runtime/view/helpers.cpp) maps the streaming phase to a color:
-
-```cpp
-maya::Color phase_color(const Phase& p) noexcept {
-    if (Idle)               return muted;
-    if (Streaming)          return Color::bright_cyan();
-    if (AwaitingPermission) return Color::bright_yellow();
-    if (ExecutingTool)      return Color::bright_green();
-}
-```
-
-Used by the composer's border, the status bar's leading rail, and the bottom edge accents — so all three pieces of state read in the same color.
+Composes four nested widget Configs into a vstack with the Thread
+growing to fill, then z-stacks an Overlay on top when present. Caller
+provides one nested Config tree per frame; AppLayout invokes the
+sub-widgets internally.
 
 ---
 
-## 6. Layout enums
+## 3. `maya::Thread` — conversation viewport
 
-| Enum | Where moha uses it |
-|---|---|
-| `FlexDirection::Row / Column` | `with_turn_rail` row direction; DSL `v`/`h` set these implicitly |
-| `Justify::SpaceBetween / Center / End / Start` | Overlay centering in [`view.cpp:39`](../src/runtime/view/view.cpp) (`justify(Justify::End)`) |
-| `Align::Center / Start / End / Stretch` | Overlay alignment ([`view.cpp:39`](../src/runtime/view/view.cpp)) |
-| `BorderStyle::Round / Single / Bold / Double` | `Round` is the dominant choice for modals + composer; `Bold` is used for the per-turn rail |
-| `BorderTextPos::Top / Bottom` | Modal titles on top, line counts on bottom |
-| `BorderTextAlign::Start / Center / End` | Modal titles centered, line counts right-aligned |
-| `TextWrap::Wrap / TruncateEnd / NoWrap` | Default `Wrap`; `TruncateEnd` for single-line truncation |
-| `BorderSides{top,right,bottom,left}` | Asymmetric borders — only the left rail in `with_turn_rail` |
-
----
-
-## 7. Maya widgets used by moha
-
-Each widget is a stateful builder you instantiate, configure, then `.build()` into an `Element`. Inclusion lives in the cpp that uses it.
-
-> **Important:** the per-tool execution widgets (`ReadTool`, `WriteTool`, `EditTool`, `BashTool`, `FetchTool`, `SearchResult`, `GitStatusWidget`, `GitGraph`, `GitCommitTool`, `TodoListTool`, `ToolCall`) are wrapped by `render_tool_call` in [`tool_card.cpp`](../src/runtime/view/tool_card.cpp) but **`render_tool_call` has no call sites at this commit**. The conversation pipeline (described in [`RENDERING.md`](RENDERING.md)) renders tools through `compact_tool_body` in `thread.cpp` using only `dsl::text` / `dsl::v` / `dsl::h`. The widgets below marked **dormant** are compiled in but unreachable from the live UI; they are listed here as the maya surface area moha is *built to use* and would re-engage if a future render path called `render_tool_call`.
-
-### Live in the conversation surface
-
-#### Markdown — `markdown.hpp`
-Two flavors, both live:
-
-- `maya::markdown(text)` — one-shot. Used for finalized assistant messages because the text is immutable; cached forever via `MessageMdCache::finalized`.
-- `maya::StreamingMarkdown` — incremental. `set_content()` accepts the growing buffer; internal block-boundary cache makes each delta `O(new_chars)` rather than re-parsing the whole transcript.
+`maya/include/maya/widget/thread.hpp`
 
 ```cpp
-// src/runtime/view/thread.cpp:34-48  — both paths
-Element cached_markdown_for(const Message& msg, const ThreadId& tid, std::size_t msg_idx) {
-    auto& cache = message_md_cache(tid, msg_idx);
-    if (msg.text.empty()) {
-        if (!cache.streaming)
-            cache.streaming = std::make_shared<maya::StreamingMarkdown>();
-        cache.streaming->set_content(msg.streaming_text);
-        return cache.streaming->build();
+struct Thread::Config {
+    bool                                     is_empty = false;
+    WelcomeScreen::Config                    welcome;
+    std::vector<Turn::Config>                turns;
+    std::optional<ActivityIndicator::Config> in_flight;
+};
+```
+
+Owns the empty-vs-populated branch:
+
+- `is_empty == true`  → renders `maya::WelcomeScreen{welcome}`
+- `is_empty == false` → renders `maya::Conversation{turns, in_flight}`
+
+moha-side adapter (`thread.cpp`):
+
+```cpp
+Thread::Config thread_config(const Model& m) {
+    Thread::Config cfg;
+    if (m.d.current.messages.empty()) {
+        cfg.is_empty = true;
+        cfg.welcome  = welcome_config(m);
+        return cfg;
     }
-    if (!cache.finalized) {
-        cache.finalized = std::make_shared<Element>(maya::markdown(msg.text));
-        cache.streaming.reset();
-    }
-    return *cache.finalized;
+    // … walk visible window, push Turn::Config per message …
+    cfg.in_flight = in_flight_indicator(m);
+    return cfg;
 }
 ```
 
-#### `Permission` — `permission.hpp` *(live)*
-Inline approval card rendered under the timeline when a tool needs user authorization. `Permission::Config` carries `tool_name` + `description` + `show_always_allow`:
+---
+
+## 4. `maya::WelcomeScreen` — empty-thread splash
+
+`maya/include/maya/widget/welcome_screen.hpp`
 
 ```cpp
-// src/runtime/view/permission.cpp:35-40
-Permission::Config cfg;
-cfg.tool_name = tc.name.value;
-cfg.description = desc.empty() ? pp.reason : desc;
-cfg.show_always_allow = true;
-Permission perm(std::move(cfg));
-return perm.build();
+struct WelcomeScreen::Config {
+    std::vector<std::string> wordmark;        // typically 3 rows
+    Color                    wordmark_color = Color::magenta();
+    std::string              tagline;
+    Element                  model_badge;     // pre-built (e.g. ModelBadge)
+    std::string              profile_label;   // raw — widget small-caps's it
+    Color                    profile_color  = Color::magenta();
+    std::string              starters_title = "Try";
+    std::vector<std::string> starters;
+    std::string              hint_intro     = "type to begin";
+    std::vector<Hint>        hints;           // {key, label, key_color}
+    Color                    accent_color = Color::magenta();
+    Color                    text_color   = Color::bright_white();
+};
 ```
 
-### Live outside the conversation surface (chrome / modals / status)
+Widget owns: wordmark gradient (last row dim), centering, small-caps
+title in starters card, bottom hint row layout. moha owns the brand
+content (the `m o h a` glyphs, tagline copy, starter prompts).
 
-#### `ModelBadge` — `model_badge.hpp` *(live)*
-Brand chip for the current model. `set_model(id)` parses the model id; `set_compact(true)` shrinks for the status bar:
+---
+
+## 5. `maya::Conversation` — turn list
+
+`maya/include/maya/widget/conversation.hpp`
 
 ```cpp
-// src/runtime/view/statusbar.cpp:489-494
-ModelBadge mb;
-mb.set_model(m.d.model_id.value);
-mb.set_compact(true);
-right_parts.push_back(mb.build());
+struct Conversation::Config {
+    std::vector<Element> turns;
+    Element              in_flight;
+    bool                 has_in_flight = false;
+};
 ```
 
-#### `compact_token_stream` — `token_stream.hpp` *(live)*
-Live tok/s number + sparkline. Free function returning an Element directly. Used in the status bar for the streaming rate display.
+A vstack of turn Elements with thin dim `─` rules between consecutive
+turns and an optional in-flight indicator at the bottom. Each `turns[i]`
+comes from `Turn{tc}.build()`; Conversation doesn't know about Turn's
+internal structure — it just receives pre-built Elements.
 
-#### `FileChanges` — `file_changes.hpp` *(live)*
-Compact summary of pending file changes — the strip below the thread when there are uncommitted edits:
+---
+
+## 6. `maya::Turn` — single speaker turn
+
+`maya/include/maya/widget/turn.hpp`
 
 ```cpp
-// src/runtime/view/changes.cpp:16-22
-FileChanges fc;
-for (const auto& c : m.d.pending_changes) {
-    auto kind = c.original_contents.empty()
-        ? FileChangeKind::Created
-        : FileChangeKind::Modified;
-    fc.add(c.path, kind, c.added, c.removed);
+struct Turn::Config {
+    std::string           glyph;             // ✦ for assistant, ❯ for user
+    std::string           label;             // "Opus 4.7", "You"
+    Color                 rail_color;
+    std::string           meta;              // "12:34 · 4.2s · turn 3"
+    std::vector<BodySlot> body;              // typed; Turn auto-spaces between
+    std::string           error;             // empty = no error banner
+    bool                  checkpoint_above = false;
+    std::string           checkpoint_label = "Restore checkpoint";
+    Color                 checkpoint_color = Color::yellow();
+};
+```
+
+`BodySlot` is the discriminated body variant:
+
+```cpp
+using BodySlot = std::variant<
+    PlainText,             // user text path: { content, color }
+    MarkdownText,          // markdown path:  { content }
+    AgentTimeline::Config, // tool calls panel
+    Permission::Config,    // inline permission card
+    Element                // escape hatch — only for cached StreamingMarkdown
+>;
+```
+
+Turn:
+1. Renders the header row.
+2. Walks each body slot, dispatching via `std::visit` to the matching
+   widget. Inserts a blank line between consecutive non-empty slots —
+   callers don't push spacers.
+3. Optional error banner (`⚠` row).
+4. Wraps in the bold left-only border (the speaker rail) at
+   `rail_color`.
+5. Optional `CheckpointDivider` above the rail.
+
+**Why typed slots:** moha can't construct `Element{TextElement{}}` for
+spacers anymore. Turn handles spacing itself; moha just lists the
+content slots in order.
+
+---
+
+## 7. `maya::AgentTimeline` — Actions panel for tool calls
+
+`maya/include/maya/widget/agent_timeline.hpp`
+
+```cpp
+struct AgentTimeline::Config {
+    std::string                          title;           // " ACTIONS · 3/5 · Bash "
+    Color                                border_color = Color::bright_black();
+    int                                  frame        = 0;   // for breathing/spinner
+    std::vector<AgentTimelineStat>       stats;            // {label, count, color}
+    std::vector<AgentTimelineEvent>      events;
+    std::optional<AgentTimelineFooter>   footer;           // {glyph, text, color, summary}
+};
+
+struct AgentTimelineEvent {
+    std::string             name;              // "Bash", "Read"
+    std::string             detail;            // "npm test  ·  exit 0"
+    float                   elapsed_seconds = 0.0f;
+    Color                   category_color  = Color::blue();
+    AgentEventStatus        status          = AgentEventStatus::Pending;
+    ToolBodyPreview::Config body;              // typed body — no Element
+};
+```
+
+Widget owns: round border, title/footer rendering, tree glyph
+selection (`──` / `╭─` / `├─` / `╰─` per position), status icon
+(braille spinner / `✓` / `✗` / `⊘`), inter-event connector colors,
+duration formatting, category-color application.
+
+moha-side: `agent_timeline_config(msg, frame, rail_color)` walks
+`msg.tool_calls`, computes done/total/elapsed, picks per-category
+colors, builds the events vector. Each event's body is filled via
+`tool_body_config(tc)` which returns a `ToolBodyPreview::Config`.
+
+---
+
+## 8. `maya::ToolBodyPreview` — discriminated body content
+
+`maya/include/maya/widget/tool_body_preview.hpp`
+
+Drives the content under each timeline event's `│` stripe. Picks one
+of five renderers based on `kind`:
+
+```cpp
+enum class Kind {
+    None,        // empty
+    CodeBlock,   // dim'd head+tail preview
+    Failure,     // CodeBlock in red
+    EditDiff,    // multi-hunk per-side diff with head+tail elision
+    GitDiff,     // unified diff with per-line +/-/@@ coloring
+    TodoList,    // ✓ ◍ ○ checkbox list
+};
+
+struct Config {
+    Kind kind = Kind::None;
+
+    // CodeBlock / Failure / GitDiff
+    std::string text;
+    Color       text_color = Color::bright_white();
+
+    // EditDiff
+    std::vector<EditHunk> hunks;        // { old_text, new_text }
+
+    // TodoList
+    std::vector<TodoItem> todos;        // { content, status }
+
+    // Tunables
+    int code_head           = 4;
+    int code_tail           = 3;
+    int edit_head_per_side  = 6;
+    int edit_tail_per_side  = 2;
+    int max_edit_hunks_shown = 4;
+    int max_todos_shown     = 8;
+};
+```
+
+Widget owns: line splitting, head+tail elision math, the
+`··· N hidden ···` middle marker, per-line styling for diff coloring,
+todo glyph selection (`✓` completed / `◍` in_progress / `○` pending).
+
+moha-side `tool_body_config(tc)` is pure data extraction:
+
+| Tool                                     | Resulting Kind            |
+|------------------------------------------|---------------------------|
+| `edit` (with hunks)                      | `EditDiff`                |
+| `write`                                  | `CodeBlock` (content arg) |
+| `bash` / `diagnostics` (terminal)        | `CodeBlock` (stripped output) |
+| `bash` (running, with progress text)     | `CodeBlock` (live stdout) |
+| `git_diff` (terminal)                    | `GitDiff`                 |
+| `read`/`list_dir`/`grep`/`glob`/etc.     | `CodeBlock` (output)      |
+| `todo` (with todos)                      | `TodoList`                |
+| any failed tool with output              | `Failure`                 |
+| anything else                            | `None`                    |
+
+---
+
+## 9. `maya::Permission` — inline permission card
+
+`maya/include/maya/widget/permission.hpp`
+
+```cpp
+struct Permission::Config {
+    std::string tool_name;
+    std::string description;
+    bool        show_always_allow = false;
+};
+```
+
+Renders the "tool wants to do X" prompt with `[y] allow [n] deny [a] always` keys.
+moha-side `inline_permission_config(pp, tc)` is pure data:
+
+```cpp
+maya::Permission::Config inline_permission_config(
+    const PendingPermission& pp, const ToolUse& tc)
+{
+    std::string desc;
+    if (tc.name == "bash" || tc.name == "diagnostics") desc = tc.args.value("command", "");
+    else if (tc.name == "read" || tc.name == "edit" /* … */) desc = tc.args.value("path", "");
+    // … per-tool description extraction …
+
+    Permission::Config cfg;
+    cfg.tool_name = tc.name.value;
+    cfg.description = desc.empty() ? pp.reason : desc;
+    cfg.show_always_allow = true;
+    return cfg;
 }
 ```
 
-#### `DiffView` — `diff_view.hpp` *(live in the diff-review modal)*
-Renders a unified-diff string into colored hunks. Used per-hunk in the review modal:
+---
+
+## 10. `maya::CheckpointDivider`
+
+`maya/include/maya/widget/checkpoint_divider.hpp`
 
 ```cpp
-// src/runtime/view/diff_review.cpp:66-67
-DiffView dv(fc.path, h_.patch);
-rows.push_back((v(dv.build()) | padding(0, 0, 0, 2)).build());
+struct CheckpointDivider::Config {
+    std::string label = "Restore checkpoint";
+    Color       color = Color::yellow();
+};
 ```
 
-#### `PlanView` + `TaskStatus` — `plan_view.hpp` *(live in the `/plan` modal)*
-Renders the agent's todo list. `TaskStatus::{Pending, InProgress, Completed}`.
-
-#### `Spinner<SpinnerStyle::Dots>` *(live)*
-Lives on `StreamState::spinner`. Tick handler advances frames; status bar / composer pull `frame_index()`.
-
-### Dormant — wrapped by the unreachable `render_tool_call` path
-
-Each of these is fully implemented in `render_tool_call_uncached` ([`tool_card.cpp:175-592`](../src/runtime/view/tool_card.cpp#L175)). At this commit, `render_tool_call` is declared in `thread.hpp` but never called.
-
-#### `ToolCall` — `tool_call.hpp` *(dormant)*
-Generic tool card chrome (border + title + icon + expanded body). The fallback when no specialized widget matches ([`tool_card.cpp:70-85`](../src/runtime/view/tool_card.cpp#L70)). `ToolCallStatus` enum: `Running / Completed / Failed`. `ToolCallKind` is a hint for the icon family (Edit / Read / Other / etc.).
-
-#### Per-tool widgets — `read_tool.hpp`, `write_tool.hpp`, `edit_tool.hpp`, `bash_tool.hpp`, `fetch_tool.hpp`, `search_result.hpp`, `git_commit_tool.hpp`, `git_status.hpp`, `git_graph.hpp`, `todo_list.hpp` *(all dormant)*
-
-- **`ReadTool`** — `set_start_line`, `set_total_lines`, `set_max_lines`, status enum `ReadStatus::{Reading, Failed, Success}`. Wired for `read` and `list_dir` ([`tool_card.cpp:185-215`](../src/runtime/view/tool_card.cpp#L185)).
-- **`WriteTool`** — `set_content`, `set_max_preview_lines`. Status `WriteStatus::{Writing, Failed, Written}`. Falls back to a "(streaming…)" header while args are still arriving ([`tool_card.cpp:217-243`](../src/runtime/view/tool_card.cpp#L217)).
-- **`EditTool`** — `set_old_text` / `set_new_text` for legacy single-edit shape; `set_edits(vector<EditPair>)` for the canonical `edits[]` array. Always expanded — the diff IS the point ([`tool_card.cpp:245-317`](../src/runtime/view/tool_card.cpp#L245)).
-- **`BashTool`** — `set_output`, `set_exit_code`, `set_max_output_lines`. While running, the output field is fed `tc.progress_text()` (live stdout snapshot); on completion it gets the final fenced output ([`tool_card.cpp:319-338`](../src/runtime/view/tool_card.cpp#L319)).
-- **`SearchResult`** — `add_group(SearchFileGroup)`, `set_max_matches_per_file`. Two `SearchKind` modes (`Grep` / `Glob`); the parser handles both moha's markdown grep output and the legacy `path:line:content` shape ([`tool_card.cpp:87-173`](../src/runtime/view/tool_card.cpp#L87)).
-- **`FetchTool`** — `set_url`, `set_status_code`, `set_content_type`, `set_body`. Wired for both `web_fetch` and `web_search` ([`tool_card.cpp:390-436`](../src/runtime/view/tool_card.cpp#L390)).
-- **`GitStatusWidget`** — `set_branch`, `set_ahead/behind`, `set_dirty(M, S, U)`. Parser walks `--porcelain=v2` output ([`tool_card.cpp:438-478`](../src/runtime/view/tool_card.cpp#L438)).
-- **`GitGraph`** + **`GitCommit`** — Each commit added with `add_commit()`. Renders an ASCII commit graph ([`tool_card.cpp:480-523`](../src/runtime/view/tool_card.cpp#L480)).
-- **`GitCommitTool`** — Specialized commit card with subject, body, output ([`tool_card.cpp:551-560`](../src/runtime/view/tool_card.cpp#L551)).
-- **`TodoListTool`** + **`TodoListItem`** — `add(TodoListItem)` per todo; status enum `TodoItemStatus::{Pending, InProgress, Completed}` ([`tool_card.cpp:562-587`](../src/runtime/view/tool_card.cpp#L562)).
+`─── [↺ Restore checkpoint] ───` — full-width rule that lives outside
+the rail, above a turn. Triggered by `Turn::Config::checkpoint_above`.
 
 ---
 
-## 8. The cache layer (moha-side, not maya)
+## 11. `maya::ActivityIndicator`
 
-Three caches in [`include/moha/runtime/view/cache.hpp`](../include/moha/runtime/view/cache.hpp):
-
-- **`tool_card_cache(ToolCallId)`** — keyed cache of rendered tool-card Elements, only populated for terminal-state tools. Re-rendered if `compute_render_key()` (FNV over output size + status + expanded) doesn't match. **Only called by the dormant `render_tool_call` path** ([`tool_card.cpp:601-612`](../src/runtime/view/tool_card.cpp#L601)) — unused at this commit.
-- **`message_md_cache(ThreadId, msg_idx)`** — finalized markdown built once and reused; streaming markdown reuses the same `StreamingMarkdown` instance across deltas so block-boundary caching kicks in ([`thread.cpp:34-48`](../src/runtime/view/thread.cpp)). **This is the only cache the live conversation pipeline exercises.**
-- **(in this commit, no whole-turn cache)** — `render_message` rebuilds the turn shell every frame; later commits added a `TurnElementCache` for inline-mode scrollback stability.
-
----
-
-## 9. Cmds and Subs (side effects + event sources)
-
-### `Cmd<Msg>` factories used by moha
-Source: [`maya/include/maya/core/cmd.hpp`](../maya/include/maya/core/cmd.hpp). Returned from the reducer to ask the runtime to do work.
-
-| Factory | Used in moha | What it does |
-|---|---|---|
-| `Cmd<Msg>::none()` | Many reducer arms | No side effect. |
-| `Cmd<Msg>::task(fn)` | [`cmd_factory.cpp:57, 73, 240, 253, 264`](../src/runtime/app/cmd_factory.cpp) | Run `fn(dispatch)` on a worker thread; `fn` calls `dispatch(Msg)` to push events back. Used for streaming, tool execution, model fetching, browser open, compaction. |
-| `Cmd<Msg>::after(d, msg)` | [`cmd_factory.cpp:195`](../src/runtime/app/cmd_factory.cpp) | Emit `msg` after duration `d`. Used for tool-watchdog timeouts. |
-| `Cmd<Msg>::batch(cmds…)` | [`cmd_factory.cpp:236`](../src/runtime/app/cmd_factory.cpp) | Combine multiple cmds into one return. |
-| `Cmd<Msg>::commit_scrollback(rows)` | Inline virtualization (added in later commits) | Tell maya "rows 0..N are now in terminal scrollback; don't try to update them." |
-| `Cmd<Msg>::reset_frame()` | Inline ghost-fix paths (added in later commits) | Force the next compose down the FRESH-DRAW path. |
-
-### `Sub<Msg>` factories used by moha
-Source: [`maya/include/maya/app/sub.hpp`](../maya/include/maya/app/sub.hpp). Returned from `subscribe(Model)` to declare event sources.
+`maya/include/maya/widget/activity_indicator.hpp`
 
 ```cpp
-// src/runtime/app/subscribe.cpp:222-260  — subscriptions
-auto key_sub   = Sub<Msg>::on_key(/* keymap filter */);
-auto paste_sub = Sub<Msg>::on_paste([in_login](std::string s) -> Msg { … });
-if (m.s.active()) {
-    auto tick = Sub<Msg>::every(std::chrono::milliseconds(33), Tick{});
-    return Sub<Msg>::batch(std::move(key_sub), std::move(paste_sub), std::move(tick));
-}
-return Sub<Msg>::batch(std::move(key_sub), std::move(paste_sub));
+struct ActivityIndicator::Config {
+    Color       edge_color = Color::cyan();
+    std::string spinner_glyph;
+    std::string label;
+};
 ```
 
-`Sub::every` is the spinner pump — only subscribed while `m.s.active()` (anything but Idle). When the stream ends and the phase drops back to Idle, the Tick subscription unsubscribes and idle moha goes to 0% CPU until the user presses a key.
+`▎ ⠋ streaming…` — floats at the bottom of the thread when the model
+is mid-stream and the active turn has no Timeline visible (Timeline
+already carries the in-flight signal).
 
 ---
 
-## 10. Putting it all together — the composer at rest
+## 12. `maya::ChangesStrip` — pending edits banner
 
-[`composer.cpp:55-296`](../src/runtime/view/composer.cpp) is the densest single example of moha's UI conventions. It uses:
+`maya/include/maya/widget/changes_strip.hpp`
 
-- **State-driven color** — `box_color` switches on phase / has-text / awaiting-permission so the border and prompt arrow read as the input box's status indicator (no extra chrome needed). [`composer.cpp:78-83`](../src/runtime/view/composer.cpp)
-- **Manual cursor injection** — a `▎` glyph is inserted into the text at the byte cursor index so when the lines are split on `\n` the cursor lands on the right visual row. [`composer.cpp:89-91`](../src/runtime/view/composer.cpp)
-- **Compile-time + runtime composition** — `v(body_rows) | padding(0, 1) | height(rows)` builds the inner box with the runtime pipes. [`composer.cpp:153`](../src/runtime/view/composer.cpp)
-- **`ComponentElement` for responsive layout** — the hint row is a render closure that takes the current width and drops "newline" / "expand" hints below 90 / 60 cols. [`composer.cpp:181-198, 263-274`](../src/runtime/view/composer.cpp)
-- **Tabular formatting for jitter-free numbers** — `tabular_int(words, 4)` / `tabular_int(toks, 4)` make sure the right-side counters don't bob left/right as the user types. [`composer.cpp:235, 239`](../src/runtime/view/composer.cpp)
-- **Border + bcolor + btext composition** — round border in the state color, with a bottom-right line-count caption when the input wraps. [`composer.cpp:284-294`](../src/runtime/view/composer.cpp)
+```cpp
+struct ChangesStrip::Config {
+    std::vector<FileChange> changes;
+    Color border_color = Color::yellow();
+    Color text_color   = Color::bright_white();
+    Color accept_color = Color::green();
+    Color reject_color = Color::red();
+};
+```
 
-If you want to read just one file to see how every primitive in this doc plays together, start there.
+Header row (`Changes (N) … Ctrl+R review · A accept · X reject`) plus
+a `maya::FileChanges` body with the file list. When `changes` is
+empty, renders to an empty Element so the AppLayout slot collapses
+without a host-side `if`.
 
 ---
 
-## Index of view files
+## 13. `maya::Composer` — bordered input box
 
-| File | What it renders |
-|---|---|
-| [`view.cpp`](../src/runtime/view/view.cpp) | Top-level layout + overlay composition |
-| [`thread.cpp`](../src/runtime/view/thread.cpp) | Conversation panel, turn headers, rails, dividers, tool timeline |
-| [`tool_card.cpp`](../src/runtime/view/tool_card.cpp) | Per-tool widget dispatch + terminal-state caching |
-| [`composer.cpp`](../src/runtime/view/composer.cpp) | Multi-line input with state-driven border + responsive hint row |
-| [`statusbar.cpp`](../src/runtime/view/statusbar.cpp) | Phase chip, breadcrumb, tok/s sparkline, context gauge, shortcut row |
-| [`changes.cpp`](../src/runtime/view/changes.cpp) | Pending-changes summary strip |
-| [`diff_review.cpp`](../src/runtime/view/diff_review.cpp) | Per-hunk accept/reject modal |
-| [`pickers.cpp`](../src/runtime/view/pickers.cpp) | Model / threads / command palette / todo modals |
-| [`login.cpp`](../src/runtime/view/login.cpp) | OAuth + API-key entry modal |
-| [`permission.cpp`](../src/runtime/view/permission.cpp) | Inline tool-permission card + checkpoint divider |
-| [`helpers.cpp`](../src/runtime/view/helpers.cpp) | `phase_color`, `phase_glyph`, `small_caps`, `tabular_int`, etc. |
-| [`cache.cpp`](../src/runtime/view/cache.cpp) | Thread-local UI element caches |
+`maya/include/maya/widget/composer.hpp`
+
+```cpp
+struct Composer::Config {
+    std::string text;
+    int         cursor = 0;
+
+    enum class State { Idle, AwaitingPermission, Streaming, ExecutingTool };
+    State       state         = State::Idle;
+    Color       active_color  = Color::cyan();    // when state is Streaming/ExecutingTool
+
+    Color       text_color      = Color::bright_white();
+    Color       accent_color    = Color::magenta();   // "primed" border, idle+text
+    Color       warn_color      = Color::yellow();
+    Color       highlight_color = Color::cyan();      // queue chip
+
+    std::size_t queued = 0;
+    ProfileChip profile;        // { label, color }
+
+    bool expanded = false;
+};
+```
+
+State drives:
+
+- Border + prompt color (idle/streaming/awaiting/has-text → muted/active/warn/accent)
+- Placeholder text ("type a message…" / "running tool — type to queue…")
+- Prompt boldness (active/has-text → bold; empty-idle → dim)
+- Height pin (during activity, height pins to `min_rows=3` to prevent
+  vertical bobbing as layout reflows above)
+
+Hint row is width-adaptive (drops `expand` then `newline` keys on
+narrow widths). Right-side ambient indicators: queue depth, words /
+~tokens counters, profile chip.
+
+---
+
+## 14. `maya::StatusBar` — bottom panel
+
+`maya/include/maya/widget/status_bar.hpp`
+
+Five fixed rows (always 5 — the status row never grows or shrinks, so
+the composer above never bobs vertically when a toast appears).
+
+```cpp
+struct StatusBar::Config {
+    PhaseSpec       phase;            // glyph, verb, color, breathing, frame, elapsed
+    std::string     breadcrumb_title; // empty = hide
+    TokenStreamSpec token_stream;     // show/rate/total/history/color/live
+    Element         model_badge;      // pre-built (e.g. ModelBadge)
+    ContextSpec     context;          // {used, max}
+
+    std::string     status_text;      // empty = blank slot (1 row reserved)
+    bool            status_is_error = false;
+
+    std::vector<ShortcutRow::Binding> shortcuts;
+
+    int breadcrumb_min_width    = 130;   // raise to 160 while streaming
+    int token_stream_min_width  = 110;
+    int ctx_bar_min_width       = 55;
+
+    Color text_color = Color::bright_white();
+};
+```
+
+Composes internal sub-widgets:
+
+- `maya::PhaseAccent` (top + bottom) — soft `▔▔▔` / `▁▁▁` rule in phase color
+- `maya::PhaseChip` — colored glyph + verb + elapsed; breathing animation
+- `maya::ContextGauge` — fuel-gauge bar with green/amber/red zones
+- `maya::ShortcutRow` — width-adaptive keyboard hints
+
+---
+
+## 15. `maya::PhaseChip` — phase indicator
+
+`maya/include/maya/widget/phase_chip.hpp`
+
+```cpp
+struct PhaseChip::Config {
+    std::string glyph;
+    std::string verb;
+    Color       color        = Color::cyan();
+    bool        breathing    = false;
+    int         frame        = 0;
+    int         verb_width   = 10;     // 0 = drop verb (very narrow)
+    float       elapsed_secs = -1.0f;  // < 0 = omit
+};
+```
+
+Owns the breathing animation cadence (32-frame cycle, bold half / dim
+half — slightly slower than resting heart-rate so the indicator feels
+*alive* without becoming a tick). `verb_width` truncates-or-pads to
+exactly N display columns so the chips to the right stay pinned as
+the verb changes.
+
+---
+
+## 16. `maya::ContextGauge` — context-window fuel gauge
+
+`maya/include/maya/widget/context_gauge.hpp`
+
+```cpp
+struct ContextGauge::Config {
+    int  used     = 0;
+    int  max      = 0;
+    int  cells    = 10;       // bar width
+    bool show_bar = true;     // false = drop bar + ratio (very narrow)
+};
+```
+
+Owns: 1/8-gradation block bar with per-cell threshold coloring (cells
+0–60% green, 60–80% amber, 80–100% red). When `used == 0`, renders a
+dim placeholder slot the same width as the live version, so the
+right-side chips don't shove leftward when the first usage event
+fires mid-stream.
+
+---
+
+## 17. `maya::ShortcutRow` — width-adaptive hint row
+
+`maya/include/maya/widget/shortcut_row.hpp`
+
+```cpp
+struct ShortcutRow::Binding {
+    std::string key;
+    std::string label;
+    Color       key_color = Color::cyan();
+    int         priority  = 0;     // higher = kept longer
+};
+
+struct ShortcutRow::Config {
+    std::vector<Binding> bindings;
+    int label_min_width = 110;     // < this drops labels (key-only)
+    int full_min_width  = 55;      // < this drops lower-priority half
+    Color text_color = Color::bright_white();
+};
+```
+
+Helix / Lazygit / k9s style: bold key in default fg, dim label, no
+chip background. Drops less-important bindings on narrow widths
+(priority-sorted) and drops labels entirely below `label_min_width`.
+
+---
+
+## 18. `maya::PhaseAccent` — soft horizontal rule
+
+`maya/include/maya/widget/phase_accent.hpp`
+
+```cpp
+struct PhaseAccent::Config {
+    Color    color    = Color::cyan();
+    Position position = Position::Top;     // Top → ▔, Bottom → ▁
+};
+```
+
+Width-aware row of half-block glyphs in the phase color, dim. Reads as
+a "soft state shelf" rather than a hard line — the color carries
+app-state information without using extra chrome characters.
+
+---
+
+## 19. `maya::Overlay` — modal layer
+
+`maya/include/maya/widget/overlay.hpp`
+
+```cpp
+struct Overlay::Config {
+    Element base;
+    Element overlay;        // empty Element + present=false collapses
+    bool    present = false;
+};
+```
+
+Z-stacks `overlay` over `base`, centered horizontally, pinned to the
+bottom edge, with an opaque background so base content doesn't bleed
+through. When `present = false` collapses to just `base`.
+
+`AppLayout` accepts `std::optional<Element>` and translates internally
+— host code never has to construct an empty placeholder Element.
+
+---
+
+## 20. moha adapter functions
+
+Every per-section file in `src/runtime/view/`:
+
+| File              | Function                          | Returns                            |
+|-------------------|-----------------------------------|------------------------------------|
+| `view.cpp`        | `view(m)`                         | `Element` (the one `.build()`)     |
+| `view.cpp`        | `pick_overlay(m)`                 | `optional<Element>`                |
+| `thread.cpp`      | `thread_config(m)`                | `Thread::Config`                   |
+| `thread.cpp`      | `welcome_config(m)`               | `WelcomeScreen::Config`            |
+| `thread.cpp`      | `turn_config(msg, idx, n, m)`     | `Turn::Config`                     |
+| `thread.cpp`      | `agent_timeline_config(msg, …)`   | `AgentTimeline::Config`            |
+| `thread.cpp`      | `tool_body_config(tc)`            | `ToolBodyPreview::Config`          |
+| `thread.cpp`      | `in_flight_indicator(m)`          | `optional<ActivityIndicator::Config>` |
+| `thread.cpp`      | `cached_markdown_for(msg, …)`     | `Element` *(only escape hatch)*    |
+| `composer.cpp`    | `composer_config(m)`              | `Composer::Config`                 |
+| `changes.cpp`     | `changes_strip_config(m)`         | `ChangesStrip::Config`             |
+| `statusbar.cpp`   | `status_bar_config(m)`            | `StatusBar::Config`                |
+| `permission.cpp`  | `inline_permission_config(pp,tc)` | `Permission::Config`               |
+
+Pure data helpers (no maya types touched): `speaker_style_for`,
+`format_turn_meta`, `tool_timeline_detail`, `tool_event_status`,
+`tool_display_name`, `tool_category_color`, `tool_category_label`,
+`assistant_elapsed`, `running_tool_name`, `ordered_rate_history`.
+
+The single `Element`-returning function is `cached_markdown_for` — it
+exists because `maya::StreamingMarkdown` is stateful (per-block parse
+cache must persist across frames). moha holds the widget instance,
+calls `set_content()` per frame, and slots `instance.build()` into a
+Turn body via the typed `Element` variant. No `Element{...}` literal,
+no `dsl::*` call.
+
+---
+
+## 21. Caching
+
+```cpp
+// include/moha/runtime/view/cache.hpp
+struct MessageMdCache {
+    std::shared_ptr<maya::Element>           finalized;
+    std::shared_ptr<maya::StreamingMarkdown> streaming;
+};
+
+[[nodiscard]] MessageMdCache& message_md_cache(const ThreadId& tid,
+                                               std::size_t msg_idx);
+```
+
+One thread-local cache, keyed on `(thread_id, msg_idx)`. Streaming
+messages hold a live `StreamingMarkdown` instance whose internal
+block-cache makes each delta `O(new_chars)`; finalized messages cache
+the resulting `Element` once and return the same pointer forever.
+
+The previous `tool_card_cache` was removed when the rendering pipeline
+collapsed onto `AgentTimeline + ToolBodyPreview`.
+
+---
+
+## 22. The DSL (for widget authors and overlay modals)
+
+`maya/include/maya/dsl.hpp`. moha's main view files don't import it
+anymore — they only build Configs. But:
+
+1. **Widget authors** use it inside `maya/include/maya/widget/*.hpp`
+   when implementing `build()`.
+2. **Overlay modals** in moha (`login.cpp`, `pickers.cpp`,
+   `diff_review.cpp`) still construct elements via DSL; they predate
+   the controller-only refactor and will be widgetized next.
+
+Quick reference (full primer in `maya/include/maya/dsl.hpp` header
+comments):
+
+| Form                          | Returns                                         |
+|-------------------------------|-------------------------------------------------|
+| `t<"...">`                    | Compile-time TextNode                           |
+| `text(s)` / `text(s, style)`  | Runtime TextNode                                |
+| `v(c1, c2, …)`                | Vertical box (`FlexDirection::Column`)          |
+| `h(c1, c2, …)`                | Horizontal box (`FlexDirection::Row`)           |
+| `spacer()`                    | Flex-grow gap (`grow=1.0f`)                     |
+| `blank()`                     | Empty 1-line text                               |
+| `when(cond, then, else?)`     | Conditional branch                              |
+| `map(range, proj)`            | Project a range into nodes                      |
+| `dyn([&]{ return E; })`       | Runtime escape hatch                            |
+| `\| Bold` / `\| Dim` / `\| Italic` | Compile-time style pipe                    |
+| `\| fg<0xHEX>` / `\| Fg<R,G,B>`  | Compile-time foreground color               |
+| `\| pad<T,R,B,L>` / `\| border_<Round>` / `\| grow_<1>` | Compile-time layout pipe |
+| `\| fgc(c)` / `\| padding(...)` / `\| border(BS)` / `\| bcolor(c)` / `\| btext(s, pos, align)` / `\| grow(f)` / `\| height(h)` / `\| width(w)` | Runtime layout pipes |
+
+Element types (variants of `maya::Element`):
+
+| Variant            | Purpose                                              |
+|--------------------|------------------------------------------------------|
+| `TextElement`      | Single line of text + optional `vector<StyledRun>`   |
+| `BoxElement`       | Container with layout + border + children            |
+| `ElementList`      | Heterogeneous list (rare; `v(...)` produces this)    |
+| `ComponentElement` | Lazy `(w,h) → Element` callback for width-aware UI   |
+
+The widget-author idiom is "build a node tree with the DSL, optionally
+wrap with runtime pipes for dynamic colors / borders, return the
+`.build()` result." Inside the widget you can use `Style{}.with_fg(c).with_bold()`
+for runtime styling that doesn't need pipes.
+
+---
+
+## 23. Pending widgetization
+
+Three host files still build elements directly — overlay modals that
+predate the strict controller-only rule:
+
+- `src/runtime/view/login.cpp` — login modal
+- `src/runtime/view/pickers.cpp` — model picker, thread list, command palette, todo modal
+- `src/runtime/view/diff_review.cpp` — pending-changes review modal
+
+Future widgets to absorb them:
+
+- `maya::LoginModal`
+- `maya::Picker` (or `CommandPalette` + `ThreadList` + `TodoModal`)
+- `maya::DiffReview`
+
+Once those land, every host file under `src/runtime/view/` is a pure
+data adapter and the `using namespace maya::dsl` line disappears from
+moha entirely.

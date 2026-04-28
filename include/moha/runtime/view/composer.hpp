@@ -1,9 +1,9 @@
 #pragma once
-#include <maya/maya.hpp>
+#include <maya/widget/composer.hpp>
 #include "moha/runtime/model.hpp"
 
 namespace moha::ui {
 
-[[nodiscard]] maya::Element composer(const Model& m);
+[[nodiscard]] maya::Composer::Config composer_config(const Model& m);
 
 } // namespace moha::ui

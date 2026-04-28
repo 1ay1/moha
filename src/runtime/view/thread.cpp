@@ -1,19 +1,18 @@
 #include "moha/runtime/view/thread.hpp"
 
-#include <cstdlib>
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
-#include <maya/widget/activity_indicator.hpp>
-#include <maya/widget/agent_timeline.hpp>
-#include <maya/widget/conversation.hpp>
 #include <maya/widget/markdown.hpp>
 #include <maya/widget/model_badge.hpp>
-#include <maya/widget/timeline.hpp>
-#include <maya/widget/turn.hpp>
-#include <maya/widget/welcome_screen.hpp>
 
 #include "moha/runtime/view/cache.hpp"
 #include "moha/runtime/view/helpers.hpp"
@@ -23,21 +22,17 @@
 
 namespace moha::ui {
 
-using namespace maya;
-using namespace maya::dsl;
-
 namespace {
 
-// Cached markdown render. Finalized assistant messages have an immutable
-// `text` — we build once and reuse forever. Streaming messages get a
-// StreamingMarkdown with block-boundary caching (O(new_chars) per delta).
-//
-// Swapping from streaming to finalized happens automatically: when
-// finalize_turn promotes streaming_text into text, the next render sees
-// `text` non-empty and drops the StreamingMarkdown in favour of the
-// finalized Element.
-Element cached_markdown_for(const Message& msg, const ThreadId& tid,
-                            std::size_t msg_idx) {
+// ── Cached markdown render. Finalized assistant messages have an
+//    immutable `text` — build once, reuse forever. Streaming messages
+//    get a StreamingMarkdown with block-boundary caching (O(new_chars)
+//    per delta). This is the ONE Element-returning helper kept in
+//    moha — strictly because cross-frame cache state lives in the
+//    StreamingMarkdown widget instance, which we keep alive across
+//    frames so its block cache survives.
+maya::Element cached_markdown_for(const Message& msg, const ThreadId& tid,
+                                  std::size_t msg_idx) {
     auto& cache = message_md_cache(tid, msg_idx);
     if (msg.text.empty()) {
         if (!cache.streaming)
@@ -46,42 +41,32 @@ Element cached_markdown_for(const Message& msg, const ThreadId& tid,
         return cache.streaming->build();
     }
     if (!cache.finalized) {
-        cache.finalized = std::make_shared<Element>(maya::markdown(msg.text));
+        cache.finalized = std::make_shared<maya::Element>(maya::markdown(msg.text));
         cache.streaming.reset();
     }
     return *cache.finalized;
 }
 
-} // namespace
-
-// render_tool_call — defined in tool_card.cpp.
-
-
-// ════════════════════════════════════════════════════════════════════════
-
-// Per-speaker visual identity: brand color + glyph + display name.
-// Centralized so the rail color, the header glyph, and the bottom
-// streaming indicator stay in lockstep.
+// ── Per-speaker visual identity: rail color + glyph + display name.
+//    Centralized so the rail color, the header glyph, and the bottom
+//    streaming indicator stay in lockstep.
 struct SpeakerStyle {
-    Color       color;
+    maya::Color color;
     std::string glyph;
     std::string label;
 };
 
 SpeakerStyle speaker_style_for(Role role, const Model& m) {
     if (role == Role::User) {
-        // Cyan — distinct from every model brand color so user vs
-        // assistant turns always read as different voices.
         return {highlight, "\xe2\x9d\xaf", "You"};                   // ❯
     }
     const auto& id = m.d.model_id.value;
-    Color c;
+    maya::Color c;
     std::string label;
     if      (id.find("opus")   != std::string::npos) { c = accent;    label = "Opus";   }
     else if (id.find("sonnet") != std::string::npos) { c = info;      label = "Sonnet"; }
     else if (id.find("haiku")  != std::string::npos) { c = success;   label = "Haiku";  }
     else                                              { c = highlight; label = id;       }
-    // Append a version like "4.7" if present in the id.
     for (std::size_t i = 0; i + 2 < id.size(); ++i) {
         char ch = id[i];
         if (ch >= '0' && ch <= '9') {
@@ -99,9 +84,7 @@ SpeakerStyle speaker_style_for(Role role, const Model& m) {
     return {c, "\xe2\x9c\xa6", std::move(label)};                    // ✦
 }
 
-// Format the trailing meta strip for a turn header — timestamp · elapsed
-// · turn N. Pure string assembly; the rendering itself lives in
-// maya::Turn (which the caller wraps the body inside).
+// ── Trailing meta strip for a turn header — `12:34  ·  4.2s  ·  turn N`.
 std::string format_turn_meta(const Message& msg, int turn_num,
                              std::optional<float> elapsed_secs) {
     std::string meta = timestamp_hh_mm(msg.timestamp);
@@ -121,39 +104,96 @@ std::string format_turn_meta(const Message& msg, int turn_num,
         }
         meta += buf;
     }
-    if (turn_num > 0) {
-        meta += "  \xc2\xb7  turn " + std::to_string(turn_num);
-    }
+    if (turn_num > 0) meta += "  \xc2\xb7  turn " + std::to_string(turn_num);
     return meta;
 }
 
-// Brief "what this tool is doing" line for the Timeline view. Tool-
-// specific so the user can read the sequence at a glance: paths for fs
-// ops, the actual command for bash, the pattern for grep, etc. When
-// the tool has settled (terminal status), the detail also folds in
-// post-completion stats — line count for read/write, hunk + Δ for
-// edit, match count for grep, exit code for bash, etc. — so the
-// Timeline doubles as a compact result log without the user needing
-// to expand individual cards.
+// ── Compute the assistant turn's wall-clock elapsed: from previous
+//    user message timestamp to this one.
+std::optional<float> assistant_elapsed(const Message& msg, const Model& m) {
+    if (msg.role != Role::Assistant) return std::nullopt;
+    for (std::size_t i = m.d.current.messages.size(); i-- > 0;) {
+        if (&m.d.current.messages[i] == &msg) continue;
+        if (m.d.current.messages[i].role == Role::User) {
+            auto dt = std::chrono::duration<float>(
+                msg.timestamp - m.d.current.messages[i].timestamp).count();
+            if (dt > 0.0f && dt < 3600.0f) return dt;
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+// ── Tool category — semantic grouping for color + stats badge.
+//    inspect (read/grep/glob/list/find/diag/web)  → info
+//    mutate  (edit/write)                          → accent
+//    execute (bash)                                → success
+//    plan    (todo)                                → warn
+//    vcs     (git_*)                               → highlight
+maya::Color tool_category_color(const std::string& n) {
+    if (n == "edit" || n == "write")  return accent;
+    if (n == "bash")                  return success;
+    if (n == "todo")                  return warn;
+    if (n.rfind("git_", 0) == 0)      return highlight;
+    return info;
+}
+
+std::string_view tool_category_label(const std::string& n) {
+    if (n == "edit" || n == "write")  return "mutate";
+    if (n == "bash")                  return "execute";
+    if (n == "todo")                  return "plan";
+    if (n.rfind("git_", 0) == 0)      return "vcs";
+    return "inspect";
+}
+
+// ── ToolUse status → AgentEventStatus mapping. Approved folds into
+//    Running because both render with the same in-flight spinner.
+maya::AgentEventStatus tool_event_status(const ToolUse& tc) {
+    if (tc.is_running() || tc.is_approved()) return maya::AgentEventStatus::Running;
+    if (tc.is_pending())                     return maya::AgentEventStatus::Pending;
+    if (tc.is_done())                        return maya::AgentEventStatus::Done;
+    if (tc.is_failed())                      return maya::AgentEventStatus::Failed;
+    return maya::AgentEventStatus::Rejected;
+}
+
+// ── Tool name → display label. Maps moha's lowercase canonical names
+//    to brand TitleCase forms (matches Zed / Claude Code agent panel).
+std::string tool_display_name(const std::string& n) {
+    if (n == "read")            return "Read";
+    if (n == "write")           return "Write";
+    if (n == "edit")            return "Edit";
+    if (n == "bash")            return "Bash";
+    if (n == "grep")            return "Grep";
+    if (n == "glob")            return "Glob";
+    if (n == "list_dir")        return "List";
+    if (n == "todo")            return "Todo";
+    if (n == "web_fetch")       return "Fetch";
+    if (n == "web_search")      return "Search";
+    if (n == "find_definition") return "Definition";
+    if (n == "diagnostics")     return "Diag";
+    if (n == "git_status")      return "Git Status";
+    if (n == "git_diff")        return "Git Diff";
+    if (n == "git_log")         return "Git Log";
+    if (n == "git_commit")      return "Git Commit";
+    return n;
+}
+
+// ── Brief "what this tool is doing" line for the timeline event.
+//    Tool-specific so the user can read the sequence at a glance:
+//    paths for fs ops, the actual command for bash, the pattern for
+//    grep, etc. When settled, folds in post-completion stats.
 std::string tool_timeline_detail(const ToolUse& tc) {
     auto safe = [&](const char* k) -> std::string { return safe_arg(tc.args, k); };
     auto path = pick_arg(tc.args, {"path", "file_path", "filepath", "filename"});
     const auto& n = tc.name.value;
 
-    // Pretty-print "src/foo/bar.cpp" rather than the absolute path when
-    // the path lives under cwd. Uses the same trick the existing tool
-    // cards do — strip a known-prefix.
     auto pretty_path = [&](std::string p) -> std::string {
         if (p.empty()) return p;
         std::error_code ec;
         auto cwd = std::filesystem::current_path(ec).string();
-        if (!ec && !cwd.empty()
-            && p.size() > cwd.size()
-            && p.compare(0, cwd.size(), cwd) == 0
-            && p[cwd.size()] == '/') {
+        if (!ec && !cwd.empty() && p.size() > cwd.size()
+            && p.compare(0, cwd.size(), cwd) == 0 && p[cwd.size()] == '/')
             return p.substr(cwd.size() + 1);
-        }
-        // Drop the user's home prefix as `~/…`.
         if (const char* home = std::getenv("HOME"); home && *home) {
             std::string h{home};
             if (p.size() > h.size() && p.compare(0, h.size(), h) == 0
@@ -162,7 +202,6 @@ std::string tool_timeline_detail(const ToolUse& tc) {
         }
         return p;
     };
-
     auto path_pp = pretty_path(path);
 
     if (n == "read") {
@@ -170,8 +209,6 @@ std::string tool_timeline_detail(const ToolUse& tc) {
         if (auto off = safe_int_arg(tc.args, "offset", 0); off > 0)
             detail += " @" + std::to_string(off);
         if (tc.is_done()) {
-            // Output starts with the directory listing or "Read N lines..."
-            // header. Just count newlines for a rough size hint.
             int lines = count_lines(tc.output());
             if (lines > 1) detail += "  \xc2\xb7  " + std::to_string(lines) + " lines";
         }
@@ -180,8 +217,6 @@ std::string tool_timeline_detail(const ToolUse& tc) {
     if (n == "write") {
         auto detail = path_pp.empty() ? std::string{"\xe2\x80\xa6"} : path_pp;
         if (tc.is_done()) {
-            // Output line "Wrote/Overwrote N (+X -Y)" — just include +/− if
-            // we can find them; otherwise fall back to char count of args.
             const auto& out = tc.output();
             if (auto plus = out.find('+'); plus != std::string::npos) {
                 if (auto end = out.find(')', plus); end != std::string::npos) {
@@ -196,14 +231,12 @@ std::string tool_timeline_detail(const ToolUse& tc) {
     if (n == "edit") {
         if (path_pp.empty()) return "\xe2\x80\xa6";
         std::string detail = path_pp;
-        // Surface hunk count if the args carry an edits[] array.
         if (tc.args.is_object()) {
             auto it = tc.args.find("edits");
             if (it != tc.args.end() && it->is_array() && !it->empty())
                 detail += "  \xc2\xb7  " + std::to_string(it->size()) + " edits";
         }
         if (tc.is_done()) {
-            // Pull "(+X -Y)" out of the tool output if present.
             const auto& out = tc.output();
             if (auto from = out.find('('); from != std::string::npos) {
                 if (auto end = out.find(')', from); end != std::string::npos
@@ -255,9 +288,6 @@ std::string tool_timeline_detail(const ToolUse& tc) {
     if (n == "find_definition") {
         std::string detail = safe("symbol");
         if (tc.is_done()) {
-            // Output uses the same `path:line:content` markdown grep
-            // format, so "## Matches in" lines correlate to file hits
-            // and the rest are individual matches. Cheap proxy.
             int hits = 0;
             const auto& out = tc.output();
             for (std::size_t p = 0; (p = out.find("## Matches in ", p)) != std::string::npos; p += 14)
@@ -270,9 +300,6 @@ std::string tool_timeline_detail(const ToolUse& tc) {
     if (n == "web_fetch") {
         std::string detail = safe("url");
         if (tc.is_done()) {
-            // Output's first line is "HTTP <code> (<content-type>)"
-            // — surface it inline so the user sees status without
-            // expanding. Truncate URL middle if it crowds out the chip.
             const auto& out = tc.output();
             auto nl = out.find('\n');
             if (nl != std::string::npos && out.starts_with("HTTP ")) {
@@ -286,8 +313,6 @@ std::string tool_timeline_detail(const ToolUse& tc) {
     if (n == "web_search") {
         std::string detail = safe("query");
         if (tc.is_done()) {
-            // Each result starts with a numbered bullet ("1. " etc.).
-            // Counting them is more reliable than parsing the body.
             int hits = 0;
             const auto& out = tc.output();
             for (std::size_t p = 0; p + 1 < out.size(); ++p) {
@@ -302,13 +327,9 @@ std::string tool_timeline_detail(const ToolUse& tc) {
         return detail;
     }
     if (n == "git_commit") {
-        auto msg = safe("message");
-        if (auto nl = msg.find('\n'); nl != std::string::npos)
-            msg = msg.substr(0, nl);
+        auto m = safe("message");
+        if (auto nl = m.find('\n'); nl != std::string::npos) m = m.substr(0, nl);
         if (tc.is_done()) {
-            // Output line shape: "[main abc1234] commit subject" — pull
-            // the short hash so the user can see *which* commit landed
-            // without expanding.
             const auto& out = tc.output();
             auto open = out.find('[');
             if (open != std::string::npos) {
@@ -317,15 +338,13 @@ std::string tool_timeline_detail(const ToolUse& tc) {
                 if (sp != std::string::npos && sp < close) {
                     auto hash = out.substr(sp + 1, close - sp - 1);
                     if (!hash.empty() && hash.size() <= 12)
-                        msg += "  \xc2\xb7  " + hash;
+                        m += "  \xc2\xb7  " + hash;
                 }
             }
         }
-        return msg;
+        return m;
     }
     if (n == "git_status" && tc.is_done()) {
-        // Parse the porcelain v2 output into a compact "branch · M+ S± U?".
-        // Walks the output once; cheap.
         const auto& out = tc.output();
         std::string branch;
         int modified = 0, staged = 0, untracked = 0;
@@ -353,9 +372,7 @@ std::string tool_timeline_detail(const ToolUse& tc) {
                 detail += std::to_string(n_) + suffix;
                 first = false;
             };
-            add(modified,  "M");
-            add(staged,    "S");
-            add(untracked, "?");
+            add(modified, "M"); add(staged, "S"); add(untracked, "?");
         } else {
             detail += "  \xc2\xb7  clean";
         }
@@ -364,9 +381,6 @@ std::string tool_timeline_detail(const ToolUse& tc) {
     if (n == "git_diff" || n == "git_log" || n == "git_status")
         return path_pp.empty() ? std::string{"."} : path_pp;
     if (n == "todo") {
-        // "N items" loses the most useful signal (how much of the plan
-        // is done). Show "done/total" so a glance tells the user the
-        // model is making progress, not just bookkeeping.
         if (tc.args.is_object()) {
             auto it = tc.args.find("todos");
             if (it != tc.args.end() && it->is_array() && !it->empty()) {
@@ -389,427 +403,134 @@ std::string tool_timeline_detail(const ToolUse& tc) {
     return safe_arg(tc.args, "display_description");
 }
 
-// Map a ToolUse status to the maya widget's AgentEventStatus. `Approved`
-// folds into Running because both render with the same cyan in-flight
-// spinner — the widget doesn't need a separate stage for it.
-maya::AgentEventStatus tool_event_status(const ToolUse& tc) {
-    if (tc.is_running() || tc.is_approved()) return maya::AgentEventStatus::Running;
-    if (tc.is_pending())                     return maya::AgentEventStatus::Pending;
-    if (tc.is_done())                        return maya::AgentEventStatus::Done;
-    if (tc.is_failed())                      return maya::AgentEventStatus::Failed;
-    return maya::AgentEventStatus::Rejected;
-}
+// ── ToolUse → ToolBodyPreview::Config. Picks the right discriminated
+//    body kind based on tool name + state, and extracts the relevant
+//    data (output text, edit hunks, todo items). No element work.
+maya::ToolBodyPreview::Config tool_body_config(const ToolUse& tc) {
+    using Kind = maya::ToolBodyPreview::Kind;
+    const auto& n = tc.name.value;
+    maya::ToolBodyPreview::Config out;
 
-// Pretty title-case for the tool name shown as the timeline event label.
-// Maps moha's lowercase canonical names to the brand TitleCase forms
-// (matches the names users see in CC / Zed agent panel).
-std::string tool_display_name(const std::string& n) {
-    if (n == "read")            return "Read";
-    if (n == "write")           return "Write";
-    if (n == "edit")            return "Edit";
-    if (n == "bash")            return "Bash";
-    if (n == "grep")            return "Grep";
-    if (n == "glob")            return "Glob";
-    if (n == "list_dir")        return "List";
-    if (n == "todo")            return "Todo";
-    if (n == "web_fetch")       return "Fetch";
-    if (n == "web_search")      return "Search";
-    if (n == "find_definition") return "Definition";
-    if (n == "diagnostics")     return "Diag";
-    if (n == "git_status")      return "Git Status";
-    if (n == "git_diff")        return "Git Diff";
-    if (n == "git_log")         return "Git Log";
-    if (n == "git_commit")      return "Git Commit";
-    return n;
-}
-
-// format_duration / rich_status_icon / duration_color / event_connector_color
-// — moved into maya::AgentTimeline. The widget owns those mappings now.
-
-// Split a string into lines (without owning them). Used by the head+
-// tail truncator so we can pick lines from front and back of the body.
-std::vector<std::string_view> split_lines_view(const std::string& s) {
-    std::vector<std::string_view> out;
-    std::size_t start = 0;
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '\n') {
-            out.emplace_back(s.data() + start, i - start);
-            start = i + 1;
-        }
-    }
-    if (start < s.size()) out.emplace_back(s.data() + start, s.size() - start);
-    return out;
-}
-
-// First N lines of `s` joined back, with a `… N more lines` footer when
-// there were more. Used for tool body previews so a 1000-line bash output
-// doesn't blow up the timeline card.
-std::pair<std::string,int> head_lines(const std::string& s, int max_lines) {
-    int kept = 0;
-    int total = 0;
-    std::size_t cut = 0;
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '\n') {
-            ++total;
-            if (kept < max_lines) { ++kept; cut = i + 1; }
-        }
-    }
-    if (!s.empty() && s.back() != '\n') {
-        ++total;
-        if (kept < max_lines) { ++kept; cut = s.size(); }
-    }
-    return {s.substr(0, cut), std::max(0, total - kept)};
-}
-
-// Smart head+tail elision: for content longer than `cap_lines`, show
-// `head` lines from the start, an elision marker, and `tail` lines from
-// the end. Reads like a `git diff` smart-context block — far more
-// useful than just showing the first N and dropping the conclusion.
-// Returns the stitched preview and the count of elided lines (0 when
-// nothing was elided).
-struct ElidedPreview {
-    std::vector<std::string> lines;
-    int elided = 0;
-};
-
-ElidedPreview head_tail_lines(const std::string& s, int head, int tail) {
-    auto all = split_lines_view(s);
-    int total = static_cast<int>(all.size());
-    ElidedPreview out;
-    int cap = head + tail;
-    if (total <= cap) {
-        out.lines.reserve(static_cast<std::size_t>(total));
-        for (auto v : all) out.lines.emplace_back(v);
+    // ── Failure: surface stderr inline so it isn't hidden.
+    if (tc.is_failed() && !tc.output().empty()) {
+        out.kind = Kind::Failure;
+        out.text = tc.output();
         return out;
     }
-    out.lines.reserve(static_cast<std::size_t>(cap));
-    for (int i = 0; i < head; ++i) out.lines.emplace_back(all[static_cast<std::size_t>(i)]);
-    out.elided = total - head - tail;
-    for (int i = total - tail; i < total; ++i)
-        out.lines.emplace_back(all[static_cast<std::size_t>(i)]);
-    return out;
-}
 
-// Render compact body content for a single tool event — placed under the
-// timeline event's `│` connector. Tool-specific so each row carries
-// real, glanceable information: a few lines of read content, the diff
-// hunks for an edit, the head of bash output, etc. Empty Element when
-// nothing useful exists yet (still streaming) — caller handles spacing.
-Element compact_tool_body(const ToolUse& tc) {
-    const auto& n = tc.name.value;
-    constexpr int kMaxLines = 6;
-
-    auto code_line = [](std::string_view ln, Style st) {
-        return text(std::string{ln}, st);
-    };
-
-    // ── Edit: unified-diff-style preview, per-hunk head+tail ───
-    // Replaces the previous "first line per side" rendering, which lost
-    // every multi-line edit beyond row 1 — the user saw `- foo {` /
-    // `+ bar {` without any clue what the actual change was. Now each
-    // hunk gets up to ~4 lines per side with head+tail elision, plus a
-    // −N/+M line-count tag so the user can see scope at a glance.
+    // ── Edit: parse hunks from args.
     if (n == "edit" && tc.args.is_object()) {
-        std::vector<Element> rows;
-        auto rem      = Style{}.with_fg(danger);
-        auto add      = Style{}.with_fg(success);
-        auto rem_pre  = Style{}.with_fg(danger).with_dim();
-        auto add_pre  = Style{}.with_fg(success).with_dim();
-
-        // Per-side cap. 3 head + 1 tail is enough to recognize "this is
-        // the function I'm editing" without letting a 200-line replacement
-        // dominate the timeline; head+tail keeps the closing brace / last
-        // logical line visible so the diff frames the change.
-        // Generous-but-bounded preview. Most real edits the model
-        // makes are 5-15 lines; the previous 3+1 was so tight that
-        // anything over 4 rows immediately collapsed into "… N hidden"
-        // and the user couldn't see the actual change. 6+2 keeps short
-        // edits fully visible (≤ 8 rows shown raw) while still
-        // capping the worst case (200-line replacement) at ~10 rows.
-        constexpr int kHeadPerSide = 6;
-        constexpr int kTailPerSide = 2;
-
-        auto count_lines_in = [](std::string_view s) {
-            if (s.empty()) return 0;
-            int n_ = 1;
-            for (char c : s) if (c == '\n') ++n_;
-            // Trailing newline shouldn't count as an extra empty line.
-            if (s.back() == '\n') --n_;
-            return std::max(0, n_);
-        };
-
-        auto push_side = [&](std::string_view body, char marker,
-                             Style mark_style, Style line_style) {
-            if (body.empty()) return;
-            auto p = head_tail_lines(std::string{body},
-                                     kHeadPerSide, kTailPerSide);
-            for (int i = 0; i < static_cast<int>(p.lines.size()); ++i) {
-                if (p.elided > 0 && i == kHeadPerSide) {
-                    rows.push_back(h(
-                        text(std::string{marker} + " ", mark_style),
-                        text("\xe2\x80\xa6 " + std::to_string(p.elided)
-                             + " hidden", fg_dim(muted))
-                    ).build());
-                }
-                rows.push_back(h(
-                    text(std::string{marker} + " ", mark_style),
-                    code_line(p.lines[static_cast<std::size_t>(i)], line_style)
-                ).build());
-            }
-        };
-
-        auto push_hunk = [&](int hunk_idx, int hunk_total,
-                             std::string_view old_text,
-                             std::string_view new_text) {
-            int minus = count_lines_in(old_text);
-            int plus  = count_lines_in(new_text);
-            // Per-hunk header: `edit i/N  ·  −k / +m`. Skipped on
-            // single-edit calls where the decoration would be noise.
-            if (hunk_total > 1) {
-                std::string tag = "edit " + std::to_string(hunk_idx + 1)
-                                + "/" + std::to_string(hunk_total)
-                                + "  \xc2\xb7  ";
-                std::string stat = "\xe2\x88\x92" + std::to_string(minus)
-                                 + " / +" + std::to_string(plus);
-                rows.push_back(h(
-                    text(std::move(tag),  fg_dim(muted)),
-                    text(std::move(stat), fg_dim(muted))
-                ).build());
-            }
-            push_side(old_text, '-', rem_pre, rem);
-            push_side(new_text, '+', add_pre, add);
-        };
-
         if (auto it = tc.args.find("edits");
             it != tc.args.end() && it->is_array() && !it->empty())
         {
-            constexpr int kMaxHunksShown = 4;
-            int total = static_cast<int>(it->size());
-            int shown = 0;
+            out.kind = Kind::EditDiff;
+            out.hunks.reserve(it->size());
             for (const auto& e : *it) {
-                if (shown >= kMaxHunksShown) {
-                    rows.push_back(text(
-                        "\xe2\x80\xa6 "
-                            + std::to_string(total - shown) + " more edits",
-                        fg_dim(muted)));
-                    break;
-                }
                 if (!e.is_object()) continue;
                 auto ot = e.value("old_text", e.value("old_string", std::string{}));
                 auto nt = e.value("new_text", e.value("new_string", std::string{}));
-                push_hunk(shown, total, ot, nt);
-                ++shown;
+                out.hunks.push_back({std::move(ot), std::move(nt)});
             }
-        } else {
-            // Top-level legacy single-edit shape.
-            auto ot = safe_arg(tc.args, "old_text"); if (ot.empty()) ot = safe_arg(tc.args, "old_string");
-            auto nt = safe_arg(tc.args, "new_text"); if (nt.empty()) nt = safe_arg(tc.args, "new_string");
-            if (!ot.empty() || !nt.empty()) push_hunk(0, 1, ot, nt);
+            return out;
         }
-        if (rows.empty()) return text("");
-        return v(std::move(rows)).build();
+        // Top-level legacy single-edit shape.
+        auto ot = safe_arg(tc.args, "old_text");
+        if (ot.empty()) ot = safe_arg(tc.args, "old_string");
+        auto nt = safe_arg(tc.args, "new_text");
+        if (nt.empty()) nt = safe_arg(tc.args, "new_string");
+        if (!ot.empty() || !nt.empty()) {
+            out.kind = Kind::EditDiff;
+            out.hunks.push_back({std::move(ot), std::move(nt)});
+        }
+        return out;
     }
 
-    // Render an elided head+tail preview as a vertical stack with a
-    // dim "··· N hidden ···" centered marker. Reads like `git diff`'s
-    // smart context: top of file, gap, bottom of file — far more
-    // informative than only the first N lines.
-    auto preview_block = [&](const std::string& body, Style line_style) -> Element {
-        constexpr int kHead = 4;
-        constexpr int kTail = 3;
-        auto p = head_tail_lines(body, kHead, kTail);
-        std::vector<Element> rows;
-        for (int i = 0; i < static_cast<int>(p.lines.size()); ++i) {
-            if (p.elided > 0 && i == kHead) {
-                rows.push_back(text("\xc2\xb7 \xc2\xb7 \xc2\xb7  "
-                                    + std::to_string(p.elided) + " hidden  \xc2\xb7 \xc2\xb7 \xc2\xb7",
-                                    fg_dim(muted)));
-            }
-            rows.push_back(text(p.lines[static_cast<std::size_t>(i)], line_style));
-        }
-        return v(std::move(rows)).build();
-    };
-
-    // ── Write: head+tail of the streaming/written content ──────────
+    // ── Write: head+tail of the streaming/written content.
     if (n == "write") {
-        std::string content = safe_arg(tc.args, "content");
-        if (content.empty()) return text("");
-        return preview_block(content, fg_dim(fg));
+        auto content = safe_arg(tc.args, "content");
+        if (!content.empty()) {
+            out.kind = Kind::CodeBlock;
+            out.text = std::move(content);
+            out.text_color = fg;
+        }
+        return out;
     }
 
-    // ── Bash / diagnostics: head+tail of output ────────────────────
+    // ── Bash / diagnostics: head+tail of output.
     if ((n == "bash" || n == "diagnostics") && tc.is_terminal()) {
-        auto out = strip_bash_output_fence(tc.output());
-        if (out.empty()) return text("");
-        return preview_block(out, fg_dim(fg));
+        auto stripped = strip_bash_output_fence(tc.output());
+        if (!stripped.empty()) {
+            out.kind = Kind::CodeBlock;
+            out.text = std::move(stripped);
+            out.text_color = fg;
+        }
+        return out;
     }
-    // Live bash progress (running stdout snapshot).
     if (n == "bash" && tc.is_running() && !tc.progress_text().empty()) {
-        return preview_block(tc.progress_text(), fg_dim(fg));
+        out.kind = Kind::CodeBlock;
+        out.text = tc.progress_text();
+        out.text_color = fg;
+        return out;
     }
 
-    // ── Read / list_dir / grep / glob / find_definition / web /
-    //    git_log / git_status / git_commit: head+tail preview of
-    //    the textual output. Each tool produces structured-but-
-    //    line-oriented text that the head+tail helper handles
-    //    well; specialising each one to a custom widget here
-    //    would be over-design for what the timeline is — a
-    //    glanceable summary, not a viewer.
+    // ── git_diff: per-line diff coloring.
+    if (n == "git_diff" && tc.is_done()) {
+        const auto& body = tc.output();
+        if (!body.empty() && body != "no changes") {
+            out.kind = Kind::GitDiff;
+            out.text = body;
+            out.text_color = fg;
+        }
+        return out;
+    }
+
+    // ── Generic line-oriented tools: head+tail preview.
     if ((n == "read" || n == "list_dir" || n == "grep" || n == "glob"
          || n == "find_definition"
          || n == "web_fetch" || n == "web_search"
          || n == "git_status" || n == "git_log" || n == "git_commit")
         && tc.is_done())
     {
-        const auto& out = tc.output();
-        if (out.empty()) return text("");
-        return preview_block(out, fg_dim(fg));
-    }
-
-    // ── git_diff: per-line diff coloring (+ / - / @@) ──────────────
-    // preview_block uses a single style; a real diff wants green
-    // additions, red removals, dim hunk headers. Same head+tail
-    // elision shape so a 500-line diff doesn't take over.
-    if (n == "git_diff" && tc.is_done()) {
-        const auto& out = tc.output();
-        if (out.empty() || out == "no changes") return text("");
-        constexpr int kHead = 4;
-        constexpr int kTail = 3;
-        auto p = head_tail_lines(out, kHead, kTail);
-        std::vector<Element> rows;
-        auto add_st = Style{}.with_fg(success);
-        auto rem_st = Style{}.with_fg(danger);
-        auto hdr_st = fg_dim(muted);
-        auto ctx_st = fg_dim(fg);
-        for (int i = 0; i < static_cast<int>(p.lines.size()); ++i) {
-            if (p.elided > 0 && i == kHead) {
-                rows.push_back(text("\xc2\xb7 \xc2\xb7 \xc2\xb7  "
-                                    + std::to_string(p.elided)
-                                    + " hidden  \xc2\xb7 \xc2\xb7 \xc2\xb7",
-                                    fg_dim(muted)));
-            }
-            std::string_view ln = p.lines[static_cast<std::size_t>(i)];
-            // Pick per-line style by the diff line marker. Skip the
-            // hunk index headers (`@@ -X,Y +A,B @@`) into a dim color
-            // so they read as structural metadata.
-            Style st = ctx_st;
-            if      (ln.starts_with("+++") || ln.starts_with("---")
-                  || ln.starts_with("diff "))                 st = hdr_st;
-            else if (ln.starts_with("@@"))                    st = hdr_st;
-            else if (!ln.empty() && ln[0] == '+')             st = add_st;
-            else if (!ln.empty() && ln[0] == '-')             st = rem_st;
-            rows.push_back(text(std::string{ln}, st));
+        if (!tc.output().empty()) {
+            out.kind = Kind::CodeBlock;
+            out.text = tc.output();
+            out.text_color = fg;
         }
-        return v(std::move(rows)).build();
+        return out;
     }
 
-    // ── Todo: list each item with its status icon ─────────────────
-    // The Timeline header already shows "N items"; this body lists
-    // them so the user can read the actual plan inline without
-    // popping the dedicated todo modal. Cap the visible list so a
-    // 30-item plan doesn't blow out the panel; surplus collapses to
-    // a "… N more" footer.
+    // ── Todo: parse items + statuses.
     if (n == "todo" && tc.args.is_object()) {
-        auto it = tc.args.find("todos");
-        if (it == tc.args.end() || !it->is_array() || it->empty())
-            return text("");
-        constexpr int kMaxRows = 8;
-        std::vector<Element> rows;
-        int total = static_cast<int>(it->size());
-        int shown = 0;
-        for (const auto& td : *it) {
-            if (shown >= kMaxRows) break;
-            if (!td.is_object()) continue;
-            std::string body = td.value("content", "");
-            std::string st   = td.value("status", std::string{"pending"});
-            const char* glyph;
-            Style icon_st, body_st;
-            if (st == "completed") {
-                glyph   = "\xe2\x9c\x93";   // ✓
-                icon_st = Style{}.with_fg(success).with_bold();
-                body_st = fg_dim(muted);    // crossed-out feel via dim
-            } else if (st == "in_progress") {
-                glyph   = "\xe2\x97\x8d";   // ◍
-                icon_st = Style{}.with_fg(info).with_bold();
-                body_st = Style{}.with_fg(fg);
-            } else {
-                glyph   = "\xe2\x97\x8b";   // ○
-                icon_st = fg_dim(muted);
-                body_st = fg_dim(fg);
+        if (auto it = tc.args.find("todos");
+            it != tc.args.end() && it->is_array() && !it->empty())
+        {
+            using Status = maya::ToolBodyPreview::TodoItem::Status;
+            out.kind = Kind::TodoList;
+            out.todos.reserve(it->size());
+            for (const auto& td : *it) {
+                if (!td.is_object()) continue;
+                Status s = Status::Pending;
+                auto st = td.value("status", std::string{"pending"});
+                if      (st == "completed")   s = Status::Completed;
+                else if (st == "in_progress") s = Status::InProgress;
+                out.todos.push_back({td.value("content", ""), s});
             }
-            rows.push_back(h(
-                text(std::string{glyph} + " ", icon_st),
-                text(std::move(body), body_st)
-            ).build());
-            ++shown;
+            return out;
         }
-        if (total > shown) {
-            rows.push_back(text("\xe2\x80\xa6 " + std::to_string(total - shown)
-                                + " more", fg_dim(muted)));
-        }
-        return v(std::move(rows)).build();
     }
 
-    // ── Failure: surface the error message inline so it isn't hidden
-    if (tc.is_failed() && !tc.output().empty()) {
-        // Failures use the danger color so the error stands out, but
-        // still through the elided preview path so a 200-line stderr
-        // dump doesn't take over the panel.
-        return preview_block(tc.output(),
-                             Style{}.with_fg(danger));
-    }
-
-    (void)kMaxLines;
-    return text("");
+    return out;     // kind = None
 }
 
-// duration_color / event_connector_color — also moved into the widget.
-
-// Tool category color — semantic grouping so the eye can scan a
-// timeline and instantly see "this turn was mostly inspect + one
-// modify". Five buckets, each with a distinct hue:
-//
-//   inspect (read, grep, glob, list, find, diag, web)  → info (blue)
-//   mutate  (edit, write)                              → accent (magenta)
-//   execute (bash)                                     → success (green)
-//   plan    (todo)                                     → warn (yellow)
-//   vcs     (git_*)                                    → highlight (cyan)
-//
-// Used for the gutter number and the tool name so a glance at the
-// timeline shows the *kind* of work happening, not just the order.
-Color tool_category_color(const std::string& n) {
-    if (n == "edit" || n == "write")        return accent;
-    if (n == "bash")                        return success;
-    if (n == "todo")                        return warn;
-    if (n.rfind("git_", 0) == 0)            return highlight;
-    return info;  // read, grep, glob, list_dir, find_definition,
-                  // diagnostics, web_fetch, web_search
-}
-
-// Short category label for the stats header.
-std::string_view tool_category_label(const std::string& n) {
-    if (n == "edit" || n == "write")        return "mutate";
-    if (n == "bash")                        return "execute";
-    if (n == "todo")                        return "plan";
-    if (n.rfind("git_", 0) == 0)            return "vcs";
-    return "inspect";
-}
-
-// Build the assistant turn's "Actions" panel by feeding tool data into
-// maya::AgentTimeline. moha's job here is pure assembly: aggregate state
-// (total/done/elapsed/category counts), pick category colors (domain
-// knowledge), compute the title string, and pass each tool's compact
-// body element through. The widget owns all rendering chrome — borders,
-// tree glyphs, status icons, body stripes, footer formatting.
-Element assistant_timeline(const Message& msg, int spinner_frame,
-                           Color rail_color) {
+// ── Build the assistant turn's "Actions" panel config.
+maya::AgentTimeline::Config agent_timeline_config(const Message& msg,
+                                                  int spinner_frame,
+                                                  maya::Color rail_color) {
     int total = static_cast<int>(msg.tool_calls.size());
     int done  = 0;
     float total_elapsed = 0.0f;
     int running_idx = -1;
 
-    // Per-category counts (stable insertion order so badges keep
-    // their relative position turn-over-turn).
     std::vector<std::pair<std::string, int>> cat_counts;
     auto bump_cat = [&](const std::string& cat) {
         for (auto& [k, n] : cat_counts) if (k == cat) { ++n; return; }
@@ -833,11 +554,11 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
     // ── Stats. Pick a representative color per category so the badge
     //    matches the per-event tree glyph color downstream.
     for (const auto& [cat, n] : cat_counts) {
-        Color cc = (cat == "mutate")  ? accent
-                 : (cat == "execute") ? success
-                 : (cat == "plan")    ? warn
-                 : (cat == "vcs")     ? highlight
-                                      : info;
+        maya::Color cc = (cat == "mutate")  ? accent
+                       : (cat == "execute") ? success
+                       : (cat == "plan")    ? warn
+                       : (cat == "vcs")     ? highlight
+                                            : info;
         cfg.stats.push_back({cat, n, cc});
     }
 
@@ -857,11 +578,11 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
             .elapsed_seconds = tc.is_terminal() ? tool_elapsed(tc) : 0.0f,
             .category_color  = tool_category_color(tc.name.value),
             .status          = tool_event_status(tc),
-            .body            = compact_tool_body(tc),
+            .body            = tool_body_config(tc),
         });
     }
 
-    // ── Footer. ✓ DONE / ✗ N FAILED / ⊘ N REJECTED, only when settled.
+    // ── Footer: ✓ DONE / ✗ N FAILED / ⊘ N REJECTED, only when settled.
     if (done == total && total > 0) {
         int failed = 0, rejected = 0;
         for (const auto& tc : msg.tool_calls) {
@@ -900,9 +621,7 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
         cfg.footer = std::move(f);
     }
 
-    // ── Title and border. Title gets the running tool name (or final
-    // duration when settled); border dims to `muted` once everything's
-    // done so the panel recedes.
+    // ── Title and border.
     std::string title = " " + small_caps("Actions") + "  \xc2\xb7  "
                       + std::to_string(done) + "/" + std::to_string(total);
     if (running_idx >= 0) {
@@ -930,129 +649,119 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
     bool all_done = (done == total && total > 0);
     cfg.title        = std::move(title);
     cfg.border_color = all_done ? muted : rail_color;
-    return maya::AgentTimeline{std::move(cfg)}.build();
+    return cfg;
 }
 
-Element render_message(const Message& msg, std::size_t msg_idx,
-                       int turn_num, const Model& m) {
-    // Compute elapsed wall-clock for assistant turns: from the previous
-    // user message's timestamp to this one. Skipped for the first turn
-    // (nothing to compare against).
-    std::optional<float> assistant_elapsed;
-    if (msg.role == Role::Assistant) {
-        for (std::size_t i = m.d.current.messages.size(); i-- > 0;) {
-            if (&m.d.current.messages[i] == &msg) continue;
-            if (m.d.current.messages[i].role == Role::User) {
-                auto dt = std::chrono::duration<float>(
-                    msg.timestamp - m.d.current.messages[i].timestamp).count();
-                if (dt > 0.0f && dt < 3600.0f) assistant_elapsed = dt;
-                break;
-            }
-        }
-    }
+// ── Build the WelcomeScreen config from Model.
+maya::WelcomeScreen::Config welcome_config(const Model& m) {
+    maya::ModelBadge mb{m.d.model_id.value};
+    mb.set_compact(true);
+    maya::WelcomeScreen::Config cfg;
+    cfg.wordmark       = {"\xe2\x94\x8c\xe2\x94\xac\xe2\x94\x90\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x90\xe2\x94\xac \xe2\x94\xac\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x90",
+                          "\xe2\x94\x82\xe2\x94\x82\xe2\x94\x82\xe2\x94\x82 \xe2\x94\x82\xe2\x94\x9c\xe2\x94\x80\xe2\x94\xa4\xe2\x94\x9c\xe2\x94\x80\xe2\x94\xa4",
+                          "\xe2\x94\xb4 \xe2\x94\xb4\xe2\x94\x94\xe2\x94\x80\xe2\x94\x98\xe2\x94\xb4 \xe2\x94\xb4\xe2\x94\xb4 \xe2\x94\xb4"};
+    cfg.wordmark_color = accent;
+    cfg.tagline        = "a calm middleware between you and the model";
+    cfg.model_badge    = mb.build();
+    cfg.profile_label  = std::string{profile_label(m.d.profile)};
+    cfg.profile_color  = profile_color(m.d.profile);
+    cfg.starters_title = "Try";
+    cfg.starters       = {"Implement a small feature",
+                          "Refactor or clean up this file",
+                          "Explain what this code does",
+                          "Write tests for ..."};
+    cfg.hint_intro     = "type to begin";
+    cfg.hints          = {{"^K", " palette", highlight},
+                          {"^J", " threads", highlight},
+                          {"^N", " new",     success}};
+    cfg.accent_color   = accent;
+    cfg.text_color     = fg;
+    return cfg;
+}
 
+// ── Build the Turn config for one message.
+maya::Turn::Config turn_config(const Message& msg, std::size_t msg_idx,
+                               int turn_num, const Model& m) {
     auto style = speaker_style_for(msg.role, m);
 
-    // Build the Turn config. Body slots are pre-built Elements coming
-    // from other widgets (markdown, agent timeline, permission card) —
-    // moha just routes them through. No dsl::* calls here.
-    maya::Turn::Config turn_cfg{
-        .glyph      = style.glyph,
-        .label      = style.label,
-        .rail_color = style.color,
-        .meta       = format_turn_meta(msg, turn_num,
-                          msg.role == Role::Assistant ? assistant_elapsed
-                                                       : std::nullopt),
-    };
+    maya::Turn::Config cfg;
+    cfg.glyph      = style.glyph;
+    cfg.label      = style.label;
+    cfg.rail_color = style.color;
+    cfg.meta       = format_turn_meta(msg, turn_num,
+                         msg.role == Role::Assistant
+                             ? assistant_elapsed(msg, m)
+                             : std::nullopt);
+    cfg.checkpoint_above = (msg.role == Role::User && msg.checkpoint_id.has_value());
+    cfg.checkpoint_color = warn;
 
     if (msg.role == Role::User) {
-        // Plain text — no markdown processing for user input. We use
-        // maya::markdown's plain-text path by routing through a small
-        // maya widget; for now a single TextElement is fine since user
-        // text is always plain.
-        turn_cfg.body.push_back(Element{TextElement{
-            .content = msg.text,
-            .style   = Style{}.with_fg(fg),
-        }});
+        cfg.body.emplace_back(maya::Turn::PlainText{.content = msg.text, .color = fg});
     } else if (msg.role == Role::Assistant) {
-        bool has_body = !msg.text.empty() || !msg.streaming_text.empty();
-        if (has_body)
-            turn_cfg.body.push_back(cached_markdown_for(msg, m.d.current.id, msg_idx));
-
-        // Timeline ALWAYS — both during streaming and after settling.
-        // The assistant_timeline call produces a maya::AgentTimeline
-        // Element; we just slot it (with a blank line above when there
-        // was a markdown body, for breathing) into the turn body.
+        const bool has_body = !msg.text.empty() || !msg.streaming_text.empty();
+        if (has_body) {
+            // StreamingMarkdown caches block boundaries across frames —
+            // use the Element escape hatch so the cached widget
+            // instance survives between frames.
+            cfg.body.emplace_back(cached_markdown_for(msg, m.d.current.id, msg_idx));
+        }
         if (!msg.tool_calls.empty()) {
-            int frame = m.s.spinner.frame_index();
-            if (has_body) {
-                turn_cfg.body.push_back(Element{TextElement{.content = ""}});
-            }
-            turn_cfg.body.push_back(assistant_timeline(msg, frame, style.color));
-            // In-flight permission card under the timeline so the user
-            // can approve without losing context.
+            cfg.body.emplace_back(
+                agent_timeline_config(msg, m.s.spinner.frame_index(), style.color));
+            // In-flight permission card under the timeline so the
+            // user can approve without losing context.
             for (const auto& tc : msg.tool_calls) {
                 if (m.d.pending_permission && m.d.pending_permission->id == tc.id) {
-                    turn_cfg.body.push_back(Element{TextElement{.content = ""}});
-                    turn_cfg.body.push_back(render_inline_permission(
+                    cfg.body.emplace_back(inline_permission_config(
                         *m.d.pending_permission, tc));
                 }
             }
         }
-
-        if (msg.error) turn_cfg.error = *msg.error;
+        if (msg.error) cfg.error = *msg.error;
     }
 
-    Element turn_el = maya::Turn{std::move(turn_cfg)}.build();
+    return cfg;
+}
 
-    // Optional checkpoint divider above a user turn. Outside the rail
-    // because it spans the full width.
-    if (msg.role == Role::User && msg.checkpoint_id) {
-        return Element{ElementList{{
-            render_checkpoint_divider(),
-            std::move(turn_el),
-            Element{TextElement{.content = ""}},
-        }}};
+// ── Pick the bottom-of-thread in-flight indicator config, if needed.
+//    Suppressed when the active assistant turn already shows a Timeline
+//    spinner — its in-progress card + status bar already carry the
+//    "still working" signal; a second one stacked under it was just
+//    duplicate chrome.
+std::optional<maya::ActivityIndicator::Config>
+in_flight_indicator(const Model& m) {
+    if (!m.s.active()) return std::nullopt;
+    if (m.d.current.messages.empty()) return std::nullopt;
+    const auto& last = m.d.current.messages.back();
+    if (last.role != Role::Assistant) return std::nullopt;
+    bool tl_visible =
+        !last.tool_calls.empty()
+        && std::any_of(last.tool_calls.begin(), last.tool_calls.end(),
+                       [](const auto& tc){ return !tc.is_terminal(); });
+    if (tl_visible) return std::nullopt;
+
+    const auto& mid = m.d.model_id.value;
+    maya::Color edge = (mid.find("opus")   != std::string::npos) ? accent
+                     : (mid.find("sonnet") != std::string::npos) ? info
+                     : (mid.find("haiku")  != std::string::npos) ? success
+                                                                 : highlight;
+    maya::ActivityIndicator::Config cfg;
+    cfg.edge_color    = edge;
+    cfg.spinner_glyph = std::string{m.s.spinner.current_frame()};
+    cfg.label         = std::string{phase_verb(m.s.phase)};
+    return cfg;
+}
+
+} // namespace
+
+maya::Thread::Config thread_config(const Model& m) {
+    maya::Thread::Config cfg;
+
+    if (m.d.current.messages.empty()) {
+        cfg.is_empty = true;
+        cfg.welcome  = welcome_config(m);
+        return cfg;
     }
-    return Element{ElementList{{
-        std::move(turn_el),
-        Element{TextElement{.content = ""}},
-    }}};
-}
-
-// Empty-thread brand splash. moha owns the brand content (wordmark
-// glyphs, tagline, starter prompts, hint keys); maya::WelcomeScreen
-// owns the layout / rendering.
-Element welcome_screen(const Model& m) {
-    ModelBadge mb{m.d.model_id.value};
-    mb.set_compact(true);
-    return maya::WelcomeScreen{{
-        .wordmark       = {"┌┬┐┌─┐┬ ┬┌─┐",
-                           "││││ │├─┤├─┤",
-                           "┴ ┴└─┘┴ ┴┴ ┴"},
-        .wordmark_color = accent,
-        .tagline        = "a calm middleware between you and the model",
-        .model_badge    = mb.build(),
-        .profile_label  = std::string{profile_label(m.d.profile)},
-        .profile_color  = profile_color(m.d.profile),
-        .starters_title = "Try",
-        .starters       = {"Implement a small feature",
-                           "Refactor or clean up this file",
-                           "Explain what this code does",
-                           "Write tests for ..."},
-        .hint_intro     = "type to begin",
-        .hints          = {{"^K", " palette", highlight},
-                           {"^J", " threads", highlight},
-                           {"^N", " new",     success}},
-        .accent_color   = accent,
-        .text_color     = fg,
-    }}.build();
-}
-
-Element thread_panel(const Model& m) {
-    // Empty thread → welcome screen. Branched out so Conversation
-    // doesn't have to know about empty-state content.
-    if (m.d.current.messages.empty()) return welcome_screen(m);
 
     // Virtualize: older messages live in the terminal's native scrollback
     // (committed via maya::Cmd::commit_scrollback). Preserve absolute
@@ -1065,40 +774,15 @@ Element thread_panel(const Model& m) {
     for (std::size_t i = 0; i < start; ++i)
         if (m.d.current.messages[i].role == Role::Assistant) ++turn;
 
-    maya::Conversation::Config conv_cfg;
+    cfg.turns.reserve(total - start);
     for (std::size_t i = start; i < total; ++i) {
         const auto& msg = m.d.current.messages[i];
-        conv_cfg.turns.push_back(render_message(msg, i, turn, m));
+        cfg.turns.push_back(turn_config(msg, i, turn, m));
         if (msg.role == Role::Assistant) ++turn;
     }
 
-    // Optional in-flight indicator. Suppressed when the active assistant
-    // turn already has a Timeline card showing — its own in-progress
-    // spinner + the status bar's spinner together carry the "still
-    // working" signal, so a second one stacked under the card was just
-    // duplicate chrome.
-    if (m.s.active() && m.d.current.messages.back().role == Role::Assistant) {
-        const auto& last = m.d.current.messages.back();
-        bool tl_visible =
-            !last.tool_calls.empty()
-            && std::any_of(last.tool_calls.begin(), last.tool_calls.end(),
-                           [](const auto& tc){ return !tc.is_terminal(); });
-        if (!tl_visible) {
-            const auto& mid = m.d.model_id.value;
-            Color edge_color = (mid.find("opus")   != std::string::npos) ? accent
-                             : (mid.find("sonnet") != std::string::npos) ? info
-                             : (mid.find("haiku")  != std::string::npos) ? success
-                                                                         : highlight;
-            conv_cfg.in_flight = maya::ActivityIndicator{{
-                .edge_color    = edge_color,
-                .spinner_glyph = std::string{m.s.spinner.current_frame()},
-                .label         = std::string{phase_verb(m.s.phase)},
-            }}.build();
-            conv_cfg.has_in_flight = true;
-        }
-    }
-
-    return maya::Conversation{std::move(conv_cfg)}.build();
+    cfg.in_flight = in_flight_indicator(m);
+    return cfg;
 }
 
 } // namespace moha::ui
