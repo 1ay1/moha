@@ -6,6 +6,7 @@
 #include <system_error>
 #include <vector>
 
+#include <maya/widget/agent_timeline.hpp>
 #include <maya/widget/markdown.hpp>
 #include <maya/widget/model_badge.hpp>
 #include <maya/widget/timeline.hpp>
@@ -447,13 +448,15 @@ std::string tool_timeline_detail(const ToolUse& tc) {
     return safe_arg(tc.args, "display_description");
 }
 
-// Map a ToolUse status to maya's TaskStatus. Failed/Rejected fold into
-// Completed (it IS terminal); the failure is surfaced via the detail
-// line so the timeline still reads as a clean sequence.
-TaskStatus tool_task_status(const ToolUse& tc) {
-    if (tc.is_pending() || tc.is_approved()) return TaskStatus::Pending;
-    if (tc.is_running())                     return TaskStatus::InProgress;
-    return TaskStatus::Completed; // Done / Failed / Rejected
+// Map a ToolUse status to the maya widget's AgentEventStatus. `Approved`
+// folds into Running because both render with the same cyan in-flight
+// spinner — the widget doesn't need a separate stage for it.
+maya::AgentEventStatus tool_event_status(const ToolUse& tc) {
+    if (tc.is_running() || tc.is_approved()) return maya::AgentEventStatus::Running;
+    if (tc.is_pending())                     return maya::AgentEventStatus::Pending;
+    if (tc.is_done())                        return maya::AgentEventStatus::Done;
+    if (tc.is_failed())                      return maya::AgentEventStatus::Failed;
+    return maya::AgentEventStatus::Rejected;
 }
 
 // Pretty title-case for the tool name shown as the timeline event label.
@@ -479,58 +482,8 @@ std::string tool_display_name(const std::string& n) {
     return n;
 }
 
-// Format a duration as ms/s/m+s — short, glanceable, no surprising
-// precision changes across magnitudes.
-std::string format_duration(float secs) {
-    char buf[24];
-    if      (secs < 1.0f)  std::snprintf(buf, sizeof(buf), "%.0fms", secs * 1000.0);
-    else if (secs < 60.0f) std::snprintf(buf, sizeof(buf), "%.1fs", static_cast<double>(secs));
-    else {
-        int mins = static_cast<int>(secs) / 60;
-        float s = secs - static_cast<float>(mins * 60);
-        std::snprintf(buf, sizeof(buf), "%dm%.0fs", mins, static_cast<double>(s));
-    }
-    return buf;
-}
-
-// Status icon for a tool event in the rich timeline. Spinner advances
-// in sync with the activity-bar spinner via the shared frame index.
-//
-// Pending (= model is still streaming this tool's args — "thinking")
-// also gets a spinner, otherwise a long write/edit args stream looked
-// frozen next to an identical static ○ for every not-yet-approved
-// call. Pending uses the muted color so it still reads as a quieter
-// stage than the bright-info running spinner.
-Element rich_status_icon(const ToolUse& tc, int frame) {
-    // Same braille spinner pattern as maya::Timeline / Spinner<Dots>.
-    static constexpr const char* frames[] = {
-        "\xe2\xa0\x8b", "\xe2\xa0\x99", "\xe2\xa0\xb9", "\xe2\xa0\xb8",
-        "\xe2\xa0\xbc", "\xe2\xa0\xb4", "\xe2\xa0\xa6", "\xe2\xa0\xa7",
-        "\xe2\xa0\x87", "\xe2\xa0\x8f",
-    };
-    if (tc.is_running() || tc.is_approved()) {
-        // Bright cyan + bold. `info` alone reads as faint grey on a lot
-        // of low-contrast palettes (Solarized light, anything where the
-        // ANSI 4 maps to a desaturated blue) — bright_cyan is the most
-        // universally vivid "work in progress" color across themes.
-        return text(frames[frame % 10],
-                    Style{}.with_fg(Color::bright_cyan()).with_bold());
-    }
-    if (tc.is_pending()) {
-        // Pending = model is still streaming the tool's args. Used to
-        // be muted+dim, which on most palettes rendered as a barely-
-        // visible grey — a long edit args stream looked frozen. Now
-        // bright_yellow + bold so it's unmistakably alive while still
-        // being a different hue from the running cyan, so the user can
-        // tell "args streaming" from "executing" at a glance.
-        return text(frames[frame % 10],
-                    Style{}.with_fg(Color::bright_yellow()).with_bold());
-    }
-    if (tc.is_done())     return text("\xe2\x9c\x93", Style{}.with_fg(Color::bright_green()).with_bold());   // ✓
-    if (tc.is_failed())   return text("\xe2\x9c\x97", Style{}.with_fg(Color::bright_red()).with_bold());     // ✗
-    if (tc.is_rejected()) return text("\xe2\x8a\x98", Style{}.with_fg(Color::bright_yellow()).with_bold());  // ⊘
-    return text("\xe2\x97\x8b", fg_dim(muted));                            // ○
-}
+// format_duration / rich_status_icon / duration_color / event_connector_color
+// — moved into maya::AgentTimeline. The widget owns those mappings now.
 
 // Split a string into lines (without owning them). Used by the head+
 // tail truncator so we can pick lines from front and back of the body.
@@ -869,27 +822,7 @@ Element compact_tool_body(const ToolUse& tc) {
     return text("");
 }
 
-// Color-code a tool's wall-clock duration so the eye finds slow steps
-// without parsing numbers. Green = snappy (<250ms), dim = normal, warn
-// = slow (>2s), danger = stalling (>15s).
-Color duration_color(float secs) {
-    if (secs < 0.25f) return success;
-    if (secs < 2.0f)  return Color::bright_black();
-    if (secs < 15.0f) return warn;
-    return danger;
-}
-
-// Pick the body-connector color for an event based on its status. The
-// connector is the visual "thread" running down each event's body —
-// coloring it by status reinforces the icon at the head of the event
-// without adding more chrome.
-Color event_connector_color(const ToolUse& tc) {
-    if (tc.is_failed())                                return danger;
-    if (tc.is_rejected())                              return warn;
-    if (tc.is_running() || tc.is_approved())           return info;
-    if (tc.is_done())                                  return Color::bright_black();
-    return Color::bright_black();   // pending
-}
+// duration_color / event_connector_color — also moved into the widget.
 
 // Tool category color — semantic grouping so the eye can scan a
 // timeline and instantly see "this turn was mostly inspect + one
@@ -921,26 +854,27 @@ std::string_view tool_category_label(const std::string& n) {
     return "inspect";
 }
 
-// Build the assistant turn's "Actions" panel: one bordered card whose
-// body is a continuous timeline of tool events. Each event has a
-// gutter-numbered header (like code line numbers), a status icon, the
-// tool name + brief detail + duration, and an indented body where the
-// rich tool-specific content sits under a status-colored connector.
-// Overview + detail in one cohesive, scannable view.
+// Build the assistant turn's "Actions" panel by feeding tool data into
+// maya::AgentTimeline. moha's job here is pure assembly: aggregate state
+// (total/done/elapsed/category counts), pick category colors (domain
+// knowledge), compute the title string, and pass each tool's compact
+// body element through. The widget owns all rendering chrome — borders,
+// tree glyphs, status icons, body stripes, footer formatting.
 Element assistant_timeline(const Message& msg, int spinner_frame,
                            Color rail_color) {
-    std::vector<Element> rows;
     int total = static_cast<int>(msg.tool_calls.size());
     int done  = 0;
     float total_elapsed = 0.0f;
     int running_idx = -1;
-    // Per-category counts for the stats header. Order kept stable so
-    // the badges always appear in the same relative position.
+
+    // Per-category counts (stable insertion order so badges keep
+    // their relative position turn-over-turn).
     std::vector<std::pair<std::string, int>> cat_counts;
     auto bump_cat = [&](const std::string& cat) {
         for (auto& [k, n] : cat_counts) if (k == cat) { ++n; return; }
         cat_counts.emplace_back(cat, 1);
     };
+
     for (std::size_t i = 0; i < msg.tool_calls.size(); ++i) {
         const auto& tc = msg.tool_calls[i];
         if (tc.is_terminal()) {
@@ -952,250 +886,111 @@ Element assistant_timeline(const Message& msg, int spinner_frame,
         bump_cat(std::string{tool_category_label(tc.name.value)});
     }
 
-    // ── Stats header ───────────────────────────────────────────────
-    // Quick TL;DR of the turn: small-caps category badges showing the
-    // mix (e.g. "I N S P E C T 3 · M U T A T E 2 · E X E C U T E 1").
-    // Small-caps treatment marks these as section labels — typography
-    // does the work that a chip background would, without the toy feel.
-    if (total > 1) {
-        std::vector<Element> stats;
-        bool first = true;
-        for (const auto& [cat, n] : cat_counts) {
-            if (!first) stats.push_back(text("  \xc2\xb7  ", fg_dim(muted)));
-            first = false;
-            // Pick a color from a representative tool name in this
-            // category — same map as tool_category_color so the badge
-            // and the per-event gutter agree.
-            Color cc = (cat == "mutate")  ? accent
-                     : (cat == "execute") ? success
-                     : (cat == "plan")    ? warn
-                     : (cat == "vcs")     ? highlight
-                                          : info;
-            stats.push_back(text(small_caps(cat),
-                                 Style{}.with_fg(cc).with_bold()));
-            stats.push_back(text(" " + std::to_string(n), fg_dim(muted)));
-        }
-        rows.push_back((h(std::move(stats)) | grow(1.0f)).build());
-        rows.push_back(text(""));
+    maya::AgentTimeline tl;
+    tl.set_frame(spinner_frame);
+
+    // ── Stats. Pick a representative color per category so the badge
+    //    matches the per-event tree glyph color downstream.
+    std::vector<maya::AgentTimelineStat> stats;
+    for (const auto& [cat, n] : cat_counts) {
+        Color cc = (cat == "mutate")  ? accent
+                 : (cat == "execute") ? success
+                 : (cat == "plan")    ? warn
+                 : (cat == "vcs")     ? highlight
+                                      : info;
+        stats.push_back({cat, n, cc});
     }
+    tl.set_stats(std::move(stats));
 
-    // Sequence-position glyph: rounded + light box-drawing characters,
-    // softer than the previous bold ┏━┣━┗━ which read as too-loud
-    // chrome. Modern agent UIs (Cursor, Cline, Linear's pipeline view)
-    // use light strokes for structure and reserve weight for the
-    // *signal* (icon, name, status) — that's the discipline here.
-    //   ╭─ first event
-    //   ├─ middle events
-    //   ╰─ last event
-    //   ── singleton
-    // Drawn in the per-event category color so the leading edge of
-    // each row still reads as a colored timeline at a glance.
-    auto tree_glyph = [&](std::size_t idx) -> std::string {
-        if (total == 1)              return "\xe2\x94\x80\xe2\x94\x80";  // ──
-        if (idx == 0)                return "\xe2\x95\xad\xe2\x94\x80";  // ╭─
-        if (idx + 1 == static_cast<std::size_t>(total))
-                                     return "\xe2\x95\xb0\xe2\x94\x80";  // ╰─
-        return                              "\xe2\x94\x9c\xe2\x94\x80";  // ├─
-    };
-
-    for (std::size_t i = 0; i < msg.tool_calls.size(); ++i) {
-        const auto& tc = msg.tool_calls[i];
-        bool is_last   = (i + 1 == msg.tool_calls.size());
-        bool is_active = tc.is_running() || tc.is_approved();
-
-        // ── Header row ──────────────────────────────────────────────
-        // Layout: `╭─ ⠋ Bash    npm test                       1.2s`
-        //          ^^ ^ ^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        //          tree icon name              detail   spacer dur
-        //
-        // The redundant active-marker (▸) is gone — the spinner icon
-        // already signals "this is the running one." Consistent
-        // 4-cell wide name column gives the detail a stable column
-        // boundary for scanning.
-        Element icon = rich_status_icon(tc, spinner_frame);
-        std::string name = tool_display_name(tc.name.value);
+    // ── Events.
+    for (const auto& tc : msg.tool_calls) {
         std::string detail = tool_timeline_detail(tc);
-        if (detail.empty())
+        if (detail.empty()) {
             detail = tc.is_running()  ? std::string{"running\xe2\x80\xa6"}
                    : tc.is_pending()  ? std::string{"queued\xe2\x80\xa6"}
                    : tc.is_approved() ? std::string{"approved\xe2\x80\xa6"}
                                       : std::string{"\xe2\x80\xa6"};
-
-        Color cat = tool_category_color(tc.name.value);
-        // Name styling: failed/rejected stay in their status colors so
-        // the eye catches them. Otherwise color by tool *category* so
-        // a glance at the timeline reads "inspect inspect mutate
-        // execute" by hue. Active tools get bold + bright; settled
-        // tools stay dim so the running step pops.
-        Style name_style;
-        if      (tc.is_failed())   name_style = Style{}.with_fg(danger).with_bold();
-        else if (tc.is_rejected()) name_style = Style{}.with_fg(warn).with_bold();
-        else if (is_active)        name_style = Style{}.with_fg(cat).with_bold();
-        else                        name_style = Style{}.with_fg(cat).with_dim();
-
-        // Italic for the detail column — visually separates "data the
-        // tool is acting on" (paths, commands, patterns) from the
-        // surrounding timeline chrome. The eye reads chrome → name →
-        // italic-data without the columns blurring together.
-        Style detail_style = is_active
-            ? Style{}.with_fg(muted).with_italic()
-            : Style{}.with_fg(muted).with_dim().with_italic();
-
-        // Tree-glyph in category color: light strokes for the pipeline
-        // structure, brighter on the active event so the eye lands
-        // there. Settled events stay dim so the running step pops.
-        Style tree_style = is_active
-            ? Style{}.with_fg(cat)
-            : Style{}.with_fg(cat).with_dim();
-
-        // Build the left-side run as one h(), then compose with
-        // spacer + elapsed at the outer level. This mirrors the
-        // turn_header pattern — passing a vector of children to
-        // h() in one shot doesn't propagate spacer-grow the same
-        // way an explicit variadic does, so the elapsed used to
-        // snap left against the detail instead of pinning the
-        // right edge.
-        std::vector<Element> left_parts;
-        left_parts.push_back(text(tree_glyph(i), tree_style));
-        left_parts.push_back(text(" ", {}));
-        left_parts.push_back(icon);
-        left_parts.push_back(text("  ", {}));
-        left_parts.push_back(text(std::move(name), name_style));
-        left_parts.push_back(text("  ", {}));
-        left_parts.push_back(text(std::move(detail), detail_style));
-        Element left = h(std::move(left_parts)).build();
-
-        if (tc.is_terminal()) {
-            float secs = tool_elapsed(tc);
-            Element elapsed = text(format_duration(secs),
-                                   Style{}.with_fg(duration_color(secs)));
-            rows.push_back((h(left, spacer(), elapsed) | grow(1.0f)).build());
-        } else {
-            rows.push_back((h(left, spacer()) | grow(1.0f)).build());
         }
-
-        // ── Body content under a light │ stripe ─────────────────────
-        // Body content (file preview, command output, diff hunks) is
-        // supplementary information — chrome should be quiet. Use a
-        // light │ in dim status color so the body reads as "indented
-        // detail under this event" without competing with the header
-        // for visual weight. Active events get the stripe slightly
-        // brighter to keep the running event grouped.
-        Color cc = event_connector_color(tc);
-        bool is_active_body = tc.is_running() || tc.is_approved();
-        Style stripe_style = is_active_body
-            ? Style{}.with_fg(cc)
-            : Style{}.with_fg(cc).with_dim();
-        auto body_rule = h(
-            text("   ", {}),                                         // tree+space alignment (3 cols)
-            text("\xe2\x94\x82  ", stripe_style)                     // │ (light)
-        ).build();
-
-        Element body_el = compact_tool_body(tc);
-        bool body_has_content = false;
-        // `grow(1.0f)` on each body row makes it expand to fill the
-        // Actions panel's width. Without it the row was content-width
-        // — long edit/diff/grep lines clipped against an invisible
-        // boundary that matched the longest header above instead of
-        // growing the card to accommodate them. The user reported the
-        // edit "toolbox doesn't grow"; this is the cause.
-        if (auto* bx = maya::as_box(body_el)) {
-            for (const auto& child : bx->children) {
-                rows.push_back((h(body_rule, child) | grow(1.0f)).build());
-                body_has_content = true;
-            }
-        } else if (auto* t = maya::as_text(body_el)) {
-            if (!t->content.empty()) {
-                rows.push_back((h(body_rule, body_el) | grow(1.0f)).build());
-                body_has_content = true;
-            }
-        }
-
-        // ── Continuation between events ────────────────────────────
-        // A short colored connector below the body keeps the visual
-        // thread running into the next event. Light │ matches the new
-        // body stripe — each event's lane reads as a continuous left
-        // edge from header through body into the next event's header,
-        // without overpowering the icon column.
-        if (!is_last) {
-            Color next_cc = event_connector_color(msg.tool_calls[i + 1]);
-            rows.push_back(h(
-                text("   ", {}),
-                text("\xe2\x94\x82", Style{}.with_fg(next_cc).with_dim())  // │
-            ).build());
-        }
-        (void)body_has_content;
+        tl.add({
+            .name            = tool_display_name(tc.name.value),
+            .detail          = std::move(detail),
+            .elapsed_seconds = tc.is_terminal() ? tool_elapsed(tc) : 0.0f,
+            .category_color  = tool_category_color(tc.name.value),
+            .status          = tool_event_status(tc),
+            .body            = compact_tool_body(tc),
+        });
     }
 
-    // ── Footer summary when settled ────────────────────────────────
-    // Once all tools are terminal, append a one-line footer with
-    // aggregate stats: "D O N E · 5 actions · 1.8s elapsed". Small-caps
-    // verb signals "this is the closing label" — typographic weight
-    // pinning the panel from below.
+    // ── Footer. ✓ DONE / ✗ N FAILED / ⊘ N REJECTED, only when settled.
     if (done == total && total > 0) {
-        std::string verb_text = "done";
-        const char* verb_glyph = "\xe2\x9c\x93";   // ✓
-        // If anything failed, lead with that count instead.
         int failed = 0, rejected = 0;
         for (const auto& tc : msg.tool_calls) {
             if (tc.is_failed())   ++failed;
             if (tc.is_rejected()) ++rejected;
         }
-        Color verb_color = success;
+        std::string verb_glyph = "\xe2\x9c\x93";   // ✓
+        std::string verb_text  = "done";
+        Color       verb_color = success;
         if (failed > 0) {
-            verb_text = std::to_string(failed) + " failed";
             verb_glyph = "\xe2\x9c\x97";           // ✗
+            verb_text  = std::to_string(failed) + " failed";
             verb_color = danger;
         } else if (rejected > 0) {
-            verb_text = std::to_string(rejected) + " rejected";
             verb_glyph = "\xe2\x8a\x98";           // ⊘
+            verb_text  = std::to_string(rejected) + " rejected";
             verb_color = warn;
         }
-
-        rows.push_back(text(""));
-        rows.push_back(h(
-            text("   ", {}),
-            text(std::string{verb_glyph} + " ",
-                 Style{}.with_fg(verb_color).with_bold()),
-            text(small_caps(verb_text),
-                 Style{}.with_fg(verb_color).with_bold()),
-            text("   ", {}),
-            text(std::to_string(total)
-                 + (total == 1 ? " action" : " actions"),
-                 fg_dim(muted)),
-            text("   ", {}),
-            text(format_duration(total_elapsed), fg_dim(muted))
-        ).build());
+        char dur_buf[24];
+        if (total_elapsed < 1.0f)
+            std::snprintf(dur_buf, sizeof(dur_buf), "%.0fms",
+                          static_cast<double>(total_elapsed) * 1000.0);
+        else if (total_elapsed < 60.0f)
+            std::snprintf(dur_buf, sizeof(dur_buf), "%.1fs",
+                          static_cast<double>(total_elapsed));
+        else {
+            int mins   = static_cast<int>(total_elapsed) / 60;
+            float rest = total_elapsed - static_cast<float>(mins * 60);
+            std::snprintf(dur_buf, sizeof(dur_buf), "%dm%.0fs",
+                          mins, static_cast<double>(rest));
+        }
+        std::string summary = std::to_string(total)
+                            + (total == 1 ? " action   " : " actions   ")
+                            + dur_buf;
+        tl.set_footer(std::move(verb_glyph), std::move(verb_text),
+                      verb_color, std::move(summary));
     }
 
-    // ── Card title: small-caps "ACTIONS" + progress + active step ─
-    // The title sits inline on the top border. Small-caps treatment
-    // signals "section header" — pairs the panel visually with the
-    // small-caps category badges in the stats row above.
+    // ── Title and border. Title gets the running tool name (or final
+    // duration when settled); border dims to `muted` once everything's
+    // done so the panel recedes.
     std::string title = " " + small_caps("Actions") + "  \xc2\xb7  "
-                      + std::to_string(done) + "/"
-                      + std::to_string(total);
+                      + std::to_string(done) + "/" + std::to_string(total);
     if (running_idx >= 0) {
         title += "  \xc2\xb7  " + tool_display_name(
             msg.tool_calls[static_cast<std::size_t>(running_idx)].name.value);
     } else if (done == total && total > 0) {
-        title += "  \xc2\xb7  " + format_duration(total_elapsed);
+        char buf[24];
+        if (total_elapsed < 1.0f)
+            std::snprintf(buf, sizeof(buf), "%.0fms",
+                          static_cast<double>(total_elapsed) * 1000.0);
+        else if (total_elapsed < 60.0f)
+            std::snprintf(buf, sizeof(buf), "%.1fs",
+                          static_cast<double>(total_elapsed));
+        else {
+            int mins   = static_cast<int>(total_elapsed) / 60;
+            float rest = total_elapsed - static_cast<float>(mins * 60);
+            std::snprintf(buf, sizeof(buf), "%dm%.0fs",
+                          mins, static_cast<double>(rest));
+        }
+        title += "  \xc2\xb7  ";
+        title += buf;
     }
     title += " ";
 
-    // Quieter panel chrome: dashed border in muted color (not the
-    // speaker rail color — that's loud and competes with the message
-    // rail just to the left). The dashed style reads as "this is a
-    // soft container holding related work" rather than "this is a
-    // separate document." Settled panels dim further so they recede.
     bool all_done = (done == total && total > 0);
-    Color border_c = all_done ? muted : rail_color;
-    return (v(std::move(rows))
-            | border(BorderStyle::Round)
-            | bcolor(border_c)
-            | btext(std::move(title), BorderTextPos::Top, BorderTextAlign::Start)
-            | padding(0, 1, 0, 1)
-           ).build();
+    tl.set_title(std::move(title));
+    tl.set_border_color(all_done ? muted : rail_color);
+    return tl.build();
 }
 
 Element render_message(const Message& msg, std::size_t msg_idx,
