@@ -9,10 +9,12 @@ The architectural rule:
 > moha builds **widget Configs** from `Model` state. maya widgets own
 > all rendering. moha constructs no Elements.
 
-Concrete: `src/runtime/view/{view,thread,composer,changes,statusbar,permission}.cpp`
-contain zero `Element{...}`, zero `dsl::v(...)`, zero `dsl::text(...)`.
-Each file is a function `Model → SomeWidget::Config`. The single
-`view(m)` call materializes everything via one
+Concrete: every `.cpp` under `src/runtime/view/` (except the legacy
+overlay files in §24) contains zero `Element{...}`, zero `dsl::v(...)`,
+zero `dsl::text(...)`. Each file is a function `Model → SomeWidget::Config`
+and **one widget = one adapter file**: filenames mirror the widget
+they adapt, and the directory layout mirrors the widget hierarchy
+(see §25). The single `view(m)` call materializes everything via one
 `maya::AppLayout{...}.build()`.
 
 ---
@@ -34,7 +36,8 @@ maya::Element view(const Model& m) {
 
 That's the entire host-side view layer. The body is one declarative
 struct expression — no imperative composition, no `if` branches around
-layout primitives.
+layout primitives. Each field is filled by exactly one adapter
+function from a sibling file.
 
 ---
 
@@ -57,6 +60,10 @@ growing to fill, then z-stacks an Overlay on top when present. Caller
 provides one nested Config tree per frame; AppLayout invokes the
 sub-widgets internally.
 
+Adapter: `view.cpp::view(m)` (this is also the AppLayout adapter —
+view.cpp builds the AppLayout::Config inline since it's the entry
+point).
+
 ---
 
 ## 3. `maya::Thread` — conversation viewport
@@ -65,33 +72,34 @@ sub-widgets internally.
 
 ```cpp
 struct Thread::Config {
-    bool                                     is_empty = false;
-    WelcomeScreen::Config                    welcome;
-    std::vector<Turn::Config>                turns;
-    std::optional<ActivityIndicator::Config> in_flight;
+    bool                  is_empty = false;
+    WelcomeScreen::Config welcome;        // when is_empty
+    Conversation::Config  conversation;   // when !is_empty
 };
 ```
 
 Owns the empty-vs-populated branch:
 
 - `is_empty == true`  → renders `maya::WelcomeScreen{welcome}`
-- `is_empty == false` → renders `maya::Conversation{turns, in_flight}`
+- `is_empty == false` → renders `maya::Conversation{conversation}`
 
-moha-side adapter (`thread.cpp`):
+Adapter: `thread/thread.cpp::thread_config(m)`.
 
 ```cpp
 Thread::Config thread_config(const Model& m) {
     Thread::Config cfg;
     if (m.d.current.messages.empty()) {
         cfg.is_empty = true;
-        cfg.welcome  = welcome_config(m);
+        cfg.welcome  = welcome_screen_config(m);
         return cfg;
     }
-    // … walk visible window, push Turn::Config per message …
-    cfg.in_flight = in_flight_indicator(m);
+    cfg.conversation = conversation_config(m);
     return cfg;
 }
 ```
+
+Three lines: pick the branch, delegate to the sub-adapter for either
+WelcomeScreen or Conversation. No element work, no rendering logic.
 
 ---
 
@@ -105,7 +113,7 @@ struct WelcomeScreen::Config {
     Color                    wordmark_color = Color::magenta();
     std::string              tagline;
     Element                  model_badge;     // pre-built (e.g. ModelBadge)
-    std::string              profile_label;   // raw — widget small-caps's it
+    std::string              profile_label;
     Color                    profile_color  = Color::magenta();
     std::string              starters_title = "Try";
     std::vector<std::string> starters;
@@ -120,6 +128,8 @@ Widget owns: wordmark gradient (last row dim), centering, small-caps
 title in starters card, bottom hint row layout. moha owns the brand
 content (the `m o h a` glyphs, tagline copy, starter prompts).
 
+Adapter: `thread/welcome_screen.cpp::welcome_screen_config(m)`.
+
 ---
 
 ## 5. `maya::Conversation` — turn list
@@ -128,16 +138,20 @@ content (the `m o h a` glyphs, tagline copy, starter prompts).
 
 ```cpp
 struct Conversation::Config {
-    std::vector<Element> turns;
-    Element              in_flight;
-    bool                 has_in_flight = false;
+    std::vector<Turn::Config>                turns;
+    std::optional<ActivityIndicator::Config> in_flight;
 };
 ```
 
-A vstack of turn Elements with thin dim `─` rules between consecutive
-turns and an optional in-flight indicator at the bottom. Each `turns[i]`
-comes from `Turn{tc}.build()`; Conversation doesn't know about Turn's
-internal structure — it just receives pre-built Elements.
+A vstack of turns (each one rendered by `maya::Turn`) separated by
+thin dim `─` rules, with an optional `maya::ActivityIndicator` at
+the bottom. The widget builds the Turn from each `Turn::Config`
+internally — the host never sees an Element here.
+
+Adapter: `thread/conversation.cpp::conversation_config(m)`. Walks the
+visible message window (`m.ui.thread_view_start..end`), calls
+`turn_config()` per message, then asks `activity_indicator_config()`
+whether to show the bottom chip.
 
 ---
 
@@ -185,6 +199,8 @@ Turn:
 spacers anymore. Turn handles spacing itself; moha just lists the
 content slots in order.
 
+Adapter: `thread/turn/turn.cpp::turn_config(msg, idx, n, m)`.
+
 ---
 
 ## 7. `maya::AgentTimeline` — Actions panel for tool calls
@@ -216,10 +232,10 @@ selection (`──` / `╭─` / `├─` / `╰─` per position), status icon
 (braille spinner / `✓` / `✗` / `⊘`), inter-event connector colors,
 duration formatting, category-color application.
 
-moha-side: `agent_timeline_config(msg, frame, rail_color)` walks
-`msg.tool_calls`, computes done/total/elapsed, picks per-category
+Adapter: `thread/turn/agent_timeline/agent_timeline.cpp::agent_timeline_config(msg, frame, rail_color)`.
+Walks `msg.tool_calls`, computes done/total/elapsed, picks per-category
 colors, builds the events vector. Each event's body is filled via
-`tool_body_config(tc)` which returns a `ToolBodyPreview::Config`.
+`tool_body_preview_config(tc)`.
 
 ---
 
@@ -239,35 +255,10 @@ enum class Kind {
     GitDiff,     // unified diff with per-line +/-/@@ coloring
     TodoList,    // ✓ ◍ ○ checkbox list
 };
-
-struct Config {
-    Kind kind = Kind::None;
-
-    // CodeBlock / Failure / GitDiff
-    std::string text;
-    Color       text_color = Color::bright_white();
-
-    // EditDiff
-    std::vector<EditHunk> hunks;        // { old_text, new_text }
-
-    // TodoList
-    std::vector<TodoItem> todos;        // { content, status }
-
-    // Tunables
-    int code_head           = 4;
-    int code_tail           = 3;
-    int edit_head_per_side  = 6;
-    int edit_tail_per_side  = 2;
-    int max_edit_hunks_shown = 4;
-    int max_todos_shown     = 8;
-};
 ```
 
-Widget owns: line splitting, head+tail elision math, the
-`··· N hidden ···` middle marker, per-line styling for diff coloring,
-todo glyph selection (`✓` completed / `◍` in_progress / `○` pending).
-
-moha-side `tool_body_config(tc)` is pure data extraction:
+Adapter: `thread/turn/agent_timeline/tool_body_preview.cpp::tool_body_preview_config(tc)`.
+Pure data extraction:
 
 | Tool                                     | Resulting Kind            |
 |------------------------------------------|---------------------------|
@@ -280,6 +271,11 @@ moha-side `tool_body_config(tc)` is pure data extraction:
 | `todo` (with todos)                      | `TodoList`                |
 | any failed tool with output              | `Failure`                 |
 | anything else                            | `None`                    |
+
+Pure helpers shared with `AgentTimeline` adapter live in
+`thread/turn/agent_timeline/tool_helpers.cpp` (display name, category
+color/label, event status, timeline detail) and
+`thread/turn/agent_timeline/tool_args.cpp` (arg extraction).
 
 ---
 
@@ -296,24 +292,10 @@ struct Permission::Config {
 ```
 
 Renders the "tool wants to do X" prompt with `[y] allow [n] deny [a] always` keys.
-moha-side `inline_permission_config(pp, tc)` is pure data:
+Lives as a body slot inside `Turn::Config::body` when a tool is
+awaiting approval.
 
-```cpp
-maya::Permission::Config inline_permission_config(
-    const PendingPermission& pp, const ToolUse& tc)
-{
-    std::string desc;
-    if (tc.name == "bash" || tc.name == "diagnostics") desc = tc.args.value("command", "");
-    else if (tc.name == "read" || tc.name == "edit" /* … */) desc = tc.args.value("path", "");
-    // … per-tool description extraction …
-
-    Permission::Config cfg;
-    cfg.tool_name = tc.name.value;
-    cfg.description = desc.empty() ? pp.reason : desc;
-    cfg.show_always_allow = true;
-    return cfg;
-}
-```
+Adapter: `thread/turn/permission.cpp::inline_permission_config(pp, tc)`.
 
 ---
 
@@ -329,7 +311,9 @@ struct CheckpointDivider::Config {
 ```
 
 `─── [↺ Restore checkpoint] ───` — full-width rule that lives outside
-the rail, above a turn. Triggered by `Turn::Config::checkpoint_above`.
+the rail, above a turn. Triggered by `Turn::Config::checkpoint_above`
+(no separate adapter — Turn's adapter sets the flag based on
+`msg.checkpoint_id`).
 
 ---
 
@@ -348,6 +332,10 @@ struct ActivityIndicator::Config {
 `▎ ⠋ streaming…` — floats at the bottom of the thread when the model
 is mid-stream and the active turn has no Timeline visible (Timeline
 already carries the in-flight signal).
+
+Adapter: `thread/activity_indicator.cpp::activity_indicator_config(m)`
+returns `optional<ActivityIndicator::Config>` so the bottom slot
+collapses cleanly when nothing is in flight.
 
 ---
 
@@ -369,6 +357,8 @@ Header row (`Changes (N) … Ctrl+R review · A accept · X reject`) plus
 a `maya::FileChanges` body with the file list. When `changes` is
 empty, renders to an empty Element so the AppLayout slot collapses
 without a host-side `if`.
+
+Adapter: `changes_strip.cpp::changes_strip_config(m)`.
 
 ---
 
@@ -409,6 +399,8 @@ Hint row is width-adaptive (drops `expand` then `newline` keys on
 narrow widths). Right-side ambient indicators: queue depth, words /
 ~tokens counters, profile chip.
 
+Adapter: `composer.cpp::composer_config(m)`.
+
 ---
 
 ## 14. `maya::StatusBar` — bottom panel
@@ -417,38 +409,81 @@ narrow widths). Right-side ambient indicators: queue depth, words /
 
 Five fixed rows (always 5 — the status row never grows or shrinks, so
 the composer above never bobs vertically when a toast appears).
+StatusBar::Config nests **typed sub-widget Configs** so each
+sub-widget gets its own moha adapter:
 
 ```cpp
 struct StatusBar::Config {
-    PhaseSpec       phase;            // glyph, verb, color, breathing, frame, elapsed
-    std::string     breadcrumb_title; // empty = hide
-    TokenStreamSpec token_stream;     // show/rate/total/history/color/live
-    Element         model_badge;      // pre-built (e.g. ModelBadge)
-    ContextSpec     context;          // {used, max}
+    Color phase_color = Color::cyan();      // top/bottom PhaseAccent + leading rail
 
-    std::string     status_text;      // empty = blank slot (1 row reserved)
-    bool            status_is_error = false;
+    // Activity row sub-widget configs.
+    TitleChip::Config            breadcrumb;       // empty title = hide
+    PhaseChip::Config            phase;
+    TokenStreamSparkline::Config token_stream;
+    Element                      model_badge;
+    ContextGauge::Config         context;          // max=0 = hide
 
-    std::vector<ShortcutRow::Binding> shortcuts;
+    // Status row.
+    StatusBanner::Config         status_banner;
 
-    int breadcrumb_min_width    = 130;   // raise to 160 while streaming
+    // Shortcut row.
+    ShortcutRow::Config          shortcuts;
+
+    // Width thresholds for activity-row pieces.
+    int breadcrumb_min_width    = 130;
     int token_stream_min_width  = 110;
     int ctx_bar_min_width       = 55;
-
-    Color text_color = Color::bright_white();
+    int phase_verb_min_width    = 50;     // < this drops phase verb
+    int phase_elapsed_min_width = 80;     // < this drops phase elapsed
 };
 ```
 
-Composes internal sub-widgets:
+Adapter: `status_bar/status_bar.cpp::status_bar_config(m)` is a thin
+composer — calls the sub-adapters and assembles:
 
-- `maya::PhaseAccent` (top + bottom) — soft `▔▔▔` / `▁▁▁` rule in phase color
-- `maya::PhaseChip` — colored glyph + verb + elapsed; breathing animation
-- `maya::ContextGauge` — fuel-gauge bar with green/amber/red zones
-- `maya::ShortcutRow` — width-adaptive keyboard hints
+```cpp
+maya::StatusBar::Config status_bar_config(const Model& m) {
+    StatusBar::Config cfg;
+    cfg.phase_color   = phase_color(m.s.phase);
+    cfg.breadcrumb    = title_chip_config(m);
+    cfg.phase         = phase_chip_config(m);
+    cfg.token_stream  = token_stream_sparkline_config(m);
+    cfg.model_badge   = model_badge_config(m).build();
+    cfg.context       = context_gauge_config(m);
+    cfg.status_banner = status_banner_config(m);
+    cfg.shortcuts     = shortcut_row_config(m);
+    // … width thresholds …
+    return cfg;
+}
+```
 
 ---
 
-## 15. `maya::PhaseChip` — phase indicator
+## 15. `maya::TitleChip` — leading-edge title chip
+
+`maya/include/maya/widget/title_chip.hpp`
+
+```cpp
+struct TitleChip::Config {
+    std::string title;                          // empty = blank
+    Color       edge_color = Color::cyan();
+    Color       text_color = Color::bright_white();
+    std::size_t max_chars  = 28;
+};
+```
+
+`▎ implement /loop dynamic m…` — leading colored ▎ + bold title with
+middle-truncation. Used in StatusBar's activity row to show the
+current thread title. Renders nothing when `title` is empty.
+
+(Distinct from `maya::Breadcrumb`, which is a multi-segment path
+chip — `TitleChip` is the simpler single-label cousin.)
+
+Adapter: `status_bar/title_chip.cpp::title_chip_config(m)`.
+
+---
+
+## 16. `maya::PhaseChip` — phase indicator
 
 `maya/include/maya/widget/phase_chip.hpp`
 
@@ -470,9 +505,45 @@ half — slightly slower than resting heart-rate so the indicator feels
 exactly N display columns so the chips to the right stay pinned as
 the verb changes.
 
+Adapter: `status_bar/phase_chip.cpp::phase_chip_config(m)`. The
+`verb_width` and `elapsed_secs` are *defaults* — `StatusBar` overrides
+them per-frame based on terminal width.
+
 ---
 
-## 16. `maya::ContextGauge` — context-window fuel gauge
+## 17. `maya::TokenStreamSparkline` — compact tok/s + sparkline
+
+`maya/include/maya/widget/token_stream_sparkline.hpp`
+
+```cpp
+struct TokenStreamSparkline::Config {
+    float              rate    = 0.0f;
+    int                total   = 0;
+    std::vector<float> history;
+    Color              color   = Color::cyan();
+    bool               live    = false;     // false = dim (frozen)
+};
+```
+
+Stable-width 37-cell slot: `⚡ ▕rate 5▏ t/s ▕spark 16▏ ▕total 5▏`.
+Every segment is fixed display width so the slot occupies the same
+cells whether rate is 0.5 or 1234 — surrounding chips don't shove
+leftward as numbers tick.
+
+Adapter: `status_bar/token_stream_sparkline.cpp::token_stream_sparkline_config(m)`.
+Resolves the displayed rate from live deltas (after a 250 ms warm-up)
+or the most recent ring-buffer sample when paused.
+
+**Sparkline persistence:** the `rate_history` ring buffer is **not**
+wiped on `StreamStarted`. It carries across sub-turns and tool gaps so
+the user sees a continuous trace of generation rate over the whole
+session. The per-burst rate accumulator (`live_delta_bytes`,
+`first_delta_at`) does still reset, so the rate *number* measures
+only the current burst.
+
+---
+
+## 18. `maya::ContextGauge` — context-window fuel gauge
 
 `maya/include/maya/widget/context_gauge.hpp`
 
@@ -491,9 +562,33 @@ dim placeholder slot the same width as the live version, so the
 right-side chips don't shove leftward when the first usage event
 fires mid-stream.
 
+Adapter: `status_bar/context_gauge.cpp::context_gauge_config(m)`.
+
 ---
 
-## 17. `maya::ShortcutRow` — width-adaptive hint row
+## 19. `maya::StatusBanner` — transient toast row
+
+`maya/include/maya/widget/status_banner.hpp`
+
+```cpp
+struct StatusBanner::Config {
+    std::string text;                 // empty = blank slot
+    bool        is_error = false;
+    Color       muted_color = Color::bright_black();
+    Color       error_color = Color::red();
+};
+```
+
+Single-row banner with a leading edge mark + italic text:
+- Empty `text` → 1-cell blank placeholder (keeps the surrounding
+  StatusBar's row count fixed — no jitter when toasts come and go).
+- `is_error=true` → red edge + ⚠ glyph.
+
+Adapter: `status_bar/status_banner.cpp::status_banner_config(m)`.
+
+---
+
+## 20. `maya::ShortcutRow` — width-adaptive hint row
 
 `maya/include/maya/widget/shortcut_row.hpp`
 
@@ -517,9 +612,11 @@ Helix / Lazygit / k9s style: bold key in default fg, dim label, no
 chip background. Drops less-important bindings on narrow widths
 (priority-sorted) and drops labels entirely below `label_min_width`.
 
+Adapter: `status_bar/shortcut_row.cpp::shortcut_row_config(m)`.
+
 ---
 
-## 18. `maya::PhaseAccent` — soft horizontal rule
+## 21. `maya::PhaseAccent` — soft horizontal rule
 
 `maya/include/maya/widget/phase_accent.hpp`
 
@@ -534,9 +631,26 @@ Width-aware row of half-block glyphs in the phase color, dim. Reads as
 a "soft state shelf" rather than a hard line — the color carries
 app-state information without using extra chrome characters.
 
+No moha adapter — used internally by `StatusBar` (top + bottom
+strips), driven by `StatusBar::Config::phase_color`.
+
 ---
 
-## 19. `maya::Overlay` — modal layer
+## 22. `maya::ModelBadge` — colored model chip
+
+`maya/include/maya/widget/model_badge.hpp`
+
+Compact `● Opus` / `● Sonnet` / `● Haiku` brand chip. Used in two
+places: WelcomeScreen's chip row and StatusBar's activity row.
+
+Adapter: `status_bar/model_badge.cpp::model_badge_config(m)`. Returns
+the configured `ModelBadge` widget; callers `.build()` it where they
+need an Element (the widget predates the strict Config-pattern
+reshape).
+
+---
+
+## 23. `maya::Overlay` — modal layer
 
 `maya/include/maya/widget/overlay.hpp`
 
@@ -555,43 +669,100 @@ through. When `present = false` collapses to just `base`.
 `AppLayout` accepts `std::optional<Element>` and translates internally
 — host code never has to construct an empty placeholder Element.
 
----
-
-## 20. moha adapter functions
-
-Every per-section file in `src/runtime/view/`:
-
-| File              | Function                          | Returns                            |
-|-------------------|-----------------------------------|------------------------------------|
-| `view.cpp`        | `view(m)`                         | `Element` (the one `.build()`)     |
-| `view.cpp`        | `pick_overlay(m)`                 | `optional<Element>`                |
-| `thread.cpp`      | `thread_config(m)`                | `Thread::Config`                   |
-| `thread.cpp`      | `welcome_config(m)`               | `WelcomeScreen::Config`            |
-| `thread.cpp`      | `turn_config(msg, idx, n, m)`     | `Turn::Config`                     |
-| `thread.cpp`      | `agent_timeline_config(msg, …)`   | `AgentTimeline::Config`            |
-| `thread.cpp`      | `tool_body_config(tc)`            | `ToolBodyPreview::Config`          |
-| `thread.cpp`      | `in_flight_indicator(m)`          | `optional<ActivityIndicator::Config>` |
-| `thread.cpp`      | `cached_markdown_for(msg, …)`     | `Element` *(only escape hatch)*    |
-| `composer.cpp`    | `composer_config(m)`              | `Composer::Config`                 |
-| `changes.cpp`     | `changes_strip_config(m)`         | `ChangesStrip::Config`             |
-| `statusbar.cpp`   | `status_bar_config(m)`            | `StatusBar::Config`                |
-| `permission.cpp`  | `inline_permission_config(pp,tc)` | `Permission::Config`               |
-
-Pure data helpers (no maya types touched): `speaker_style_for`,
-`format_turn_meta`, `tool_timeline_detail`, `tool_event_status`,
-`tool_display_name`, `tool_category_color`, `tool_category_label`,
-`assistant_elapsed`, `running_tool_name`, `ordered_rate_history`.
-
-The single `Element`-returning function is `cached_markdown_for` — it
-exists because `maya::StreamingMarkdown` is stateful (per-block parse
-cache must persist across frames). moha holds the widget instance,
-calls `set_content()` per frame, and slots `instance.build()` into a
-Turn body via the typed `Element` variant. No `Element{...}` literal,
-no `dsl::*` call.
+The "adapter" is `view.cpp::pick_overlay(m)` which returns
+`optional<Element>` based on which modal is currently open (login,
+pickers, command palette, diff review, todo). Each modal's Element
+still comes from the legacy DSL-based files in §24; once those are
+widgetized, `pick_overlay` becomes a config-builder too.
 
 ---
 
-## 21. Caching
+## 24. moha adapter functions
+
+Every per-widget adapter file under `src/runtime/view/` has the same
+shape: one function `Model → SomeWidget::Config`.
+
+| Adapter file | Function | Returns |
+|---|---|---|
+| `view.cpp` | `view(m)` | `Element` (the one `.build()`) |
+| `view.cpp` | `pick_overlay(m)` | `optional<Element>` |
+| `thread/thread.cpp` | `thread_config(m)` | `Thread::Config` |
+| `thread/welcome_screen.cpp` | `welcome_screen_config(m)` | `WelcomeScreen::Config` |
+| `thread/conversation.cpp` | `conversation_config(m)` | `Conversation::Config` |
+| `thread/activity_indicator.cpp` | `activity_indicator_config(m)` | `optional<ActivityIndicator::Config>` |
+| `thread/turn/turn.cpp` | `turn_config(msg, idx, n, m)` | `Turn::Config` |
+| `thread/turn/permission.cpp` | `inline_permission_config(pp,tc)` | `Permission::Config` |
+| `thread/turn/agent_timeline/agent_timeline.cpp` | `agent_timeline_config(msg, frame, c)` | `AgentTimeline::Config` |
+| `thread/turn/agent_timeline/tool_body_preview.cpp` | `tool_body_preview_config(tc)` | `ToolBodyPreview::Config` |
+| `composer.cpp` | `composer_config(m)` | `Composer::Config` |
+| `changes_strip.cpp` | `changes_strip_config(m)` | `ChangesStrip::Config` |
+| `status_bar/status_bar.cpp` | `status_bar_config(m)` | `StatusBar::Config` |
+| `status_bar/title_chip.cpp` | `title_chip_config(m)` | `TitleChip::Config` |
+| `status_bar/phase_chip.cpp` | `phase_chip_config(m)` | `PhaseChip::Config` |
+| `status_bar/token_stream_sparkline.cpp` | `token_stream_sparkline_config(m)` | `TokenStreamSparkline::Config` |
+| `status_bar/context_gauge.cpp` | `context_gauge_config(m)` | `ContextGauge::Config` |
+| `status_bar/status_banner.cpp` | `status_banner_config(m)` | `StatusBanner::Config` |
+| `status_bar/shortcut_row.cpp` | `shortcut_row_config(m)` | `ShortcutRow::Config` |
+| `status_bar/model_badge.cpp` | `model_badge_config(m)` | `maya::ModelBadge` |
+
+Pure helpers (no maya types touched): under
+`thread/turn/agent_timeline/tool_helpers.cpp` (display name, category
+color/label, event status, timeline detail) and
+`thread/turn/agent_timeline/tool_args.cpp` (`safe_arg`, `pick_arg`,
+`count_lines`, `strip_bash_output_fence`, `parse_exit_code`).
+
+Top-level shared (no widget binding): `cache.cpp`, `helpers.cpp`,
+`palette.hpp`.
+
+The single `Element`-returning function inside an adapter is
+`cached_markdown_for` (private to `thread/turn/turn.cpp`) — it exists
+because `maya::StreamingMarkdown` is stateful (per-block parse cache
+must persist across frames). moha holds the widget instance, calls
+`set_content()` per frame, and slots `instance.build()` into a Turn
+body via the typed `Element` variant.
+
+---
+
+## 25. Directory layout
+
+The adapter tree mirrors the widget hierarchy.
+
+```
+src/runtime/view/
+├── view.cpp                          # AppLayout
+├── changes_strip.cpp                 # ChangesStrip
+├── composer.cpp                      # Composer
+├── cache.cpp · helpers.cpp           # shared (not adapters)
+├── login.cpp · pickers.cpp · diff_review.cpp   # legacy modals (§26)
+├── thread/
+│   ├── thread.cpp                    # Thread
+│   ├── welcome_screen.cpp            # WelcomeScreen      (empty branch)
+│   ├── conversation.cpp              # Conversation       (non-empty branch)
+│   ├── activity_indicator.cpp        # ActivityIndicator  (bottom of conversation)
+│   └── turn/
+│       ├── turn.cpp                  # Turn
+│       ├── permission.cpp            # Permission         (body slot)
+│       └── agent_timeline/
+│           ├── agent_timeline.cpp    # AgentTimeline      (body slot)
+│           ├── tool_body_preview.cpp # ToolBodyPreview    (per-event body)
+│           ├── tool_helpers.cpp      # per-tool helpers
+│           └── tool_args.cpp         # arg parsers
+└── status_bar/
+    ├── status_bar.cpp                # StatusBar
+    ├── title_chip.cpp                # TitleChip          (activity row)
+    ├── phase_chip.cpp                # PhaseChip          (activity row)
+    ├── token_stream_sparkline.cpp    # TokenStreamSparkline (activity row)
+    ├── context_gauge.cpp             # ContextGauge       (activity row)
+    ├── model_badge.cpp               # ModelBadge         (activity row)
+    ├── status_banner.cpp             # StatusBanner       (status row)
+    └── shortcut_row.cpp              # ShortcutRow        (shortcut row)
+```
+
+Headers mirror the same layout under `include/moha/runtime/view/`.
+
+---
+
+## 26. Caching
 
 ```cpp
 // include/moha/runtime/view/cache.hpp
@@ -609,12 +780,14 @@ messages hold a live `StreamingMarkdown` instance whose internal
 block-cache makes each delta `O(new_chars)`; finalized messages cache
 the resulting `Element` once and return the same pointer forever.
 
-The previous `tool_card_cache` was removed when the rendering pipeline
-collapsed onto `AgentTimeline + ToolBodyPreview`.
+**Streaming-rate sparkline** (separate from this cache) lives in
+`StreamState::rate_history` — a 16-slot ring buffer that survives
+across sub-turns and tool gaps (only the per-burst rate accumulator
+resets on `StreamStarted`).
 
 ---
 
-## 22. The DSL (for widget authors and overlay modals)
+## 27. The DSL (for widget authors and overlay modals)
 
 `maya/include/maya/dsl.hpp`. moha's main view files don't import it
 anymore — they only build Configs. But:
@@ -653,14 +826,9 @@ Element types (variants of `maya::Element`):
 | `ElementList`      | Heterogeneous list (rare; `v(...)` produces this)    |
 | `ComponentElement` | Lazy `(w,h) → Element` callback for width-aware UI   |
 
-The widget-author idiom is "build a node tree with the DSL, optionally
-wrap with runtime pipes for dynamic colors / borders, return the
-`.build()` result." Inside the widget you can use `Style{}.with_fg(c).with_bold()`
-for runtime styling that doesn't need pipes.
-
 ---
 
-## 23. Pending widgetization
+## 28. Pending widgetization
 
 Three host files still build elements directly — overlay modals that
 predate the strict controller-only rule:
@@ -672,7 +840,7 @@ predate the strict controller-only rule:
 Future widgets to absorb them:
 
 - `maya::LoginModal`
-- `maya::Picker` (or `CommandPalette` + `ThreadList` + `TodoModal`)
+- `maya::Picker` (or `CommandPalette` + `ThreadList` + `ModelPicker` + `TodoModal`)
 - `maya::DiffReview`
 
 Once those land, every host file under `src/runtime/view/` is a pure
