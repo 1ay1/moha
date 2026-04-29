@@ -415,7 +415,9 @@ if(WIN32)
     # ws2_32   — Winsock2 (sockets, WSAPoll)
     # crypt32  — CertOpenSystemStoreW for the Windows root cert loader
     # shell32  — already needed by existing code paths
-    target_link_libraries(moha PRIVATE ws2_32 crypt32 shell32)
+    # winmm    — timeBeginPeriod / timeEndPeriod in main.cpp (the
+    #            `#pragma comment(lib, "winmm.lib")` only works on MSVC).
+    target_link_libraries(moha PRIVATE ws2_32 crypt32 shell32 winmm)
     # Static OpenSSL on Windows additionally pulls in these system libs
     # (used by libcrypto's CSP / certificate APIs). Innocuous in dynamic
     # builds — the linker dedupes — but required when MOHA_STANDALONE=ON.

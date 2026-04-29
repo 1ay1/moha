@@ -4,6 +4,8 @@
 #include <optional>
 #include <variant>
 
+#include <maya/terminal/ansi.hpp>
+
 #include "moha/runtime/login.hpp"
 #include "moha/runtime/picker.hpp"
 
@@ -253,8 +255,21 @@ Sub<Msg> subscribe(const Model& m) {
     // Only subscribe to Tick while the spinner is visible. With fps=0 the
     // maya loop is purely event-driven; an unconditional 16ms tick would
     // force a render 60× per second even when nothing is changing.
+    //
+    // Tick cadence is gated on the host terminal's support for DEC mode
+    // 2026 (synchronized output). On terminals that buffer the frame
+    // atomically, 33 ms (~30 fps) keeps the spinner smooth without
+    // flicker. On terminals that paint bytes as they arrive (Apple
+    // Terminal, plain xterm, tmux without sync passthrough), every
+    // repaint is visibly progressive — so we drop to 100 ms (10 fps) to
+    // cut the flicker frequency by 3× at the cost of a slightly choppier
+    // spinner. The capability is heuristic-detected once at startup; see
+    // maya::ansi::env_supports_synchronized_output().
     if (m.s.active()) {
-        auto tick = Sub<Msg>::every(std::chrono::milliseconds(33), Tick{});
+        static const auto tick_period = maya::ansi::env_supports_synchronized_output()
+            ? std::chrono::milliseconds(33)
+            : std::chrono::milliseconds(100);
+        auto tick = Sub<Msg>::every(tick_period, Tick{});
         return Sub<Msg>::batch(std::move(key_sub), std::move(paste_sub), std::move(tick));
     }
     return Sub<Msg>::batch(std::move(key_sub), std::move(paste_sub));
