@@ -24,7 +24,13 @@
 #  endif
 #  include <windows.h>
 #  include <mmsystem.h>          // timeBeginPeriod / timeEndPeriod
-#  pragma comment(lib, "winmm.lib")
+#  if defined(_MSC_VER)
+//   MSVC consumes the pragma and links winmm.lib automatically. GCC
+//   ignores it with a warning — we link winmm via target_link_libraries
+//   in CMakeLists.txt for the MinGW build, so the pragma is pointless
+//   noise there.
+#    pragma comment(lib, "winmm.lib")
+#  endif
 #endif
 
 #include <cstdio>

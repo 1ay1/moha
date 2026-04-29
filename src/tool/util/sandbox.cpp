@@ -22,6 +22,11 @@ namespace {
 std::atomic<Mode>    g_mode{Mode::Auto};
 std::atomic<Backend> g_backend{Backend::None};
 
+// Only the POSIX backends (Linux bwrap, macOS sandbox-exec) need the
+// "can we run this binary?" probe — the Windows/unsupported branch
+// just hard-codes Backend::None.
+#if defined(__linux__) || defined(__APPLE__)
+
 // One-shot probe: try to spawn `<exe> --version` and observe the
 // outcome. Replaces a fragile PATH walk with the actual semantic
 // check we care about ("can we run this binary?"). The result is
@@ -34,6 +39,8 @@ std::atomic<Backend> g_backend{Backend::None};
     auto r = Subprocess::run(std::move(opts));
     return r.started && r.exit_code == 0;
 }
+
+#endif // posix backends
 
 #if defined(__linux__)
 

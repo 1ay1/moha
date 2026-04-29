@@ -52,6 +52,8 @@ namespace moha::airgap {
 
 namespace {
 
+#if !defined(_WIN32)
+
 void print_usage() {
     std::fprintf(stderr,
         "usage: moha airgap [--setup] [--remote-moha PATH] <user@host>\n"
@@ -75,8 +77,6 @@ void print_usage() {
         "  ssh and scp must be on this laptop's PATH.  Pass extra ssh args\n"
         "  via the MOHA_AIRGAP_SSH env var (e.g. -i, -p, -J).\n");
 }
-
-#if !defined(_WIN32)
 
 // Synchronously spawn `argv[0]` with the given argv and wait for it.
 // Inherits stdin/stdout/stderr.  Returns the child's exit code, or -1 on
