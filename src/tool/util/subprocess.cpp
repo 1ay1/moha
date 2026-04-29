@@ -232,19 +232,46 @@ SubprocessResult run_win32_cmdline(const std::string& cmdline,
         return std::chrono::steady_clock::now();
     };
 
-    const bool has_deadline = opts.timeout.count() > 0;
-    const auto deadline = has_deadline
-        ? now_ms() + std::chrono::milliseconds(opts.timeout.count() * 1000)
+    auto total_snapshot = [&]{
+        std::lock_guard lk(buf_mu);
+        return shared_total;
+    };
+
+    // Idle deadline: same semantics as the POSIX path — we cap *silence*,
+    // not total wall-clock from spawn.  A child that's actively writing
+    // stdout/stderr keeps rolling the deadline forward, so a long but
+    // chatty build never trips the watchdog; only a stuck child that goes
+    // quiet for `opts.timeout` seconds gets terminated.  Activity is
+    // detected by snapshotting the reader's `shared_total` byte counter
+    // under the buffer mutex — when it grows between iterations, the
+    // window resets.
+    const auto idle_window = (opts.timeout.count() > 0)
+        ? std::chrono::milliseconds(opts.timeout.count() * 1000)
+        : std::chrono::milliseconds::zero();
+    const bool has_idle_window = idle_window.count() > 0;
+    auto idle_deadline = has_idle_window
+        ? now_ms() + idle_window
         : std::chrono::steady_clock::time_point::max();
     auto last_emit = now_ms();
+    std::size_t last_total_seen = 0;
 
     bool timed_out = false;
     for (;;) {
         auto now = now_ms();
-        auto remaining_deadline = has_deadline
-            ? std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
+        // Reset the idle window if the reader thread has appended bytes
+        // since our last check.  Snapshot is cheap (one mutex acquire +
+        // size_t copy) and we only do it once per outer iteration.
+        if (has_idle_window) {
+            const auto t = total_snapshot();
+            if (t > last_total_seen) {
+                last_total_seen = t;
+                idle_deadline = now + idle_window;
+            }
+        }
+        auto remaining_deadline = has_idle_window
+            ? std::chrono::duration_cast<std::chrono::milliseconds>(idle_deadline - now)
             : std::chrono::milliseconds::max();
-        if (has_deadline && remaining_deadline.count() <= 0) {
+        if (has_idle_window && remaining_deadline.count() <= 0) {
             timed_out = true;
             break;
         }
@@ -252,7 +279,7 @@ SubprocessResult run_win32_cmdline(const std::string& cmdline,
             now - last_emit);
         if (to_emit.count() < 0) to_emit = std::chrono::milliseconds{0};
         auto sleep_ms = std::min<std::chrono::milliseconds>(
-            to_emit, has_deadline ? remaining_deadline : std::chrono::milliseconds{1000});
+            to_emit, has_idle_window ? remaining_deadline : std::chrono::milliseconds{1000});
 
         DWORD w = ::WaitForSingleObject(
             pi.hProcess,
@@ -429,8 +456,22 @@ SubprocessResult run_posix(const std::vector<std::string>& argv_in,
 
     using clock = std::chrono::steady_clock;
     const auto start    = clock::now();
-    const auto deadline = (opts.timeout.count() > 0)
-        ? start + std::chrono::seconds(opts.timeout.count())
+    // Idle deadline: rather than an absolute wall-clock cap from spawn,
+    // the deadline rolls forward every time the child writes output.  A
+    // long-running command that's actively printing progress (a build,
+    // a streaming logs tail, a slow git operation) never trips the
+    // watchdog, but a stuck child that goes silent for `opts.timeout`
+    // seconds gets SIGTERM'd just as before.
+    //
+    // The window resets on EACH successful read (see the post-drain
+    // bump near the bottom of the loop), so the only way to die here is
+    // to actually go quiet for the configured budget.
+    const auto idle_window = (opts.timeout.count() > 0)
+        ? std::chrono::seconds(opts.timeout.count())
+        : std::chrono::seconds::zero();
+    const bool has_idle_window = idle_window > std::chrono::seconds::zero();
+    auto idle_deadline = has_idle_window
+        ? start + idle_window
         : clock::time_point::max();
     constexpr auto kKillGrace = std::chrono::milliseconds{2000};
 
@@ -460,11 +501,14 @@ SubprocessResult run_posix(const std::vector<std::string>& argv_in,
     while (!eof || !reaped) {
         auto now = clock::now();
 
-        // Deadline state machine. SIGTERM first (cooperative shutdown),
-        // SIGKILL after a 2 s grace if still alive. timed_out is sticky
-        // so we report it even if the child happened to exit cleanly
-        // moments after we sent the signal.
-        if (!sent_term && now >= deadline) {
+        // Idle-deadline state machine. SIGTERM first (cooperative
+        // shutdown), SIGKILL after a 2 s grace if still alive.
+        // `timed_out` is sticky so we report it even if the child
+        // happened to exit cleanly moments after we sent the signal.
+        // `idle_deadline` was reset to `now + idle_window` on every
+        // successful drain below, so reaching it means the child has
+        // gone silent for at least `opts.timeout` seconds.
+        if (!sent_term && has_idle_window && now >= idle_deadline) {
             ::kill(pid, SIGTERM);
             sent_term = true;
             timed_out = true;
@@ -479,7 +523,8 @@ SubprocessResult run_posix(const std::vector<std::string>& argv_in,
         // accordingly. 100 ms ceiling so we still revisit the kill
         // state even when the child is silent and no timer is close.
         auto next = last_emit + kEmitGap;
-        if (!sent_term && deadline < next) next = deadline;
+        if (!sent_term && has_idle_window && idle_deadline < next)
+            next = idle_deadline;
         if (sent_term && !sent_kill && kill_at < next) next = kill_at;
         auto wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                            next - now).count();
@@ -490,8 +535,17 @@ SubprocessResult run_posix(const std::vector<std::string>& argv_in,
             struct pollfd pfd{pipefd[0], POLLIN, 0};
             int pn = ::poll(&pfd, 1, static_cast<int>(wait_ms));
             if (pn > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
+                const auto bytes_before = total;
                 if (drain_pipe(pipefd[0], out, total, opts.max_bytes, truncated))
                     eof = true;
+                // Any forward progress in stdout/stderr resets the idle
+                // window — a chatty child (build with progress lines, log
+                // tail, long-running test runner) never starves the
+                // watchdog.  The deadline only fires after `idle_window`
+                // of *silence*, not from spawn.
+                if (has_idle_window && total > bytes_before) {
+                    idle_deadline = clock::now() + idle_window;
+                }
             } else if (pn < 0 && errno != EINTR) {
                 eof = true;   // poll error → stop trying to read
             }
