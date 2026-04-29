@@ -193,7 +193,39 @@ int copy_credentials(const std::string& remote) {
     // both ends — practically every modern install.
     argv.push_back("-R"); argv.push_back("1080");
 
-    // MOHA_AIRGAP_SSH lets the user inject extra flags (`-i`, `-p`, `-J`).
+    // Performance / liveness defaults.  Users have hit progressive
+    // slowdowns after a handful of turns; these address each known
+    // contributor without requiring SSH-side config.  All passed *before*
+    // MOHA_AIRGAP_SSH so a user-supplied `-o Foo=bar` later on the
+    // command line silently wins (OpenSSH's last-write-wins for `-o`).
+    //
+    //   Compression=yes      SSE bursts compress ~3-5× on the wire; halves
+    //                        the SSH channel-window pressure that builds up
+    //                        during long streaming responses.
+    //   ServerAliveInterval  Carrier-TCP keepalive on the SSH session — keeps
+    //                        the channel from going stale during quiet
+    //                        stretches between turns.
+    //   ServerAliveCountMax  Tolerate 3 missed keepalives before tearing down.
+    //   TCPKeepAlive=yes     Kernel-level TCP keepalive on the carrier.
+    //   ConnectTimeout=10    Bound the initial TCP connect so a flaky network
+    //                        doesn't hang the user for 2 minutes.
+    //   ExitOnForwardFailure Bail loudly if the -R 1080 reverse listener
+    //                        can't bind on the remote (something else
+    //                        already on 1080), instead of silently exposing
+    //                        no SOCKS proxy and letting moha fail later
+    //                        with a confusing getaddrinfo error.
+    auto add_o = [&](const char* spec) {
+        argv.push_back("-o"); argv.push_back(spec);
+    };
+    add_o("Compression=yes");
+    add_o("ServerAliveInterval=30");
+    add_o("ServerAliveCountMax=3");
+    add_o("TCPKeepAlive=yes");
+    add_o("ConnectTimeout=10");
+    add_o("ExitOnForwardFailure=yes");
+
+    // MOHA_AIRGAP_SSH lets the user inject extra flags (`-i`, `-p`, `-J`,
+    // or override any of the defaults above with a later `-o ...`).
     // We split on whitespace — primitive but enough for the common case.
     if (const char* extra = std::getenv("MOHA_AIRGAP_SSH"); extra && *extra) {
         std::string buf;

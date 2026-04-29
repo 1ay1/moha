@@ -1123,7 +1123,26 @@ dial_new(const Endpoint& ep, Timeouts tos, CancelTokenPtr cancel) {
 // thinks it's healthy) but the proxy will RST the next request.
 // Recycling proactively at 10 min sidesteps that ~rare-but-fatal case.
 // -----------------------------------------------------------------------
-constexpr auto kIdleTtl     = std::chrono::seconds(90);
+// Direct-connect default: 90 s.  Anthropic's edge holds idle keepalive
+// well past a minute, but we recycle proactively so the pool doesn't
+// stagnate on a dead-but-silent socket.
+//
+// Through MOHA_SOCKS_PROXY (the air-gapped-via-SSH path), every reconnect
+// is *much* more expensive: SOCKS5 handshake over the SSH channel + DNS
+// on the proxy host + TLS handshake on the tunnelled byte stream.
+// Together that's typically 200-500 ms of overhead per dial.  The
+// progressive slowdown users see "after a few turns" is mostly the 90 s
+// idle TTL evicting connections during composer breathing room and the
+// next turn paying that overhead before its first SSE byte.  Holding
+// connections 5× longer when SOCKS is active sidesteps that — the
+// kMaxLifetime ceiling (10 min) still bounds tenure for proxy-drain
+// safety so we don't hang on to a connection forever.
+inline auto idle_ttl() noexcept -> std::chrono::seconds {
+    static const std::chrono::seconds v =
+        moha_socks_proxy().active() ? std::chrono::seconds(450)
+                                    : std::chrono::seconds(90);
+    return v;
+}
 constexpr auto kMaxLifetime = std::chrono::minutes(10);
 
 struct PooledConn {
@@ -1187,7 +1206,7 @@ public:
             // previous one misses; lifetime in particular catches the
             // proxy-drain case that no client-side check can detect.
             if (now - p.created_at  > kMaxLifetime) continue;
-            if (now - p.released_at > kIdleTtl)     continue;
+            if (now - p.released_at > idle_ttl())   continue;
             if (!p.conn->is_alive())                continue;
             if (!socket_is_alive(p.conn->fd()))     continue;
             return std::move(p.conn);
