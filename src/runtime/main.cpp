@@ -33,6 +33,7 @@
 
 #include <maya/maya.hpp>
 
+#include "moha/runtime/airgap.hpp"
 #include "moha/runtime/app/deps.hpp"
 #include "moha/runtime/app/program.hpp"
 #include "moha/auth/auth.hpp"
@@ -51,6 +52,8 @@ void print_usage() {
         "  login             Authenticate (OAuth via claude.ai or API key)\n"
         "  logout            Remove saved credentials\n"
         "  status            Show current auth status\n"
+        "  airgap            Launch moha on an air-gapped host via SSH tunnel\n"
+        "                    (`moha airgap --help` for details)\n"
         "  help              Show this message\n"
         "\n"
         "options:\n"
@@ -72,6 +75,8 @@ struct Args {
     std::string cli_model;
     std::string cli_workspace;
     std::string cli_sandbox;   // "auto" | "on" | "off"; empty = auto default
+    int         airgap_argc = 0;
+    char**      airgap_argv = nullptr;   // borrowed from main's argv
     bool        bad = false;
 };
 
@@ -81,6 +86,14 @@ Args parse_args(int argc, char** argv) {
         std::string a = argv[i];
         if (a == "login" || a == "logout" || a == "status" || a == "help") {
             out.subcommand = std::move(a);
+        } else if (a == "airgap") {
+            // Hand the remaining argv tail to the airgap subcommand verbatim
+            // so it can run its own flag parsing without re-implementing
+            // ours.  Stop scanning — top-level flags don't apply.
+            out.subcommand   = std::move(a);
+            out.airgap_argc  = argc - (i + 1);
+            out.airgap_argv  = argv + (i + 1);
+            return out;
         } else if ((a == "-k" || a == "--key") && i + 1 < argc) {
             out.cli_key = argv[++i];
         } else if ((a == "-m" || a == "--model") && i + 1 < argc) {
@@ -139,6 +152,8 @@ int main(int argc, char** argv) {
     if (args.subcommand == "login")  return auth::cmd_login();
     if (args.subcommand == "logout") return auth::cmd_logout();
     if (args.subcommand == "status") return auth::cmd_status();
+    if (args.subcommand == "airgap")
+        return airgap::cmd_airgap(args.airgap_argc, args.airgap_argv);
 
     // Missing creds is no longer a fatal error: we install with an empty
     // auth header, init.cpp opens the in-app login modal, and the user

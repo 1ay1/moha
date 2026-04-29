@@ -49,6 +49,7 @@ CLI subcommands cover the rest:
 - `moha status` — prints the resolved auth state: which env vars are set, whether the on-disk creds are present, which one will actually be used.
 - `moha login` — runs the auth flow non-interactively (useful for first-time setup over SSH or in scripts).
 - `moha logout` — clears `credentials.json`. Next launch returns to the modal.
+- `moha airgap user@host` — run moha on an air-gapped host through an SSH tunnel.  See [Air-gapped hosts](#air-gapped-hosts-ssh-tunnel) below.
 
 Then you're in a thread. Type, hit `Enter`. The model has the full tool catalog (read/write/edit/bash/grep/git/web — see below); mid-stream typing queues your next message and lands it when the current turn finishes. `Esc` cancels a streaming response or rejects a permission prompt.
 
@@ -83,6 +84,48 @@ Esc        cancel / reject        ^/     model picker
 S-Tab      cycle profile          ^N     new thread
                                   ^C     quit
 ```
+
+## Air-gapped hosts (SSH tunnel)
+
+Run moha on a box that can't reach the internet directly — your laptop relays the bytes, TLS / cert verification still pin on the real upstreams so a tampering tunnel endpoint can't MITM you.
+
+One command, from the laptop that *does* have internet:
+
+```bash
+moha airgap --setup user@airgapped-host    # first time: also copies your credentials
+moha airgap user@airgapped-host            # every time after
+```
+
+How it works: `ssh -R 1080` (port-only form) makes OpenSSH expose a SOCKS5 proxy on the remote at `localhost:1080`; connections to it are tunnelled back over SSH and dialed by your laptop.  The remote moha gets `MOHA_SOCKS_PROXY=localhost:1080` and routes every TCP destination through that single proxy — chat (`api.anthropic.com`), OAuth refresh (`platform.claude.com`), and `web_fetch` / `web_search` against arbitrary URLs all work without per-host enumeration.  TLS happens end-to-end with the real upstream over the tunnelled socket, so the proxy can't MITM you.
+
+`--setup` does three small remote operations: `mkdir -p ~/.config/moha && chmod 700`, `scp` the laptop's `~/.config/moha/credentials.json` over, then `chmod 600` it on the remote.  Re-run after a fresh `moha login` on the laptop (e.g. once the refresh token itself eventually rotates).
+
+Knobs: `--remote-moha PATH` if `moha` isn't on the remote PATH.  `MOHA_AIRGAP_SSH` injects extra `ssh` flags (`-i`, `-p`, `-J jump-host`, …).
+
+The subcommand is sugar.  The bare-metal version, on the laptop:
+
+```bash
+ssh -t -R 1080 user@airgapped-host \
+    'MOHA_SOCKS_PROXY=localhost:1080 moha'
+```
+
+`MOHA_SOCKS_PROXY` overrides only the TCP dial path (every connection goes through SOCKS5, with DNS resolution on the proxy side).  SNI, cert verification, and the HTTP `Host` header stay pinned on the real upstreams.
+
+For non-SOCKS forward proxies, `MOHA_API_HOST` / `MOHA_OAUTH_HOST` (`host[:port]`) override the TCP target for those two specific upstreams only.  The SOCKS proxy supersedes them when both are set.
+
+Requires OpenSSH ≥ 7.6 on both ends (released October 2017 — every distro has it).
+
+### Custom CA / TLS-terminating proxy
+
+The SOCKS path keeps TLS end-to-end with the real upstream, so cert verification works untouched.  Different story if you're routing through a corporate forward proxy that **terminates** TLS and re-encrypts with its own cert (Zscaler, Bluecoat, mitmproxy, etc.) — verification will refuse the proxy's chain.
+
+`MOHA_INSECURE=1` skips peer verification entirely (every connection: chat, OAuth refresh, web tools).  Use it knowingly — it disables the only thing keeping a tampering middlebox from reading and rewriting your conversations:
+
+```bash
+MOHA_INSECURE=1 moha
+```
+
+Strictly preferable: install your proxy's CA into the system trust store (`/etc/ssl/certs/` on Debian/Ubuntu via `update-ca-certificates`, `/etc/pki/ca-trust/source/anchors/` on Fedora via `update-ca-trust`).  moha picks up the system roots at startup, so a proxy with a trusted-root cert needs no env-var change.
 
 ## How it works
 

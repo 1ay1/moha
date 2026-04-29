@@ -142,7 +142,10 @@ void prewarm_anthropic() {
     static std::atomic<bool> started{false};
     bool expected = false;
     if (!started.compare_exchange_strong(expected, true)) return;
-    http::default_client().prewarm("api.anthropic.com", 443);
+    const auto& ov = http::moha_api_host_override();
+    http::default_client().prewarm("api.anthropic.com", 443,
+                                   ov.active() ? ov.host : std::string{},
+                                   ov.active() ? ov.port : uint16_t{0});
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +395,14 @@ FormPostResult http_post_form(const std::string& url,
     hreq.method = http::HttpMethod::Post;
     hreq.host   = parsed->host;
     hreq.port   = parsed->port;
+    // Air-gapped users tunnel the OAuth host (token exchange + refresh)
+    // through SSH the same way they tunnel the API host — see MOHA_OAUTH_HOST
+    // in include/moha/io/http.hpp.  Without this, OAuth refresh dies on
+    // getaddrinfo the moment the access token expires mid-session.
+    if (const auto& ov = http::moha_oauth_host_override(); ov.active()) {
+        hreq.dial_host = ov.host;
+        hreq.dial_port = ov.port;
+    }
     hreq.path   = parsed->path;
     hreq.headers = {
         {"content-type", "application/x-www-form-urlencoded"},

@@ -310,6 +310,7 @@ set(MOHA_TOOL_SOURCES
 # Everything except the entry point — so tests can link the same runtime
 # without fighting main().
 set(MOHA_RUNTIME_NOMAIN_SOURCES
+    src/runtime/airgap.cpp
     src/runtime/app/deps.cpp
     src/runtime/app/init.cpp
     src/runtime/app/cmd_factory.cpp

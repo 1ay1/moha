@@ -867,6 +867,10 @@ void run_stream_sync(Request req, EventSink sink, http::CancelTokenPtr cancel) {
     hreq.method  = http::HttpMethod::Post;
     hreq.host    = "api.anthropic.com";
     hreq.port    = 443;
+    if (const auto& ov = http::moha_api_host_override(); ov.active()) {
+        hreq.dial_host = ov.host;
+        hreq.dial_port = ov.port;
+    }
     // `?beta=true` matches `beta.messages.create` in the SDK (cli.js line 393)
     // — the same path Anthropic's edge gates the beta header set against.
     hreq.path    = "/v1/messages?beta=true";
@@ -983,6 +987,10 @@ std::vector<ModelInfo> list_models(const std::string& auth_header,
     hreq.method  = http::HttpMethod::Get;
     hreq.host    = "api.anthropic.com";
     hreq.port    = 443;
+    if (const auto& ov = http::moha_api_host_override(); ov.active()) {
+        hreq.dial_host = ov.host;
+        hreq.dial_port = ov.port;
+    }
     hreq.path    = "/v1/models?limit=100";
     // /v1/models doesn't need the streaming beta cocktail — just the oauth
     // gate when applicable, matching how cli.js calls model-listing endpoints.

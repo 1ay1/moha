@@ -178,23 +178,40 @@ int remaining_ms(std::optional<clock_t_::time_point> deadline, int cap_ms) {
 }
 
 // -----------------------------------------------------------------------
-// Endpoint — pool key.  Identity is (host,port); two requests to the same
-// logical API collapse into the same pool slot.
+// Endpoint — pool key.  Identity is (host,port,dial_host,dial_port); two
+// requests to the same logical API collapse into the same pool slot.  The
+// dial fields are part of the key because two endpoints with the same SNI
+// host but different TCP targets (e.g. one direct, one through an SSH
+// tunnel) are physically distinct connections.
 // -----------------------------------------------------------------------
 struct Endpoint {
-    std::string host;
+    std::string host;       // SNI + cert + Host header
     uint16_t    port = 443;
+    std::string dial_host;  // TCP target override; empty = use host
+    uint16_t    dial_port = 0; // TCP port override; 0 = use port
+
+    [[nodiscard]] std::string_view tcp_host() const noexcept {
+        return dial_host.empty() ? std::string_view{host} : std::string_view{dial_host};
+    }
+    [[nodiscard]] uint16_t tcp_port() const noexcept {
+        return dial_port == 0 ? port : dial_port;
+    }
+
     bool operator==(const Endpoint& o) const {
-        return port == o.port && host == o.host;
+        return port == o.port && host == o.host
+            && dial_port == o.dial_port && dial_host == o.dial_host;
     }
 };
 struct EndpointHash {
     size_t operator()(const Endpoint& e) const noexcept {
-        // djb2 over host plus port — good enough for the handful of
-        // endpoints moha ever talks to.
+        // djb2 over host + dial_host plus the two ports — good enough for
+        // the handful of endpoints moha ever talks to.
         size_t h = 5381;
         for (char c : e.host) h = ((h << 5) + h) + static_cast<unsigned char>(c);
-        return h ^ (static_cast<size_t>(e.port) * 0x9E3779B97F4A7C15ull);
+        for (char c : e.dial_host) h = ((h << 5) + h) + static_cast<unsigned char>(c);
+        h ^= static_cast<size_t>(e.port) * 0x9E3779B97F4A7C15ull;
+        h ^= static_cast<size_t>(e.dial_port) * 0xBF58476D1CE4E5B9ull;
+        return h;
     }
 };
 
@@ -398,19 +415,219 @@ static ssize_t data_read_cb(nghttp2_session* /*s*/, int32_t /*stream_id*/,
 // DNS + connect.  Non-blocking connect so we can honor the connect timeout;
 // poll()s until writable or deadline.
 // -----------------------------------------------------------------------
+// SOCKS5 negotiation over an already-TCP-connected, non-blocking fd.
+// Tells the proxy to open a tunnel to (dest_host, dest_port) using
+// ATYP=DOMAIN so DNS happens proxy-side (which is the whole point on an
+// air-gapped box whose own DNS can't see the public internet).  After a
+// successful return the caller's fd carries an opaque byte stream to
+// the destination — TLS goes on top of it like a direct connection.
+//
+// Connection-failure response codes (REP) are mapped to HttpError kinds:
+// host-unreachable / network-unreachable / TTL-expired -> Resolve;
+// connection-refused -> Connect; everything else (including version
+// mismatch and forbidden) -> Tls (a misconfigured proxy is closer to a
+// trust failure than a transport one).
+namespace {
+std::expected<void, HttpError>
+socks5_send_all(socket_t fd, const unsigned char* data, size_t len,
+                clock_t_::time_point deadline, CancelToken* cancel) {
+    while (len > 0) {
+        if (cancel && cancel->is_cancelled())
+            return std::unexpected(HttpError::cancelled("socks5 send"));
+#if defined(_WIN32)
+        int n = ::send(fd, reinterpret_cast<const char*>(data),
+                       static_cast<int>(len), 0);
+#else
+        ssize_t n = ::send(fd, data, len, MSG_NOSIGNAL);
+#endif
+        if (n > 0) { data += n; len -= static_cast<size_t>(n); continue; }
+        int e = sock_last_err();
+        if (sock_intr(e)) continue;
+        if (!sock_in_progress(e))
+            return std::unexpected(HttpError::tls(
+                "socks5 send: errno=" + std::to_string(e)));
+        int rem = remaining_ms(deadline, 200);
+        if (rem <= 0)
+            return std::unexpected(HttpError::timeout("socks5 send timed out"));
+        pollfd pfd{ fd, POLLOUT, 0 };
+        int pr = sock_poll(&pfd, 1, rem);
+        if (pr < 0 && !sock_intr(sock_last_err()))
+            return std::unexpected(HttpError::tls(
+                "socks5 poll: errno=" + std::to_string(sock_last_err())));
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))
+            return std::unexpected(HttpError::tls("socks5 send: poll hangup"));
+    }
+    return {};
+}
+
+std::expected<void, HttpError>
+socks5_recv_exact(socket_t fd, unsigned char* out, size_t want,
+                  clock_t_::time_point deadline, CancelToken* cancel) {
+    while (want > 0) {
+        if (cancel && cancel->is_cancelled())
+            return std::unexpected(HttpError::cancelled("socks5 recv"));
+#if defined(_WIN32)
+        int n = ::recv(fd, reinterpret_cast<char*>(out),
+                       static_cast<int>(want), 0);
+#else
+        ssize_t n = ::recv(fd, out, want, 0);
+#endif
+        if (n > 0) { out += n; want -= static_cast<size_t>(n); continue; }
+        if (n == 0)
+            return std::unexpected(HttpError::peer_closed(
+                "socks5: proxy closed during handshake"));
+        int e = sock_last_err();
+        if (sock_intr(e)) continue;
+        if (!sock_in_progress(e))
+            return std::unexpected(HttpError::tls(
+                "socks5 recv: errno=" + std::to_string(e)));
+        int rem = remaining_ms(deadline, 200);
+        if (rem <= 0)
+            return std::unexpected(HttpError::timeout("socks5 recv timed out"));
+        pollfd pfd{ fd, POLLIN, 0 };
+        int pr = sock_poll(&pfd, 1, rem);
+        if (pr < 0 && !sock_intr(sock_last_err()))
+            return std::unexpected(HttpError::tls(
+                "socks5 poll: errno=" + std::to_string(sock_last_err())));
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))
+            return std::unexpected(HttpError::tls("socks5 recv: poll hangup"));
+    }
+    return {};
+}
+
+std::expected<void, HttpError>
+socks5_negotiate(socket_t fd, std::string_view dest_host, uint16_t dest_port,
+                 clock_t_::time_point deadline, CancelToken* cancel) {
+    if (dest_host.empty() || dest_host.size() > 255)
+        return std::unexpected(HttpError::tls(
+            "socks5: destination hostname empty or > 255 bytes"));
+
+    // 1. Greeting: ver=5, 1 method, NO_AUTH.  The 'remote SOCKS' that
+    //    `ssh -R <port>` exposes only speaks NO_AUTH (the SSH session
+    //    itself is already the trust boundary), so we don't bother
+    //    advertising USERPASS.
+    {
+        unsigned char greet[3] = { 0x05, 0x01, 0x00 };
+        if (auto r = socks5_send_all(fd, greet, 3, deadline, cancel); !r)
+            return r;
+        unsigned char gresp[2];
+        if (auto r = socks5_recv_exact(fd, gresp, 2, deadline, cancel); !r)
+            return r;
+        if (gresp[0] != 0x05 || gresp[1] != 0x00)
+            return std::unexpected(HttpError::tls(
+                "socks5: proxy refused NO_AUTH (resp "
+                + std::to_string(gresp[0]) + "/" + std::to_string(gresp[1]) + ")"));
+    }
+
+    // 2. CONNECT request with ATYP=DOMAIN so DNS lands proxy-side.
+    {
+        std::vector<unsigned char> req;
+        req.reserve(7 + dest_host.size());
+        req.push_back(0x05);                                          // ver
+        req.push_back(0x01);                                          // CMD = CONNECT
+        req.push_back(0x00);                                          // RSV
+        req.push_back(0x03);                                          // ATYP = DOMAIN
+        req.push_back(static_cast<unsigned char>(dest_host.size()));
+        req.insert(req.end(), dest_host.begin(), dest_host.end());
+        req.push_back(static_cast<unsigned char>(dest_port >> 8));
+        req.push_back(static_cast<unsigned char>(dest_port & 0xff));
+        if (auto r = socks5_send_all(fd, req.data(), req.size(), deadline, cancel); !r)
+            return r;
+    }
+
+    // 3. CONNECT reply: 4-byte head + variable BND.ADDR + 2-byte BND.PORT.
+    //    We don't care about the bound address — we just have to drain it
+    //    so the next read on the fd starts on the tunnelled byte stream.
+    unsigned char head[4];
+    if (auto r = socks5_recv_exact(fd, head, 4, deadline, cancel); !r)
+        return r;
+    if (head[0] != 0x05)
+        return std::unexpected(HttpError::tls(
+            "socks5: bad reply version " + std::to_string(head[0])));
+    if (head[1] != 0x00) {
+        const char* msg;
+        switch (head[1]) {
+            case 0x01: msg = "general SOCKS server failure"; break;
+            case 0x02: msg = "connection not allowed by ruleset"; break;
+            case 0x03: msg = "network unreachable"; break;
+            case 0x04: msg = "host unreachable"; break;
+            case 0x05: msg = "connection refused"; break;
+            case 0x06: msg = "TTL expired"; break;
+            case 0x07: msg = "command not supported"; break;
+            case 0x08: msg = "address type not supported"; break;
+            default:   msg = "unknown reply code";
+        }
+        std::string detail = "socks5 CONNECT to ";
+        detail.append(dest_host).append(":").append(std::to_string(dest_port))
+              .append(" rejected: ").append(msg)
+              .append(" (REP=").append(std::to_string(head[1])).append(")");
+        // Map the network-shape failures back to the equivalent transport
+        // HttpErrorKinds so retry / reporting code paths stay uniform.
+        if (head[1] == 0x03 || head[1] == 0x04 || head[1] == 0x06)
+            return std::unexpected(HttpError::resolve(std::move(detail)));
+        if (head[1] == 0x05)
+            return std::unexpected(HttpError::connect(std::move(detail)));
+        return std::unexpected(HttpError::tls(std::move(detail)));
+    }
+
+    int bnd_addr_len;
+    switch (head[3]) {
+        case 0x01: bnd_addr_len = 4;  break; // IPv4
+        case 0x04: bnd_addr_len = 16; break; // IPv6
+        case 0x03: {                         // DOMAIN: 1 length byte then octets
+            unsigned char l;
+            if (auto r = socks5_recv_exact(fd, &l, 1, deadline, cancel); !r)
+                return r;
+            bnd_addr_len = l;
+            break;
+        }
+        default:
+            return std::unexpected(HttpError::tls(
+                "socks5: bad reply ATYP " + std::to_string(head[3])));
+    }
+    std::vector<unsigned char> drop(static_cast<size_t>(bnd_addr_len) + 2);
+    if (auto r = socks5_recv_exact(fd, drop.data(), drop.size(), deadline, cancel); !r)
+        return r;
+    return {};
+}
+} // namespace
+
 std::expected<socket_t, HttpError>
 dial_tcp(const Endpoint& ep, Timeouts tos, CancelToken* cancel) {
     ensure_net_init();
+    // SOCKS5 short-circuit: dial the proxy address (not the upstream),
+    // then negotiate a tunnel to the upstream's tcp_host()/tcp_port().
+    // The fd we return looks like a direct connection to the upstream,
+    // ready for TLS — wrap_client below uses ep.host for SNI as ever.
+    const auto& sx = moha_socks_proxy();
+
     addrinfo hints{}; hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
     addrinfo* res = nullptr;
-    char port_buf[12]; std::snprintf(port_buf, sizeof(port_buf), "%u", ep.port);
-    int gai = ::getaddrinfo(ep.host.c_str(), port_buf, &hints, &res);
+    const std::string conn_host =
+        sx.active() ? sx.host : std::string{ep.tcp_host()};
+    const uint16_t    conn_port = sx.active() ? sx.port : ep.tcp_port();
+    char port_buf[12]; std::snprintf(port_buf, sizeof(port_buf), "%u", conn_port);
+    int gai = ::getaddrinfo(conn_host.c_str(), port_buf, &hints, &res);
     if (gai != 0 || !res) {
         return std::unexpected(HttpError::resolve(
             std::string{"getaddrinfo: "} + gai_strerror(gai)));
     }
 
     auto deadline = clock_t_::now() + tos.connect;
+
+    // After a successful TCP connect, this finishes the dial: SOCKS5
+    // negotiation if a proxy is configured (so the returned fd is a
+    // tunnel to ep's logical upstream); otherwise pass-through.
+    auto finalize = [&](socket_t fd) -> std::expected<socket_t, HttpError> {
+        if (!sx.active()) return fd;
+        if (auto r = socks5_negotiate(fd, ep.tcp_host(), ep.tcp_port(),
+                                      deadline, cancel); !r) {
+            sock_close(fd);
+            return std::unexpected(std::move(r).error());
+        }
+        return fd;
+    };
+
     std::string last_err;
     for (addrinfo* p = res; p; p = p->ai_next) {
         socket_t fd = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
@@ -454,7 +671,7 @@ dial_tcp(const Endpoint& ep, Timeouts tos, CancelToken* cancel) {
 #endif
         sock_set_nonblock(fd);
         int r = ::connect(fd, p->ai_addr, static_cast<int>(p->ai_addrlen));
-        if (r == 0) { ::freeaddrinfo(res); return fd; }
+        if (r == 0) { ::freeaddrinfo(res); return finalize(fd); }
         int e = sock_last_err();
         if (!sock_in_progress(e)) {
             sock_close(fd);
@@ -502,7 +719,7 @@ dial_tcp(const Endpoint& ep, Timeouts tos, CancelToken* cancel) {
                 break;
             }
             ::freeaddrinfo(res);
-            return fd;
+            return finalize(fd);
         }
     }
     ::freeaddrinfo(res);
@@ -1070,7 +1287,7 @@ static bool backoff_sleep(int attempt, const CancelTokenPtr& cancel) {
 
 HttpResult
 Client::send(const Request& req, Timeouts tos, CancelTokenPtr cancel) {
-    Endpoint ep{ req.host, req.port };
+    Endpoint ep{ req.host, req.port, req.dial_host, req.dial_port };
     HttpError last_err = HttpError::unknown("send: no attempts made");
 
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
@@ -1108,7 +1325,7 @@ Client::send(const Request& req, Timeouts tos, CancelTokenPtr cancel) {
 HttpStreamResult
 Client::stream(const Request& req, StreamHandler handler, Timeouts tos,
                CancelTokenPtr cancel) {
-    Endpoint ep{ req.host, req.port };
+    Endpoint ep{ req.host, req.port, req.dial_host, req.dial_port };
     HttpError last_err = HttpError::unknown("stream: no attempts made");
     // Persist across attempts so the synthesised on_headers (if we never got
     // a real one) carries whatever metadata the *last* attempt did collect.
@@ -1153,11 +1370,15 @@ Client::stream(const Request& req, StreamHandler handler, Timeouts tos,
     return std::unexpected(std::move(last_err));
 }
 
-void Client::prewarm(std::string host, uint16_t port) {
+void Client::prewarm(std::string host, uint16_t port,
+                     std::string dial_host, uint16_t dial_port) {
     // Fire-and-forget thread.  Swallows errors — this is opportunistic;
     // the first real request will dial again if prewarm failed.
-    std::thread([this, host = std::move(host), port]() mutable {
-        Endpoint ep{ std::move(host), port };
+    std::thread([this,
+                 host = std::move(host), port,
+                 dial_host = std::move(dial_host), dial_port]() mutable {
+        Endpoint ep{ std::move(host), port,
+                     std::move(dial_host), dial_port };
         auto r = dial_new(ep, Timeouts{}, /*cancel=*/nullptr);
         if (r) impl_->pool.release(std::move(*r));
     }).detach();
@@ -1168,6 +1389,53 @@ Client& default_client() {
     // races with maya's worker threads that may be mid-request at exit.
     static Client* c = new Client{};
     return *c;
+}
+
+namespace {
+// Parse a `host[:port]` env-var value into a DialOverride.  Empty / unset
+// / ill-formed values silently degrade to "no override" — the user can
+// fix the env var and relaunch.  Failing hard would be unfriendly in
+// what's already a recovery scenario (air-gapped host, can't reach the
+// API directly).
+DialOverride parse_dial_env(const char* var_name) {
+    const char* v = std::getenv(var_name);
+    if (!v || !*v) return {};
+    std::string_view s{v};
+    auto colon = s.find(':');
+    if (colon == std::string_view::npos) {
+        // host only → port 443 by default.
+        return DialOverride{ std::string{s}, 443 };
+    }
+    auto host_sv = s.substr(0, colon);
+    auto port_sv = s.substr(colon + 1);
+    if (host_sv.empty() || port_sv.empty()) return {};
+    // strict integer parse: every char of port_sv must be a digit, and
+    // the result must fit in uint16_t (≤ 65535).
+    unsigned long port_val = 0;
+    for (char c : port_sv) {
+        if (c < '0' || c > '9') return {};
+        port_val = port_val * 10 + static_cast<unsigned long>(c - '0');
+        if (port_val > 65535) return {};
+    }
+    if (port_val == 0) return {};
+    return DialOverride{ std::string{host_sv},
+                         static_cast<uint16_t>(port_val) };
+}
+} // namespace
+
+const DialOverride& moha_api_host_override() {
+    static const DialOverride cached = parse_dial_env("MOHA_API_HOST");
+    return cached;
+}
+
+const DialOverride& moha_oauth_host_override() {
+    static const DialOverride cached = parse_dial_env("MOHA_OAUTH_HOST");
+    return cached;
+}
+
+const DialOverride& moha_socks_proxy() {
+    static const DialOverride cached = parse_dial_env("MOHA_SOCKS_PROXY");
+    return cached;
 }
 
 } // namespace moha::http

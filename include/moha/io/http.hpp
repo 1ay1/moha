@@ -66,12 +66,62 @@ enum class HttpMethod : std::uint8_t { Get, Post, Head };
 
 struct Request {
     HttpMethod  method = HttpMethod::Get;
-    std::string host;     // "api.anthropic.com"
+    std::string host;     // SNI + cert verification + Host header (e.g. "api.anthropic.com")
     uint16_t    port = 443;
+    // TCP-target override.  Empty / 0 → use `host` / `port`.  When set, the
+    // socket dials this address but TLS is still pinned on `host`, so a
+    // tampering tunnel endpoint can't MITM you.  Use case: SSH reverse
+    // tunnel from an air-gapped host through a laptop with internet.
+    std::string dial_host;
+    uint16_t    dial_port = 0;
     std::string path;     // "/v1/messages"
     Headers     headers;
     std::string body;     // empty for GET; utf-8 bytes for POST.
 };
+
+// Parsed env-var-driven dial override.  Format: "host" or "host:port" —
+// port defaults to 443.  Empty when the env var is unset or ill-formed.
+// Cached at first call (process lifetime); env vars never change in
+// practice and re-reading getenv per request is wasteful.  Apply by
+// copying `host` / `port` into `Request::dial_host` / `Request::dial_port`
+// (and the same pair on `Client::prewarm`) — TLS / cert / Host-header all
+// stay pinned on the real upstream so a tampering tunnel endpoint can't
+// MITM you.
+struct DialOverride {
+    std::string host;       // empty → no override
+    uint16_t    port = 0;
+    [[nodiscard]] bool active() const noexcept { return !host.empty(); }
+};
+
+// Override for requests to `api.anthropic.com` (chat completions, model
+// listing).  Driven by `MOHA_API_HOST`.
+[[nodiscard]] const DialOverride& moha_api_host_override();
+
+// Override for requests to the OAuth host (`platform.claude.com`) — token
+// exchange and refresh.  Driven by `MOHA_OAUTH_HOST`.  An air-gapped host
+// needs both this and `moha_api_host_override` to keep working past a
+// token expiry: refresh is a separate upstream and would otherwise fail
+// on getaddrinfo.
+[[nodiscard]] const DialOverride& moha_oauth_host_override();
+
+// SOCKS5 proxy.  Driven by `MOHA_SOCKS_PROXY`; same `host[:port]` syntax
+// as the named overrides (port defaults to 443 — but most SSH-side SOCKS
+// setups want an explicit port like `localhost:1080`).
+//
+// When set, every outbound TCP dial is routed through this SOCKS5 proxy
+// instead of `getaddrinfo`-ing the destination directly.  The proxy
+// receives the destination as a domain name (ATYP=DOMAIN), so DNS happens
+// on the proxy side — which is exactly right for an air-gapped host
+// whose own DNS can't see the public internet.  TLS still negotiates
+// end-to-end with the *real* upstream over the SOCKS-tunnelled socket;
+// the proxy can't MITM you.
+//
+// Wins over MOHA_API_HOST / MOHA_OAUTH_HOST: a single tunnel forwards
+// every destination — chat, OAuth refresh, web_fetch, web_search — so
+// you don't have to enumerate hosts.  `ssh -R 1080` (port-only form, no
+// host:port) makes OpenSSH itself the SOCKS server on the remote, so
+// no extra daemon is needed.
+[[nodiscard]] const DialOverride& moha_socks_proxy();
 
 struct Response {
     int     status = 0;
@@ -226,8 +276,11 @@ public:
 
     // Fire-and-forget: prewarm a TLS connection to (host,port) on a detached
     // thread so the first real request skips the handshake. Safe to call
-    // multiple times; idempotent after first success.
-    void prewarm(std::string host, uint16_t port = 443);
+    // multiple times; idempotent after first success.  `dial_host`/`dial_port`
+    // override the TCP target while TLS stays pinned on `host` (mirrors the
+    // Request fields — see the SSH-tunnel use case there).
+    void prewarm(std::string host, uint16_t port = 443,
+                 std::string dial_host = "", uint16_t dial_port = 0);
 
 private:
     struct Impl;
