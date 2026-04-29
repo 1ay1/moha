@@ -194,7 +194,17 @@ std::string sh_squote(std::string_view v) {
     // Remote command: point moha at the tunnelled SOCKS5 proxy, exec it.
     // `exec` matters — without it the user's $SHELL stays around as a
     // parent process and signal forwarding gets one extra hop wrong.
-    std::string remote_cmd = "MOHA_SOCKS_PROXY=localhost:1080";
+    //
+    // MAYA_FORCE_SYNC=1: force maya to emit DEC 2026 (begin-sync-update)
+    // around every inline frame.  We also forward terminal-identifying
+    // env vars below so maya's auto-detect can fire, but plenty of
+    // common terminals (bare xterm, st, urxvt, custom builds) leave no
+    // identifying marker and fall through env-detect even though they
+    // honor 2026 just fine.  Modern terminals silently ignore unknown
+    // private CSIs, so forcing it here is no-op on the unlucky few and
+    // a cure for the visible "new turn appears at the bottom then
+    // realigns" flicker on the rest.
+    std::string remote_cmd = "MOHA_SOCKS_PROXY=localhost:1080 MAYA_FORCE_SYNC=1";
 
     // Forward terminal-identifying env vars from this laptop to the
     // remote shell so the remote moha can tell whether the user's
