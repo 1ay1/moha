@@ -7,7 +7,7 @@
 A native terminal client for Claude. C++26, no Electron / Node / Python in the loop.
 
 <p align="center">
-  <img src="moha.png" alt="moha" />
+  <img src="moha.gif" alt="moha — a real turn streaming, with a tool call landing" />
 </p>
 
 > A C++26 alternative to `claude-code` focused on three things the official CLI doesn't try to do: a single 9 MB static binary instead of a Node runtime, sandbox-by-default for `bash` (bwrap/sandbox-exec), and a one-command SSH-tunneled airgap mode for hosts that can't reach the internet directly. Same OAuth and `ANTHROPIC_API_KEY` flows; you can switch between the two without re-authing.
