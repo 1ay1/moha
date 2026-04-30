@@ -1,10 +1,14 @@
 # moha
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A native terminal client for Claude. C++26, no Electron / Node / Python in the loop.
 
 <p align="center">
   <img src="moha.png" alt="moha" />
 </p>
+
+> A C++26 alternative to `claude-code` focused on three things the official CLI doesn't try to do: a single 9 MB static binary instead of a Node runtime, sandbox-by-default for `bash` (bwrap/sandbox-exec), and a one-command SSH-tunneled airgap mode for hosts that can't reach the internet directly. Same OAuth and `ANTHROPIC_API_KEY` flows; you can switch between the two without re-authing.
 
 - **One binary.** Statically linked except libc; spawns in milliseconds, no JIT warmup, no GC pauses mid-stream.
 - **Read every line.** The reducer is one `std::visit` over a closed event sum. The permission trust matrix is a `constexpr` function with `static_assert`s — change a policy cell and the build breaks, not a test that nobody runs.
@@ -127,6 +131,21 @@ MOHA_INSECURE=1 moha
 
 Strictly preferable: install your proxy's CA into the system trust store (`/etc/ssl/certs/` on Debian/Ubuntu via `update-ca-certificates`, `/etc/pki/ca-trust/source/anchors/` on Fedora via `update-ca-trust`).  moha picks up the system roots at startup, so a proxy with a trusted-root cert needs no env-var change.
 
+## How it compares
+
+|                            | moha                                  | claude-code                       | aider                               |
+|----------------------------|---------------------------------------|-----------------------------------|-------------------------------------|
+| Language / runtime         | C++26 — single static binary          | TypeScript / Node                 | Python                              |
+| Footprint                  | ~9 MB                                 | npm + Node runtime                | pip + Python runtime                |
+| Bash sandbox by default    | Yes (bwrap / sandbox-exec)            | No                                | No                                  |
+| Workspace boundary on FS   | Yes (`--workspace /` opts out)        | No                                | Per-file allow/deny                 |
+| Air-gapped mode            | Yes (`moha airgap`, SOCKS5 over SSH)  | No                                | No                                  |
+| Inline render (scrollback) | Yes — bottom-anchored, preserves it   | Takes over screen                 | Takes over screen                   |
+| Auth                       | OAuth (Pro/Max) + `ANTHROPIC_API_KEY` | OAuth + `ANTHROPIC_API_KEY`       | per-provider env vars               |
+| Models                     | Claude (Anthropic)                    | Claude (Anthropic)                | many (OpenAI / Anthropic / local …) |
+
+If you want a multi-model agent across providers, aider is excellent. If you want Anthropic's first-party experience with their support behind it, claude-code. moha is the niche pick when you specifically want a sandboxed, single-binary, scrollback-preserving Claude client — or you need to run on an air-gapped host through an SSH tunnel.
+
 ## How it works
 
 Pure-functional update loop: `(Model, Msg) -> (Model, Cmd)`. Strong ID newtypes (`ToolCallId`, `ThreadId`, `OAuthCode`, `PkceVerifier`) — swapping arguments is a compile error, not a debugging session.
@@ -161,4 +180,4 @@ File terminal-rendering bugs with `$TERM`, your terminal emulator name, and a sc
 
 ## License
 
-MIT.
+MIT — see [LICENSE](LICENSE).
