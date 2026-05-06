@@ -444,6 +444,12 @@ maya::Cmd<Msg> finalize_turn(Model& m, StopReason stop_reason) {
     const bool max_tokens_hit = (stop_reason == StopReason::MaxTokens);
     if (!m.d.current.messages.empty()) {
         auto& last = m.d.current.messages.back();
+        // Drain any text still in the smoothing buffer before committing
+        // — message_stop should leave no in-flight bytes invisible.
+        if (last.role == Role::Assistant && !last.pending_stream.empty()) {
+            last.streaming_text += last.pending_stream;
+            last.pending_stream.clear();
+        }
         if (last.role == Role::Assistant && !last.streaming_text.empty()) {
             if (last.text.empty()) last.text = std::move(last.streaming_text);
             else                   last.text += std::move(last.streaming_text);

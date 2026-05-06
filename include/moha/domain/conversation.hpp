@@ -190,6 +190,22 @@ struct Message {
     Role        role = Role::User;
     std::string text;
     std::string streaming_text;
+    // Smoothing buffer. Anthropic's SSE batches deltas at the server's
+    // tokenizer rate — a single content_block_delta can carry 50+ chars,
+    // and several can arrive in one TCP read. If we appended each
+    // delta straight to `streaming_text` the user would see big jumps
+    // every frame instead of the cursor-paced animation that makes
+    // streaming feel alive.
+    //
+    // StreamTextDelta now appends to `pending_stream` instead. The
+    // Tick handler drips bytes from `pending_stream` into
+    // `streaming_text` at a rate that's fast enough to keep up with
+    // realistic generation speeds (≥ 32 chars / 33 ms tick = ~960 c/s,
+    // ~3× a typical Sonnet stream) while still revealing small
+    // increments when chunks arrive in bursts.  The view renders
+    // `streaming_text` exactly as before — the smoothing is invisible
+    // to the renderer.
+    std::string pending_stream;
     std::vector<ToolUse> tool_calls;
     std::chrono::system_clock::time_point timestamp = std::chrono::system_clock::now();
     std::optional<CheckpointId> checkpoint_id;

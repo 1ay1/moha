@@ -127,11 +127,18 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             }
             if (!m.d.current.messages.empty()
                 && m.d.current.messages.back().role == Role::Assistant) {
-                auto& st = m.d.current.messages.back().streaming_text;
-                if (st.size() < detail::kMaxStreamingBytes) {
-                    const auto room = detail::kMaxStreamingBytes - st.size();
-                    if (e.text.size() <= room) st += e.text;
-                    else                       st.append(e.text, 0, room);
+                // Append to the smoothing buffer rather than directly to
+                // streaming_text — the Tick handler drips it out at a
+                // controlled rate so server bursts don't visually jump.
+                // Cap is on the COMBINED visible + buffered size so
+                // smoothing can't push past the per-message budget.
+                auto& msg = m.d.current.messages.back();
+                const std::size_t in_flight =
+                    msg.streaming_text.size() + msg.pending_stream.size();
+                if (in_flight < detail::kMaxStreamingBytes) {
+                    const auto room = detail::kMaxStreamingBytes - in_flight;
+                    if (e.text.size() <= room) msg.pending_stream += e.text;
+                    else                       msg.pending_stream.append(e.text, 0, room);
                 }
             }
             return done(std::move(m));
@@ -302,11 +309,17 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
 
             // Move any partial streaming_text into the message body so
             // the assistant's in-flight output isn't lost regardless of
-            // what we do next (retry or terminal).
+            // what we do next (retry or terminal). Drain the smoothing
+            // buffer first so the error path preserves every received
+            // byte even if the Tick pacer hadn't revealed it yet.
             Message* last = nullptr;
             if (!m.d.current.messages.empty()
                 && m.d.current.messages.back().role == Role::Assistant) {
                 last = &m.d.current.messages.back();
+                if (!last->pending_stream.empty()) {
+                    last->streaming_text += last->pending_stream;
+                    last->pending_stream.clear();
+                }
                 if (!last->streaming_text.empty()) {
                     if (last->text.empty()) last->text = std::move(last->streaming_text);
                     else                    last->text += std::move(last->streaming_text);
@@ -929,6 +942,43 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
             float dt = std::chrono::duration<float>(tick_gap).count();
             m.s.last_tick = now;
             if (m.s.active()) m.s.spinner.advance(dt);
+
+            // ── Streaming-text smoothing pacer ────────────────────────
+            // Drip from pending_stream → streaming_text on every tick so
+            // big server bursts (Anthropic's content_block_delta can carry
+            // 50-100+ chars at once) reveal smoothly at cursor pace
+            // instead of jumping in.  Drip rate scales with the buffer:
+            // a small buffer drains in one tick (no smoothing penalty
+            // for slow streams), a large one drains in chunks of ~32-128
+            // chars per tick (~960-3800 char/sec at 33 ms), comfortably
+            // faster than any realistic model generation rate so the
+            // buffer can't accumulate indefinitely.
+            if (!m.d.current.messages.empty()
+                && m.d.current.messages.back().role == Role::Assistant)
+            {
+                auto& msg = m.d.current.messages.back();
+                if (!msg.pending_stream.empty()) {
+                    constexpr std::size_t kDripMin = 32;
+                    constexpr std::size_t kDripMax = 256;
+                    // Drain ~⅛ of the buffer per tick, clamped — small
+                    // buffers drain in one tick; large bursts smooth
+                    // out over a few frames without falling far behind.
+                    std::size_t drip = std::clamp(
+                        msg.pending_stream.size() / 8, kDripMin, kDripMax);
+                    drip = std::min(drip, msg.pending_stream.size());
+
+                    // Avoid splitting a UTF-8 codepoint at the drip
+                    // boundary — extend the drip forward through any
+                    // continuation bytes so partial multi-byte glyphs
+                    // never appear in streaming_text.
+                    while (drip < msg.pending_stream.size() &&
+                           (static_cast<unsigned char>(msg.pending_stream[drip]) & 0xC0) == 0x80) {
+                        ++drip;
+                    }
+                    msg.streaming_text.append(msg.pending_stream, 0, drip);
+                    msg.pending_stream.erase(0, drip);
+                }
+            }
 
             // ── Stream-stall watchdog ──────────────────────────────────
             // The transport now emits `StreamHeartbeat` on SSE `ping`
