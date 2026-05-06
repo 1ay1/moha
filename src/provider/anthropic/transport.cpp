@@ -198,6 +198,15 @@ struct SseState {
 // is small even on busy streams.
 constexpr std::size_t kSseCompactThreshold = 64 * 1024;
 
+// Hard ceiling on the multi-line `data:` accumulator within a single SSE
+// event. Real Anthropic frames are 1-10 KB; 4 MiB is generously past the
+// largest content_block_delta we've ever observed and several orders of
+// magnitude under what would matter for memory pressure. A misbehaving
+// or malicious server emitting an unbounded data: stream would otherwise
+// fill `data_accum` until OOM. When the cap is hit we drop the in-flight
+// event without dispatching it; the next blank line resets the accumulator.
+constexpr std::size_t kSseDataAccumMax = 4 * 1024 * 1024;
+
 struct StreamCtx {
     EventSink sink;
     SseState sse;
@@ -412,6 +421,17 @@ void feed_sse(StreamCtx& ctx, const char* data, size_t len) {
         } else if (line.starts_with("data:")) {
             std::size_t s = 5;
             while (s < line.size() && line[s] == ' ') ++s;
+            const std::size_t add = (line.size() - s) +
+                (ctx.sse.data_accum.empty() ? 0 : 1);
+            if (ctx.sse.data_accum.size() + add > kSseDataAccumMax) {
+                // Defensive cap: drop the in-flight event silently rather
+                // than grow the accumulator without bound.  The next blank
+                // line will reset event_name + data_accum and we'll
+                // resume cleanly on the following event.
+                ctx.sse.data_accum.clear();
+                ctx.sse.event_name.clear();
+                continue;
+            }
             if (!ctx.sse.data_accum.empty()) ctx.sse.data_accum.push_back('\n');
             ctx.sse.data_accum.append(line.data() + s, line.size() - s);
         }

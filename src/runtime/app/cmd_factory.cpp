@@ -240,12 +240,13 @@ Cmd<Msg> kick_pending_tools(Model& m) {
         });
         if (has_results) {
             // Tool results are going back to the model — a fresh sub-turn
-            // is about to start on the same assistant message. This is a
-            // natural slice point: tool-heavy turns can grow the transcript
-            // several messages in one logical "turn" from the user's POV,
-            // and the submit_message virtualization hook never sees those.
-            // Slicing here keeps the live canvas bounded even inside a
-            // single long multi-tool assistant turn.
+            // is about to start. We keep ONE assistant Message for the
+            // entire agent action: the next API round's text appends to
+            // last.streaming_text, its tool_calls extend last.tool_calls.
+            // The view sees a single Message naturally rendering as one
+            // Turn with one merged ACTIONS panel, no view-layer fusion
+            // gymnastics, no mid-stream layout drift.  message_stop
+            // joins rounds with a "\n\n" separator when committing.
             auto virt = detail::maybe_virtualize(m);
             // ExecutingTool → Streaming (post-tool sub-turn). Active
             // ctx flows through: cancel token's still alive (the
@@ -253,9 +254,6 @@ Cmd<Msg> kick_pending_tools(Model& m) {
             // SSE), retry counters preserved.
             auto ctx = take_active_ctx(std::move(m.s.phase));
             m.s.phase = phase::Streaming{std::move(ctx).value()};
-            Message placeholder;
-            placeholder.role = Role::Assistant;
-            m.d.current.messages.push_back(std::move(placeholder));
             if (!virt.is_none()) cmds.push_back(std::move(virt));
             cmds.push_back(launch_stream(m));
         } else {
@@ -284,7 +282,14 @@ Cmd<Msg> fetch_models() {
 }
 
 Cmd<Msg> open_browser_async(std::string url) {
-    return Cmd<Msg>::task([url = std::move(url)](std::function<void(Msg)>) {
+    // task_isolated rather than task: opening a browser shells out
+    // through `posix_spawn` / `ShellExecute`.  Both are typically
+    // fast, but a wedged GUI session, a hung WindowServer, or a
+    // bizarre default-opener can block the call indefinitely.  An
+    // isolated thread isolates the wedge from the shared BG pool so
+    // other tasks (HTTP, persistence) don't starve.
+    return Cmd<Msg>::task_isolated([url = std::move(url)]
+                                   (std::function<void(Msg)>) {
         // No dispatch — the reducer doesn't care whether the browser
         // launched. The user can always paste auth_url manually from
         // the modal if their default opener is broken.

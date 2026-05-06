@@ -445,8 +445,16 @@ maya::Cmd<Msg> finalize_turn(Model& m, StopReason stop_reason) {
     if (!m.d.current.messages.empty()) {
         auto& last = m.d.current.messages.back();
         if (last.role == Role::Assistant && !last.streaming_text.empty()) {
-            if (last.text.empty()) last.text = std::move(last.streaming_text);
-            else                   last.text += std::move(last.streaming_text);
+            if (last.text.empty()) {
+                last.text = std::move(last.streaming_text);
+            } else {
+                // Multi-round agent turn: separate rounds' prose with a
+                // markdown paragraph break so the rendered output reads
+                // as continuous prose instead of "Let me explore...Now
+                // reading..." run together.
+                last.text.append("\n\n");
+                last.text += std::move(last.streaming_text);
+            }
             std::string{}.swap(last.streaming_text);
         }
         // Flush any tool_calls whose StreamToolUseEnd never fired — Anthropic

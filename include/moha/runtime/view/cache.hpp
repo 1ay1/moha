@@ -51,4 +51,20 @@ struct TurnConfigCache {
 [[nodiscard]] TurnConfigCache& turn_config_cache(const ThreadId& tid,
                                                  std::size_t msg_idx);
 
+/// Drop every cached entry for `tid`.  Call from the update path on
+/// thread close / delete so the per-thread render caches don't leak
+/// across the lifetime of the process — without this the maps grow
+/// unbounded as the user opens and closes threads.
+void evict_thread(const ThreadId& tid);
+
+/// Drop a specific (thread, message) entry.  Useful when a message is
+/// edited or deleted and its cached Element is no longer valid.
+void evict_message(const ThreadId& tid, std::size_t msg_idx);
+
+/// LRU bound — applied opportunistically on every access.  Keeps the
+/// cache from growing past the configured number of (thread, message)
+/// entries.  Default cap is generous (a few hundred turns); override
+/// only if you know you need a different policy.
+void set_cache_capacity(std::size_t max_entries) noexcept;
+
 } // namespace moha::ui
