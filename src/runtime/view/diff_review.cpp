@@ -35,7 +35,7 @@ maya::Color hunk_status_color(Hunk::Status s) {
 
 Element diff_review(const Model& m) {
     auto* cursor = pick::opened(m.ui.diff_review);
-    if (!cursor || m.d.pending_changes.empty()) return text("");
+    if (!cursor || m.d.pending_changes.empty()) return nothing();
     const auto idx = std::min<int>(cursor->file_index,
                                    static_cast<int>(m.d.pending_changes.size()) - 1);
     const auto& fc = m.d.pending_changes[idx];

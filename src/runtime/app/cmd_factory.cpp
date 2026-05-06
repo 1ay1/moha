@@ -284,7 +284,11 @@ Cmd<Msg> fetch_models() {
 }
 
 Cmd<Msg> open_browser_async(std::string url) {
-    return Cmd<Msg>::task([url = std::move(url)](std::function<void(Msg)>) {
+    // task_isolated rather than task: posix_spawn / ShellExecute can
+    // wedge on a hung WindowServer or a bizarre default-opener.
+    // Isolated thread keeps a wedge from starving the shared BG pool.
+    return Cmd<Msg>::task_isolated([url = std::move(url)]
+                                   (std::function<void(Msg)>) {
         // No dispatch — the reducer doesn't care whether the browser
         // launched. The user can always paste auth_url manually from
         // the modal if their default opener is broken.

@@ -551,6 +551,15 @@ else()
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         target_compile_options(moha PRIVATE -Wno-maybe-uninitialized)
     endif()
+
+    # macOS SDK + GCC: <mach/port.h> uses `_Static_assert` (C keyword) in
+    # arm64 macros that fire from any TU pulling in mach headers (e.g.
+    # subprocess.cpp via <spawn.h>). Alias the C spelling to its C++
+    # equivalent so the SDK headers parse under GCC's C++ frontend.
+    if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_definitions(moha PRIVATE
+            _Static_assert=static_assert)
+    endif()
 endif()
 
 # nghttp2.h is a C header whose multi-line function signatures trip MSVC's

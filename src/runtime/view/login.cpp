@@ -130,12 +130,12 @@ Element panel_api_key(const login::ApiKeyInput& s) {
 } // namespace
 
 Element login_modal(const Model& m) {
-    if (!login::is_open(m.ui.login)) return text("");
+    if (!login::is_open(m.ui.login)) return nothing();
 
     Element body = std::visit([](const auto& s) -> Element {
         using T = std::decay_t<decltype(s)>;
         if constexpr (std::same_as<T, login::Closed>) {
-            return text("");
+            return nothing();
         } else if constexpr (std::same_as<T, login::Picking>) {
             return panel_picking(false, "");
         } else if constexpr (std::same_as<T, login::OAuthCode>) {
