@@ -58,6 +58,7 @@
 #include "agentty/runtime/rag_settings.hpp"
 #include "agentty/runtime/settings_list.hpp"
 #include "agentty/runtime/fork_picker.hpp"
+#include "agentty/runtime/form.hpp"
 
 namespace agentty::ui::overlay {
 
@@ -72,8 +73,12 @@ struct ThreadList      : pick::OpenAt {};
 // representation there; Smart Mode's rows are a fixed, named set, and
 // spelling them as an int is what let the cursor drift onto rows that do not
 // exist (see smart::OverlayRow for the full post-mortem).
+// Smart Mode carries its FORM, not an int cursor. Row identity, navigation,
+// the env-pin lock and the picker hand-off all come from the shared form
+// layer, so this pane behaves identically to Retrieval and to every future
+// config surface — and an out-of-range cursor is not representable.
 struct SmartMode {
-    smart::OverlayRow row = smart::OverlayRow::Master;
+    agentty::form::Form form;
 };
 struct CommandPalette  : agentty::palette::Open {};
 struct Mention         : agentty::mention::Open {};

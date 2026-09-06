@@ -575,19 +575,9 @@ private:
 Config Config::from_env() {
     Config c;
     if (const char* d = std::getenv("AGENTTY_DOCS_DIR"); d && d[0]) c.docs_root = d;
-    if (const char* m = std::getenv("AGENTTY_EMBED_MODEL"); m && m[0]) c.embed_model = m;
-    if (const char* h = std::getenv("AGENTTY_OLLAMA_HOST"); h && h[0]) {
-        std::string hs{h};
-        if (auto colon = hs.rfind(':'); colon != std::string::npos) {
-            c.embed_host = hs.substr(0, colon);
-            try {
-                int p = std::stoi(hs.substr(colon + 1));
-                if (p > 0 && p <= 65535) c.embed_port = static_cast<std::uint16_t>(p);
-            } catch (...) { /* keep default port */ }
-        } else {
-            c.embed_host = hs;
-        }
-    }
+    // Embedder selection + endpoint, including the legacy AGENTTY_OLLAMA_HOST /
+    // AGENTTY_EMBED_MODEL names. One owner for the parsing.
+    ::agentty::rag::embed::apply_env(c.embed);
     c.skills        = truthy_default_on("AGENTTY_RAG_SKILLS");
     c.memory        = truthy_default_on("AGENTTY_RAG_MEMORY");
     c.mcp_resources = truthy_default_off("AGENTTY_RAG_MCP");
@@ -639,14 +629,37 @@ Config Config::from_env() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Dense-embedder availability. Three states, spelled as three types:
+//
+//   Unprobed    — no probe has run yet for the current config.
+//   Ready       — an embedder answered; carries the MEASURED dimension, the
+//                 vector-space identity, and the observed latency.
+//   Unavailable — carries WHY. This is the whole point: retrieval silently
+//                 degrading to BM25 with no user-visible signal was this
+//                 subsystem's worst failure mode.
+namespace dense {
+struct Unprobed {};
+struct Ready {
+    std::uint64_t identity   = 0;
+    std::uint32_t dim        = 0;
+    int           latency_ms = 0;
+};
+struct Unavailable { std::string reason; };
+}  // namespace dense
+using DenseState = std::variant<dense::Unprobed, dense::Ready, dense::Unavailable>;
+
+// ─────────────────────────────────────────────────────────────────────────
 struct Retriever::Impl {
     Config cfg = Config::from_env();
 
     std::mutex mu;
     ::rag::Engine engine;
     bool   embedder_ready = false;
-    bool   ollama_probed = false;
-    bool   ollama_ready = false;
+    // The dense-embedder state machine. Was `ollama_probed` + `ollama_ready`:
+    // two bools encoding three states, with the invariants living only in
+    // comments. Now a sum type whose failure arm carries the reason string the
+    // picker and `agentty diagnostics` render.
+    DenseState dense{dense::Unprobed{}};
     // Freshness of the docs index: (root, fingerprint) it was built for.
     std::string indexed_root;
     std::uint64_t indexed_fp = 0;
@@ -700,7 +713,7 @@ struct Retriever::Impl {
     std::jthread warmer;
 
     Impl() : engine(make_engine_config()) {
-        probe_ollama();
+        probe_embedder();
         attach_embedder();
         apply_pipeline(engine);
         install_default_generator();
@@ -711,14 +724,23 @@ struct Retriever::Impl {
     }
 
     // Install a ZERO-COST local generator for HyDE / multi-query: a tiny model
-    // on the SAME Ollama we embed with. No cloud tokens, no auth, no provider
-    // plumbing. If Ollama isn't up, the call fails fast and HyDE/expand no-op
-    // (plain hybrid still runs) — so this is free when unavailable and a recall
-    // win when present. An explicit set_generator() overrides it.
+    // on a local Ollama. No cloud tokens, no auth, no provider plumbing. If
+    // Ollama isn't up the call fails fast and HyDE/expand no-op (plain hybrid
+    // still runs) — free when unavailable, a recall win when present. An
+    // explicit set_generator() overrides it.
+    //
+    // Note this is deliberately INDEPENDENT of the embedding backend: you can
+    // embed through a corporate endpoint while a local Ollama (if any) does
+    // query expansion. It dials the embed endpoint only when that endpoint is
+    // itself an Ollama, otherwise the historical localhost default.
     void install_default_generator() {
-        std::string host = cfg.embed_host;
-        std::uint16_t port = cfg.embed_port;
-        std::string model = cfg.gen_model;
+        namespace eb = ::agentty::rag::embed;
+        const bool embed_is_ollama =
+            cfg.embed.backend == eb::Backend::Ollama
+            || cfg.embed.backend == eb::Backend::Auto;
+        std::string   host  = embed_is_ollama ? cfg.embed.host : std::string{"127.0.0.1"};
+        std::uint16_t port  = embed_is_ollama ? cfg.embed.port : std::uint16_t{11434};
+        std::string   model = cfg.gen_model;
         generator = [host, port, model](const std::string& prompt, int n)
                         -> std::vector<std::string> {
             std::vector<std::string> outs;
@@ -824,31 +846,68 @@ struct Retriever::Impl {
         eng.with_pipeline(std::move(p));
     }
 
-    ::rag::plugin::Json ollama_spec() const {
-        return {
-            {"type", "ollama"}, {"model", cfg.embed_model},
-            {"host", cfg.embed_host}, {"port", cfg.embed_port},
-            {"timeout_ms", 1200},
-        };
+    ::rag::plugin::Json embedder_spec() const {
+        const auto s = ::agentty::rag::embed::spec_json(effective_embed());
+        return s ? ::rag::plugin::Json::parse(*s) : ::rag::plugin::Json{};
     }
 
-    void probe_ollama() {
-        if (ollama_probed) return;
-        ollama_probed = true;
-        try {
-            ::rag::Engine probe;
-            if (!probe.with_embedder_spec(ollama_spec())) return;
-            auto vector = probe.corpus().embed_text("agentty retrieval availability probe");
-            ollama_ready = vector.has_value() && !vector->empty();
-        } catch (...) { ollama_ready = false; }
-        ::agentty::util::dbglog("rag.embed",
-            ollama_ready ? "ollama ready" : "ollama unavailable; using BM25");
+    // The embed config as it should be DIALLED right now. Auto resolves to
+    // Ollama (the historical default); everything else is taken literally.
+    [[nodiscard]] ::agentty::rag::embed::EmbedConfig effective_embed() const {
+        return cfg.embed;
+    }
+
+    // Probe the configured embedder once per config. Replaces the old
+    // `ollama_probed`/`ollama_ready` bool pair: the outcome is a sum type that
+    // CARRIES ITS REASON, so a failure can be shown in the UI instead of
+    // silently degrading retrieval to BM25 forever (the single worst failure
+    // mode this subsystem had).
+    void probe_embedder() {
+        if (!std::holds_alternative<dense::Unprobed>(dense)) return;
+        probe_embedder_unlocked();
+    }
+
+    // The probe itself, with no "already probed?" guard and no expectation
+    // that `mu` is held. apply_config() calls this with the lock RELEASED,
+    // because a probe dials a network endpoint (or memory-maps a model file)
+    // and holding the retriever's mutex across that stalls every reader,
+    // including the UI thread's status row.
+    //
+    // `cfg.embed` is read into a local before the call and the result written
+    // back after, so the unlocked window touches no shared state.
+    void probe_embedder_unlocked() {
+        namespace eb = ::agentty::rag::embed;
+        const auto ec = effective_embed();
+        if (ec.backend == eb::Backend::Disabled) {
+            dense = dense::Unavailable{"embeddings disabled"};
+            ::agentty::util::dbglog("rag.embed", "disabled; using BM25");
+            return;
+        }
+        auto r = eb::probe(ec);
+        if (const auto* ok = std::get_if<eb::ProbeOk>(&r)) {
+            // The MEASURED dimension is authoritative — pin it so every
+            // subsequent spec (and the identity hash) carries it.
+            cfg.embed.dim = ok->dim;
+            dense = dense::Ready{eb::identity(cfg.embed), ok->dim, ok->latency_ms};
+            ::agentty::util::dbglog("rag.embed",
+                "ready: " + eb::describe(cfg.embed) + " ("
+                + std::to_string(ok->dim) + "d)");
+        } else {
+            dense = dense::Unavailable{std::get<eb::ProbeErr>(r).why};
+            ::agentty::util::dbglog("rag.embed",
+                "unavailable: " + std::get<dense::Unavailable>(dense).reason
+                + "; using BM25");
+        }
+    }
+
+    [[nodiscard]] bool dense_ready() const noexcept {
+        return std::holds_alternative<dense::Ready>(dense);
     }
 
     void attach_embedder() {
         embedder_ready = false;
-        if (!ollama_ready) return;
-        embedder_ready = engine.with_embedder_spec(ollama_spec()).has_value();
+        if (!dense_ready()) return;
+        embedder_ready = engine.with_embedder_spec(embedder_spec()).has_value();
     }
 
     static void hash_text(std::uint64_t& h, std::string_view value) {
@@ -895,7 +954,7 @@ struct Retriever::Impl {
         if (warm_initialized
             && sfp == warm_skills_gen && mfp == warm_memory_gen) return;
         warm_engine = ::rag::Engine(make_engine_config());
-        if (ollama_ready) (void)warm_engine.with_embedder_spec(ollama_spec());
+        if (dense_ready()) (void)warm_engine.with_embedder_spec(embedder_spec());
         if (cfg.skills)
             for (const auto& s : tools::skills::all())
                 if (!s.body.empty())
@@ -1030,11 +1089,25 @@ struct Retriever::Impl {
     }
 
     // Where the persisted docs index lives (under the workspace .agentty/).
+    // The persisted index path carries the EMBEDDER IDENTITY. Two reasons,
+    // one of them a correctness bug this fixes:
+    //
+    //  1. A .ragdb is only reusable by an embedder producing the SAME vector
+    //     geometry. The manifest used to record `embed_model` — a NAME, which
+    //     stops identifying the space the moment the backend is pluggable
+    //     ("nomic-embed-text" served by Ollama vs loaded in-process as GGUF
+    //     differ in pooling/normalization). Reopening one with the other gave
+    //     silently wrong cosines: no crash, no warning, just bad retrieval.
+    //
+    //  2. Because it is in the FILENAME rather than only the manifest,
+    //     switching backends SWITCHES between warm indexes instead of
+    //     invalidating one — free A/B between a local model and an endpoint.
     fs::path ragdb_path() {
         std::error_code ec;
         auto cwd = fs::current_path(ec);
         if (ec) return {};
-        return cwd / ".agentty" / "rag_docs.ragdb";
+        return cwd / ".agentty"
+             / ("rag_docs." + ::agentty::rag::embed::identity_tag(cfg.embed) + ".ragdb");
     }
 
     fs::path ragmeta_path() {
@@ -1052,10 +1125,13 @@ struct Retriever::Impl {
         auto saved = engine.save(db.string());
         if (!saved) return;
         ::rag::plugin::Json j = {
-            {"version", 2}, {"root", indexed_root}, {"docs_fp", indexed_fp},
+            {"version", 3}, {"root", indexed_root}, {"docs_fp", indexed_fp},
             {"skills_fp", skills_gen}, {"memory_fp", memory_gen},
-            {"contextual", cfg.contextual}, {"embed_model", cfg.embed_model},
-            {"dense", ollama_ready},
+            {"contextual", cfg.contextual},
+            // Identity of the VECTOR SPACE, not the model's name. See
+            // ragdb_path() for why a name is not sufficient.
+            {"embed_identity", ::agentty::rag::embed::identity(cfg.embed)},
+            {"dense", dense_ready()},
         };
         atomic_write(meta, j.dump());
     }
@@ -1078,14 +1154,15 @@ struct Retriever::Impl {
             const auto current_docs = manifest_fingerprint(current_files);
             const auto current_skills = skills_fingerprint();
             const auto current_memory = memory_fingerprint();
-            if (j.value("version", 0) != 2
+            if (j.value("version", 0) != 3
                 || j.value("root", std::string{}) != root_s
                 || j.value("docs_fp", std::uint64_t{}) != current_docs
                 || j.value("skills_fp", std::uint64_t{}) != current_skills
                 || j.value("memory_fp", std::uint64_t{}) != current_memory
                 || j.value("contextual", false) != cfg.contextual
-                || j.value("embed_model", std::string{}) != cfg.embed_model
-                || j.value("dense", false) != ollama_ready)
+                || j.value("embed_identity", std::uint64_t{})
+                       != ::agentty::rag::embed::identity(cfg.embed)
+                || j.value("dense", false) != dense_ready())
                 return false;
             auto opened = ::rag::Engine::open(db.string());
             if (!opened) return false;
@@ -1194,10 +1271,14 @@ struct Retriever::Impl {
         return h;
     }
 
+    // Same identity discipline as the docs index — see ragdb_path().
     fs::path code_ragdb_path() const {
         std::error_code ec;
         auto cwd = fs::current_path(ec);
-        return ec ? fs::path{} : cwd / ".agentty" / "rag_code.ragdb";
+        return ec ? fs::path{}
+                  : cwd / ".agentty"
+                        / ("rag_code." + ::agentty::rag::embed::identity_tag(cfg.embed)
+                           + ".ragdb");
     }
 
     fs::path code_meta_path() const {
@@ -1216,12 +1297,13 @@ struct Retriever::Impl {
             ::rag::plugin::Json j;
             in >> j;
             const auto stored = j.value("files", FileManifest{});
-            if (j.value("version", 0) != 1
+            if (j.value("version", 0) != 2
                 || j.value("root", std::string{}) != root.string()
                 || stored != manifest
                 || j.value("contextual", false) != cfg.contextual
-                || j.value("embed_model", std::string{}) != cfg.embed_model
-                || j.value("dense", false) != ollama_ready)
+                || j.value("embed_identity", std::uint64_t{})
+                       != ::agentty::rag::embed::identity(cfg.embed)
+                || j.value("dense", false) != dense_ready())
                 return false;
             auto opened = ::rag::Engine::open(db.string());
             if (!opened) return false;
@@ -1244,9 +1326,10 @@ struct Retriever::Impl {
         fs::create_directories(db.parent_path(), ec);
         if (!code_engine.save(db.string())) return;
         ::rag::plugin::Json j = {
-            {"version", 1}, {"root", code_root}, {"files", code_files},
-            {"contextual", cfg.contextual}, {"embed_model", cfg.embed_model},
-            {"dense", ollama_ready},
+            {"version", 2}, {"root", code_root}, {"files", code_files},
+            {"contextual", cfg.contextual},
+            {"embed_identity", ::agentty::rag::embed::identity(cfg.embed)},
+            {"dense", dense_ready()},
         };
         atomic_write(meta, j.dump());
     }
@@ -1317,8 +1400,8 @@ struct Retriever::Impl {
 
     void attach_code_embedder() {
         code_embedder_ready = false;
-        if (!ollama_ready) return;
-        code_embedder_ready = code_engine.with_embedder_spec(ollama_spec()).has_value();
+        if (!dense_ready()) return;
+        code_embedder_ready = code_engine.with_embedder_spec(embedder_spec()).has_value();
     }
 };
 
@@ -1901,11 +1984,20 @@ void Retriever::shutdown() {
 // proactive*) take effect on the very next call with no rebuild. We take the
 // conservative route: if ANY corpus-affecting field differs, drop all three
 // engines back to cold so refresh_docs/retrieve_code rebuild cleanly. The docs
-// root is preserved (embed_host/port/docs_root are not picker-exposed).
+// root is preserved (docs_root is not picker-exposed). The EMBEDDER is now
+// picker-owned, so unlike docs_root it is taken from the incoming config and
+// a change to it forces a re-probe + cold rebuild.
 void Retriever::apply_config(const Config& cfg) {
     try {
-        std::lock_guard<std::mutex> lock(impl_->mu);
+        std::unique_lock<std::mutex> lock(impl_->mu);
         const Config& old = impl_->cfg;
+        // A different embedder means a different VECTOR SPACE: every persisted
+        // vector is incomparable, so this is always a cold rebuild (and the
+        // .ragdb path changes with the identity, so the old index survives on
+        // disk for when the user switches back).
+        const bool embedder_changed =
+            ::agentty::rag::embed::identity(old.embed)
+                != ::agentty::rag::embed::identity(cfg.embed);
         const bool corpus_changed =
                old.skills        != cfg.skills
             || old.memory        != cfg.memory
@@ -1920,14 +2012,27 @@ void Retriever::apply_config(const Config& cfg) {
             || old.dense_weight  != cfg.dense_weight
             || old.bm25_weight   != cfg.bm25_weight
             || old.persist       != cfg.persist
-            || old.embed_model   != cfg.embed_model;
-        // Preserve the fields the picker never touches so a saved config never
-        // clobbers env-derived infra (docs root, embedder endpoint).
+            || embedder_changed;
+        // Preserve only what the picker genuinely never touches.
         Config next = cfg;
         next.docs_root  = old.docs_root;
-        next.embed_host = old.embed_host;
-        next.embed_port = old.embed_port;
         impl_->cfg = std::move(next);
+        if (embedder_changed) {
+            // Re-probe: the new backend may be unreachable, and its dimension
+            // must be measured rather than inherited from the previous one.
+            //
+            // The probe DIALS A NETWORK ENDPOINT (or memory-maps a model), so
+            // it runs with the lock RELEASED. Holding `mu` across a
+            // multi-second timeout is what made every reader — including the
+            // UI's status row — stall behind it. Readers see the old state
+            // until the new one lands, which is the honest answer while a
+            // probe is in flight.
+            impl_->dense = dense::Unprobed{};
+            lock.unlock();
+            impl_->probe_embedder_unlocked();
+            lock.lock();
+            impl_->install_default_generator();
+        }
         if (corpus_changed) {
             // Cold-start every engine; the pipeline is rebuilt from the new
             // toggles on the next reindex/refresh. Rebuilding the docs engine
@@ -1957,6 +2062,57 @@ void Retriever::apply_config(const Config& cfg) {
 Config Retriever::snapshot_config() const {
     std::lock_guard<std::mutex> lock(impl_->mu);
     return impl_->cfg;
+}
+
+Retriever::EmbedStatus Retriever::embed_status() const {
+    EmbedStatus out;
+
+    // NEVER blocks. This is called from the UI thread to render a status row,
+    // and `mu` is held for the whole of apply_config() — which re-probes the
+    // embedder (a network dial) and cold-rebuilds three engines. A plain
+    // lock_guard here meant the UI froze, animations included, for as long as
+    // a rebuild took.
+    //
+    // A status readout is advisory by nature: if the retriever is busy being
+    // reconfigured, "reconfiguring" IS the true answer, and it costs nothing
+    // to say so. The next frame picks up the real state.
+    std::unique_lock<std::mutex> lock(impl_->mu, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        out.state    = EmbedStatus::State::Unprobed;
+        out.describe = "reconfiguring\xe2\x80\xa6";
+        return out;
+    }
+
+    out.describe = ::agentty::rag::embed::describe(impl_->cfg.embed);
+    std::visit([&](const auto& st) {
+        using T = std::decay_t<decltype(st)>;
+        if constexpr (std::is_same_v<T, dense::Ready>) {
+            out.state      = EmbedStatus::State::Ready;
+            out.dim        = st.dim;
+            out.latency_ms = st.latency_ms;
+        } else if constexpr (std::is_same_v<T, dense::Unavailable>) {
+            out.state  = EmbedStatus::State::Unavailable;
+            out.reason = st.reason;
+        } else {
+            out.state = EmbedStatus::State::Unprobed;
+        }
+    }, impl_->dense);
+    return out;
+}
+
+Retriever::EmbedStatus Retriever::reprobe_embedder() {
+    // Same discipline as apply_config: the probe itself runs UNLOCKED, because
+    // it dials a network endpoint. Only the state write and the re-attach take
+    // the lock, and both are cheap.
+    {
+        std::unique_lock<std::mutex> lock(impl_->mu);
+        impl_->dense = dense::Unprobed{};
+        lock.unlock();
+        impl_->probe_embedder_unlocked();
+        lock.lock();
+        impl_->attach_embedder();
+    }
+    return embed_status();
 }
 
 // ── Learning loop (write side) ─────────────
@@ -2058,12 +2214,11 @@ int run(const std::string& root) {
     try {
         auto cfg = Config::from_env();
         ::rag::Engine engine;
-        ::rag::plugin::Json spec = {
-            {"type", "ollama"}, {"model", cfg.embed_model},
-            {"host", cfg.embed_host}, {"port", cfg.embed_port},
-            {"timeout_ms", 1200}};
         bool have_dense = false;
-        if (engine.with_embedder_spec(spec)) {
+        // Same SSOT the adapter uses — this site used to mint its own
+        // {"type":"ollama"} literal and had already drifted from it.
+        if (const auto spec = ::agentty::rag::embed::spec_json(cfg.embed);
+            spec && engine.with_embedder_spec(::rag::plugin::Json::parse(*spec))) {
             auto probe = engine.corpus().embed_text("rag benchmark availability probe");
             have_dense = probe.has_value() && !probe->empty();
         }
@@ -2295,6 +2450,14 @@ void Retriever::warm_async() {}
 void Retriever::shutdown() {}
 void Retriever::apply_config(const Config& /*cfg*/) {}
 Config Retriever::snapshot_config() const { return Config{}; }
+
+Retriever::EmbedStatus Retriever::embed_status() const {
+    EmbedStatus s;
+    s.state  = EmbedStatus::State::Unavailable;
+    s.reason = "retrieval engine (rag-cpp) is not built on this platform";
+    return s;
+}
+Retriever::EmbedStatus Retriever::reprobe_embedder() { return embed_status(); }
 
 namespace feedback {
 void note_surfaced(const std::vector<std::string>& /*paths*/) {}

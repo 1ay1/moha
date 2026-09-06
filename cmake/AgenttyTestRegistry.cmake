@@ -135,6 +135,9 @@ function(agentty_test name)
     # -flto=auto init-order hazard that bit agentty_tests). LTO stays on the
     # shipped `agentty` only.
     set_target_properties(${name} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    # And no module scanning: it makes every TU uncacheable by ccache (the scan
+    # adds -fmodule-mapper, which ccache rejects). See agentty_objlib().
+    set_target_properties(${name} PROPERTIES CXX_SCAN_FOR_MODULES OFF)
     if(T_UNIX_LIBS AND UNIX AND NOT APPLE)
         target_link_libraries(${name} PRIVATE ${T_UNIX_LIBS})
     endif()
@@ -252,6 +255,9 @@ function(agentty_finalize_tests)
         ${AGENTTY_SHARED_OBJECTS}
         $<TARGET_OBJECTS:agentty_acp_obj>)   # acp_integration_test needs AgentServer
     _agentty_test_link_full(agentty_tests)
+    # No module scanning: it makes every TU uncacheable by ccache. This binary
+    # holds ~90 test TUs, so it is where the hit rate matters most.
+    set_target_properties(agentty_tests PROPERTIES CXX_SCAN_FOR_MODULES OFF)
     target_link_libraries(agentty_tests PRIVATE doctest::doctest)
     if(TARGET acp::acp)
         target_link_libraries(agentty_tests PRIVATE acp::acp)

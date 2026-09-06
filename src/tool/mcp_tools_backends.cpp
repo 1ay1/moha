@@ -34,6 +34,8 @@
 #include "agentty/provider/wire.hpp"
 
 #include "agentty/rag/rag_adapter.hpp"
+#include "agentty/rag/embed_secret.hpp"
+#include <thread>
 #include "agentty/io/persistence.hpp"
 #include "agentty/store/store.hpp"
 
@@ -253,8 +255,8 @@ public:
 //   reranked, +N variants, confidence) so no signal is lost when the
 //   shell renders the result.
 // Map a persisted store::RagConfig onto a live rag::Config, preserving the
-// infra fields the picker never exposes (docs root, embedder endpoint, embed
-// model) from the given base (env-derived) config.
+// infra fields the picker never exposes (docs root) from the given base
+// (env-derived) config.
 static ::agentty::rag::Config rag_config_from_settings(
         const store::RagConfig& s, ::agentty::rag::Config base) {
     base.skills          = s.skills;
@@ -265,6 +267,11 @@ static ::agentty::rag::Config rag_config_from_settings(
     base.mmr             = s.mmr;
     base.stitch          = s.stitch;
     base.autocut         = s.autocut;
+    base.mmr_lambda          = s.mmr_lambda;
+    base.dedup_threshold     = s.dedup_threshold;
+    base.autocut_sensitivity = s.autocut_sensitivity;
+    base.dense_weight        = s.dense_weight;
+    base.bm25_weight         = s.bm25_weight;
     base.prf             = s.prf;
     base.corrective      = s.corrective;
     base.graph           = s.graph;
@@ -278,6 +285,28 @@ static ::agentty::rag::Config rag_config_from_settings(
     base.proactive          = s.proactive;
     base.proactive_min_conf = s.proactive_min_conf;
     base.proactive_bytes    = s.proactive_bytes;
+
+    // Embeddings. An empty backend id means the user never opened the pane,
+    // so the env-derived embed config stands untouched.
+    if (!s.embed_backend.empty()) {
+        namespace eb = ::agentty::rag::embed;
+        auto& e = base.embed;
+        e.backend = eb::backend_from_id(s.embed_backend);
+        if (!s.embed_model.empty())      e.model          = s.embed_model;
+        if (!s.embed_host.empty())       e.host           = s.embed_host;
+        if (s.embed_port != 0)           e.port           = s.embed_port;
+        e.tls            = s.embed_tls;
+        e.path           = s.embed_path;
+        e.model_path     = s.embed_model_path;
+        e.tokenizer_path = s.embed_tokenizer_path;
+        e.dim            = s.embed_dim;
+        // The credential never round-trips through settings.json; it is
+        // fetched from the keystore/sealed store keyed by endpoint.
+        if (eb::needs_api_key(e.backend)) {
+            if (auto key = eb::load_key(eb::endpoint_key(e)); !key.empty())
+                e.api_key = std::move(key);
+        }
+    }
     return base;
 }
 
@@ -307,10 +336,76 @@ static ::agentty::rag::Retriever& shared_retriever() {
 // Live-apply a RagConfig from the running app (the RAG settings picker's
 // commit path). Thread-safe; rebuilds indexes lazily on the next retrieve.
 void rag_apply_settings(const store::RagConfig& s) {
+    // NEVER BLOCKS. apply_config() takes the retriever's mutex, re-probes the
+    // embedder when the vector space changed (a network dial with a
+    // multi-second timeout) and cold-rebuilds three engines.
+    //
+    // This is called from REDUCERS — the UI thread, between two frames — so
+    // doing that work synchronously froze the render loop, animations
+    // included. Making every caller remember to wrap it in a Cmd is a rule
+    // that will be forgotten; making the function itself async is a property
+    // that cannot be.
+    //
+    // Detached rather than queued: applying settings is idempotent and
+    // last-writer-wins, so a superseded apply doing redundant work is
+    // harmless, and the retriever's own mutex serialises them.
     try {
-        auto& r = shared_retriever();
-        r.apply_config(rag_config_from_settings(s, r.snapshot_config()));
-    } catch (...) { /* best-effort */ }
+        std::thread([s] {
+            try {
+                auto& r = shared_retriever();
+                r.apply_config(rag_config_from_settings(s, r.snapshot_config()));
+            } catch (...) { /* best-effort */ }
+        }).detach();
+    } catch (...) { /* thread creation failed: skip the apply, never block */ }
+}
+
+RagEmbedStatus rag_embed_status() {
+    RagEmbedStatus out;
+    try {
+        const auto s = shared_retriever().embed_status();
+        using S = ::agentty::rag::Retriever::EmbedStatus::State;
+        out.state = s.state == S::Ready       ? RagEmbedStatus::State::Ready
+                  : s.state == S::Unavailable ? RagEmbedStatus::State::Unavailable
+                                              : RagEmbedStatus::State::Unprobed;
+        out.dim        = s.dim;
+        out.latency_ms = s.latency_ms;
+        out.reason     = s.reason;
+        out.describe   = s.describe;
+    } catch (...) {
+        out.state  = RagEmbedStatus::State::Unavailable;
+        out.reason = "retriever unavailable";
+    }
+    return out;
+}
+
+RagProbeOutcome rag_probe_embedder(const store::RagConfig& s, const std::string& api_key) {
+    namespace eb = ::agentty::rag::embed;
+    RagProbeOutcome out;
+    try {
+        // Build the candidate config WITHOUT touching the live retriever: the
+        // user is testing a config they have not committed, and a failed probe
+        // must not degrade the retrieval they currently have working.
+        ::agentty::rag::Config base;
+        eb::apply_env(base.embed);
+        auto cfg = rag_config_from_settings(s, base);
+        if (!api_key.empty()) cfg.embed.api_key = api_key;
+        // Never trust a carried-over dimension: measuring it is the point.
+        cfg.embed.dim = 0;
+
+        auto r = eb::probe(cfg.embed);
+        if (const auto* ok = std::get_if<eb::ProbeOk>(&r)) {
+            out.ok         = true;
+            out.dim        = ok->dim;
+            out.latency_ms = ok->latency_ms;
+        } else {
+            out.error = std::get<eb::ProbeErr>(r).why;
+        }
+    } catch (const std::exception& e) {
+        out.error = e.what();
+    } catch (...) {
+        out.error = "unknown error while probing";
+    }
+    return out;
 }
 
 // Prompt teardown of the retriever's background warm. Without this the warm

@@ -17,7 +17,7 @@
 #include "agentty/runtime/settings_list.hpp"
 #include "agentty/runtime/settings_items.hpp"
 
-#include <maya/widget/picker.hpp>
+#include <maya/widget/panel.hpp>
 
 #include <string>
 
@@ -88,7 +88,7 @@ Element settings_list_picker(const Model& m) {
     const bool adding = o->input_active;
     auto rows = se::items_for(m, o->concern);
 
-    Picker::Config cfg;
+    Panel::Config cfg;
     cfg.title      = std::string{" "} + se::label(o->concern) + " ";
     cfg.accent     = highlight;   // cyan, matching the command palette
     cfg.min_width  = 64;
@@ -124,7 +124,7 @@ Element settings_list_picker(const Model& m) {
         // navigation rows (RAG/Smart/profile) which show an affordance arrow.
         const Badge b = nav_badge(it.action).value_or(status_badge(it.status));
 
-        Picker::Config::Row row;
+        Panel::Row row;
         // A plugin's tool rows are indented under their server with a tree
         // connector (├─ / └─ for the last one), a dim on/off checkbox, and
         // dimmed text — so the server→tools hierarchy reads at a glance
@@ -167,7 +167,6 @@ Element settings_list_picker(const Model& m) {
             row.trailing       = "press d again to remove";
             row.trailing_style = fg_bold(warn);
         }
-        row.selected       = !adding && (i == o->index);
         cfg.rows.push_back(std::move(row));
     }
 
@@ -207,7 +206,7 @@ Element settings_list_picker(const Model& m) {
         cfg.footer.push_back(h(std::move(keys)).build());
     }
 
-    return Picker{std::move(cfg)}.build();
+    return Panel{std::move(cfg)}.build();
 }
 
 } // namespace agentty::ui

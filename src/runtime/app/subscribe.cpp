@@ -251,22 +251,39 @@ std::optional<Msg> on_checkpoint_picker(const KeyEvent& ev) {
     return nav::translate(s, ev);
 }
 
-// RAG mode picker. Enter/Space/←→ all adjust the highlighted mode.
-std::optional<Msg> on_rag_settings(const KeyEvent& ev) {
-    nav::NavSpec s;
-    s.close   = [] { return Msg{CloseRagSettings{}}; };
-    s.select  = [] { return Msg{RagSettingsAdjust{}}; };
-    s.move    = [](int d) { return Msg{RagSettingsMove{d}}; };
-    s.vim_nav = true;
-    s.extra   = [](const KeyEvent& e) -> std::optional<Msg> {
-        if (const auto* sk = std::get_if<SpecialKey>(&e.key))
-            if (*sk == SpecialKey::Left || *sk == SpecialKey::Right)
-                return Msg{RagSettingsAdjust{}};
-        const auto v = nav::char_view(e);
-        if (v && !v->ctrl && v->c == U' ') return Msg{RagSettingsAdjust{}};
-        return std::nullopt;
-    };
-    return nav::translate(s, ev);
+// What the key router needs to know about a form-backed pane.
+//
+// NOT the form itself. `subscribe()` runs every frame, and a Form owns a
+// vector of rows each holding several std::strings — snapshotting it per frame
+// meant an allocation and a deep copy of the whole settings pane on every
+// keystroke and every animation tick, which is exactly the input lag it was
+// meant to avoid. The router only ever asks WHICH MODE owns the keyboard and,
+// for Choosing, nothing else. Three bools and an int is the whole dependency.
+struct FormFocus {
+    bool open     = false;
+    bool editing  = false;
+    bool choosing = false;
+};
+
+[[nodiscard]] inline FormFocus focus_of(const form::Form& f) noexcept {
+    return FormFocus{true, f.editing(), f.choosing()};
+}
+
+// Forward a key to the shared form layer. Returns nullopt when the form does
+// not claim the key, so ambient handling (^C quits from anywhere) still runs.
+template <class Wrap>
+[[nodiscard]] std::optional<Msg> on_form(const FormFocus& f, const KeyEvent& ev,
+                                        Wrap&& wrap) {
+    if (!f.open) return std::nullopt;
+    if (auto a = form::keys::translate(f.editing, f.choosing, ev)) return wrap(*a);
+    return std::nullopt;
+}
+
+// Key routing for the Retrieval overlay. The ENTIRE key map lives in the
+// shared form layer — which mode owns the keyboard, what Enter does per row
+// kind, how Esc unwinds — so this only forwards.
+std::optional<Msg> on_rag_settings(const FormFocus& f, const KeyEvent& ev) {
+    return on_form(f, ev, [](form::keys::Action a) { return Msg{RagEmbedKey{a}}; });
 }
 
 // Settings pickers (Plugins/Commands/Agents/Hooks). Two modes:
@@ -428,23 +445,14 @@ std::optional<Msg> on_thread_list(const KeyEvent& ev) {
 
 // Smart Mode config: shared grammar + vim nav; Space toggles the row,
 // x resets the selected slot to auto.
-std::optional<Msg> on_smart_mode(const KeyEvent& ev) {
-    nav::NavSpec s;
-    s.close   = [] { return Msg{CloseSmartMode{}}; };
-    s.select  = [] { return Msg{SmartModeSelect{}}; };
-    s.move    = [](int d) { return Msg{SmartModeMove{d}}; };
-    s.vim_nav = true;
-    s.toggle_close_chord = U's';
-    s.extra   = [](const KeyEvent& e) -> std::optional<Msg> {
-        const auto v = nav::char_view(e);
-        if (!v || v->ctrl) return std::nullopt;
-        switch (v->c) {
-            case U'x': case U'X': return Msg{SmartModeClearSlot{}};
-            case U' ':            return Msg{SmartModeSelect{}};
-            default: return std::nullopt;
-        }
-    };
-    return nav::translate(s, ev);
+// Smart Mode. Same three lines as Retrieval, by construction — that is what
+// keeps the two panes behaving identically.
+std::optional<Msg> on_smart_mode(const FormFocus& f, const KeyEvent& ev) {
+    // ^S re-pressed closes the pane it opened, the one chord that is genuinely
+    // pane-specific (the form layer has no concept of an open chord).
+    if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U's')
+        return Msg{CloseSmartMode{}};
+    return on_form(f, ev, [](form::keys::Action a) { return Msg{SmartModeKey{a}}; });
 }
 
 std::optional<Msg> on_diff_review(const KeyEvent& ev) {
@@ -971,6 +979,14 @@ Sub<Msg> subscribe(const Model& m) {
         m.ui.composer.queue_peek_index().has_value(),
     };
 
+    // Which mode each form-backed pane is in. Three bools per pane — NOT the
+    // pane's rows, which would be a per-frame deep copy on the input path.
+    FormFocus rag_form, smart_form_snap;
+    if (const auto* o = m.ui.overlay.get<ui::overlay::RagSettings>())
+        rag_form = focus_of(o->embed.form);
+    if (const auto* o = m.ui.overlay.get<ui::overlay::SmartMode>())
+        smart_form_snap = focus_of(o->form);
+
     auto key_sub = Sub<Msg>::on_key(
         [=, login_state = m.ui.login](const KeyEvent& ev) -> std::optional<Msg> {
             // ^C quits from ANYWHERE, before overlay routing. Every modal
@@ -994,29 +1010,62 @@ Sub<Msg> subscribe(const Model& m) {
             // AMBIENT overlay — unclaimed keys fall THROUGH to the global
             // handling below rather than being swallowed.
             using OK = ui::overlay::Kind;
-            switch (active_overlay) {
-                case OK::Login:          return on_login(login_state, ev);
-                case OK::Permission:     return on_permission(ev);
-                case OK::CommandPalette: return on_command_palette(ev);
-                case OK::Mention:        return on_mention_palette(ev);
-                case OK::Symbol:         return on_symbol_palette(ev);
-                case OK::CodeBlocks:     return on_code_block_picker(ev);
-                case OK::CodeBlockResult: return on_code_block_result(ev);
-                case OK::ToolViewer:     return on_tool_viewer(ev);
-                case OK::Checkpoints:    return on_checkpoint_picker(ev);
-                case OK::RagSettings:    return on_rag_settings(ev);
-                case OK::SettingsList:
-                    return on_settings_list(ev, settings_list_adding);
-                case OK::Fork:           return on_fork_picker(ev);
-                case OK::FusedPicker:    return on_fused_picker(ev);
-                case OK::ProviderPicker: return on_provider_picker(ev);
-                case OK::ThreadList:     return on_thread_list(ev);
-                case OK::SmartMode:      return on_smart_mode(ev);
-                case OK::DiffReview:     return on_diff_review(ev);
-                case OK::Todo:
-                    if (auto r = on_todo_modal(ev)) return r;
-                    break;                     // ambient: fall through
-                case OK::None:           break;
+
+            // ── The escape guarantee ──────────────────────────────────
+            // Every EXCLUSIVE overlay swallows unclaimed keys (that is what
+            // makes it modal), which means a handler that fails to answer Esc
+            // strands the user with no way out and the app appears frozen.
+            // The Retrieval pane shipped exactly that bug: it owned the
+            // keyboard for a frame before its form existed, so every key
+            // — Esc included — went nowhere.
+            //
+            // Per-handler diligence cannot enforce this: it is one missing
+            // branch away, in any of fifteen handlers, forever. So it is
+            // enforced HERE, once, structurally. `dispatch` runs the overlay's
+            // own handler; if that handler declines an Escape, the overlay's
+            // generic close fires instead. A modal can therefore be buggy,
+            // half-built, or brand new and STILL never trap the user.
+            //
+            // Ambient overlays (Todo) are exempt by construction — they fall
+            // through to global handling and never swallow anything.
+            const auto dispatch = [&]() -> std::optional<Msg> {
+                switch (active_overlay) {
+                    case OK::Login:          return on_login(login_state, ev);
+                    case OK::Permission:     return on_permission(ev);
+                    case OK::CommandPalette: return on_command_palette(ev);
+                    case OK::Mention:        return on_mention_palette(ev);
+                    case OK::Symbol:         return on_symbol_palette(ev);
+                    case OK::CodeBlocks:     return on_code_block_picker(ev);
+                    case OK::CodeBlockResult: return on_code_block_result(ev);
+                    case OK::ToolViewer:     return on_tool_viewer(ev);
+                    case OK::Checkpoints:    return on_checkpoint_picker(ev);
+                    case OK::RagSettings:    return on_rag_settings(rag_form, ev);
+                    case OK::SettingsList:
+                        return on_settings_list(ev, settings_list_adding);
+                    case OK::Fork:           return on_fork_picker(ev);
+                    case OK::FusedPicker:    return on_fused_picker(ev);
+                    case OK::ProviderPicker: return on_provider_picker(ev);
+                    case OK::ThreadList:     return on_thread_list(ev);
+                    case OK::SmartMode:      return on_smart_mode(smart_form_snap, ev);
+                    case OK::DiffReview:     return on_diff_review(ev);
+                    case OK::Todo:           return on_todo_modal(ev);
+                    case OK::None:           break;
+                }
+                return std::nullopt;
+            };
+
+            if (auto r = dispatch()) return r;
+
+            // Todo is ambient: unclaimed keys fall THROUGH to global handling
+            // below rather than being swallowed, so the guarantee (and the
+            // swallow) do not apply to it.
+            if (active_overlay != OK::None && active_overlay != OK::Todo) {
+                if (std::holds_alternative<SpecialKey>(ev.key)
+                    && std::get<SpecialKey>(ev.key) == SpecialKey::Escape)
+                    return ui::overlay::close_msg(active_overlay);
+                // Exclusive overlay, unclaimed non-Esc key: swallow it, as
+                // modality requires.
+                return Msg{NoOp{}};
             }
             // Esc during a live stream cancels the request rather than
             // quitting the app. Modals above swallow Esc themselves, so this

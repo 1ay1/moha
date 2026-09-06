@@ -168,8 +168,15 @@ struct AgenttyApp {
             mix(static_cast<std::uint64_t>(tl->index));
             mix_str(tl->confirm_remove);   // two-press delete arm state
         }
-        if (auto* sm = m.ui.overlay.get<ov::SmartMode>())
-            mix(static_cast<std::uint64_t>(sm->row));
+        if (auto* sm = m.ui.overlay.get<ov::SmartMode>()) {
+            mix(static_cast<std::uint64_t>(sm->form.cursor));
+            // A form row's rendered value can change without the cursor
+            // moving (a slot resolves to a different model, the master switch
+            // flips and relocks the slots), so the row COUNT and the focused
+            // row's identity both feed the frame hash.
+            mix(static_cast<std::uint64_t>(sm->form.fields.size()));
+            if (const auto* row = sm->form.focused()) mix_str(row->id);
+        }
         if (auto* fp = m.ui.overlay.get<ov::FusedPicker>()) {
             mix(static_cast<std::uint64_t>(fp->index));
             mix_str(fp->query);   // live search buffer

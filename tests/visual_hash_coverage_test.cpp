@@ -55,6 +55,7 @@
 #include "agtest.hpp"
 
 #include "agentty/runtime/app/program.hpp"
+#include "agentty/runtime/smart_form.hpp"
 #include "agentty/runtime/model.hpp"
 
 namespace ov = agentty::ui::overlay;
@@ -304,10 +305,16 @@ const std::vector<Axis>& visual_axes() {
             m.ui.plugins.servers.push_back(std::move(s));
         }},
         {"smart_mode overlay opens", [](Model& m) {
-            m.ui.overlay = ov::SmartMode{smart::OverlayRow::Master};
+            agentty::smart_form::Inputs in;
+            in.enabled = true;
+            m.ui.overlay = ov::SmartMode{agentty::smart_form::build_form(in)};
         }},
         {"smart_mode cursor move", [](Model& m) {
-            m.ui.overlay = ov::SmartMode{smart::OverlayRow::Utility};
+            agentty::smart_form::Inputs in;
+            in.enabled = true;
+            auto f = agentty::smart_form::build_form(in);
+            agentty::smart_form::focus_role(f, agentty::smart::ModelRole::Utility);
+            m.ui.overlay = ov::SmartMode{std::move(f)};
         }},
         {"rag picker opens", [](Model& m) {
             agentty::rag_settings::Open o;

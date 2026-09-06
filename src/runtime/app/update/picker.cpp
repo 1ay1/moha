@@ -4,6 +4,7 @@
 // through with Up/Down, and confirms with Enter; the underlying data comes
 // from the store + provider so neither reducer is purely-local.
 
+#include "agentty/runtime/smart_form.hpp"
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/app/update.hpp"
 
@@ -981,9 +982,12 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             // setting and hitting Esc should return you to the parent picker.
             if (const auto role = m.ui.smart_assign_slot) {
                 m.ui.smart_assign_slot.reset();
-                // row_of is the total inverse of role_of — no `1 + slot`
-                // offset to keep in step with the overlay's layout.
-                m.ui.overlay = ov::SmartMode{smart::row_of(*role)};
+                // Rebuild through the SAME builder the pane opened with, then
+                // focus by field id — no `1 + slot` offset to keep in step
+                // with a row set that is now derived.
+                auto f = build_smart_form(m);
+                smart_form::focus_role(f, *role);
+                m.ui.overlay = ov::SmartMode{std::move(f)};
             }
             return done(std::move(m));
         },
@@ -1255,7 +1259,9 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // there and probably want to set the sibling slots too;
                 // forcing a re-open of Smart Mode after every slot is the
                 // exact tedium this fixes.
-                m.ui.overlay = ov::SmartMode{smart::row_of(assigned)};
+                auto f = build_smart_form(m);
+                smart_form::focus_role(f, assigned);
+                m.ui.overlay = ov::SmartMode{std::move(f)};
                 auto toast = set_status_toast(m, "Smart Mode slot set");
                 return {std::move(m), std::move(toast)};
             }

@@ -3,7 +3,7 @@
 // of the former monolithic pickers.cpp; shared scaffolding lives in
 // pickers_prologue.hpp / pickers_common.hpp.
 //
-// Pure adapter: builds maya::Picker::Config values from Model state. The
+// Pure adapter: builds maya::Panel::Config values from Model state. The
 // widget owns every chrome decision — border style, viewport clipping,
 // scrollbar glyph + thumb math, keep-selection-in-view auto-scroll. agentty
 // supplies only the row-level Elements and the typed cursor index.
@@ -25,7 +25,7 @@ Element fused_picker(const Model& m) {
     // Read the reducer-maintained cache — never rebuild per frame.
     const auto& rows = m.d.fused_rows;
 
-    Picker::Config cfg;
+    Panel::Config cfg;
     // Slot-assign mode: retitle so it's clear the pick fills a Smart Mode
     // role rather than switching the model you're chatting with, and say
     // which provider the list is scoped to (see fused_rows_for_model).
@@ -68,7 +68,7 @@ Element fused_picker(const Model& m) {
                 text(picker->query, fg_of(fg)),
                 query_caret(accent)
               ).build());
-    cfg.header.push_back(sep);   // rule under the filter (matches the other pickers)
+    cfg.header.push_back(sep);
 
     // Lazy-load hint: while any provider's catalog is still streaming in,
     // show a dim spinner-ish note so the (initially active-provider-only)
@@ -123,7 +123,7 @@ Element fused_picker(const Model& m) {
             m.d.provider_catalogs.begin(), m.d.provider_catalogs.end(),
             [](const ProviderCatalog& c) { return !c.models.empty(); });
 
-        Picker::Config::Row nr;
+        Panel::Row nr;
         if (loading) {
             nr.leading = "  " + std::string{m.s.spinner.current_frame()}
                        + " loading model catalogs\xe2\x80\xa6";
@@ -145,7 +145,7 @@ Element fused_picker(const Model& m) {
             {"^P", "providers", 1},
             {"Esc", "close", 4},
         }));
-        return Picker{std::move(cfg)}.build();
+        return Panel{std::move(cfg)}.build();
     }
 
     // Section dividers: RECENT vs ALL PROVIDERS, plus a query-gated SIGN IN
@@ -226,8 +226,7 @@ Element fused_picker(const Model& m) {
         // Sign-in offer row: "<Provider>  — Enter to sign in". Dim, single
         // action, no trailing chips (there's no model yet).
         if (r.is_signin_offer()) {
-            Picker::Config::Row row;
-            row.selected      = selected;
+            Panel::Row row;
             row.leading       = "  " + r.label;
             row.leading_style = selected ? fg_bold(fg) : fg_of(muted);
             row.trailing       = "Enter to sign in \xe2\x86\x92";   // →
@@ -236,8 +235,7 @@ Element fused_picker(const Model& m) {
             continue;
         }
 
-        Picker::Config::Row row;
-        row.selected = selected;   // drives the highlight bar + selected bg
+        Panel::Row row;
         const bool active = r.active;
         const int bw = maya::string_width(r.label);
         row.badge         = bw < badge_w
@@ -378,7 +376,7 @@ Element fused_picker(const Model& m) {
             {"^Tab", "prev", 2},
             {"Esc", "close", 4},
           }));
-    return Picker{std::move(cfg)}.build();
+    return Panel{std::move(cfg)}.build();
 }
 
 // ── Provider picker helpers ──
@@ -388,7 +386,7 @@ Element provider_picker(const Model& m) {
     auto* picker = m.ui.overlay.get<ov::ProviderPicker>();
     if (!picker) return nothing();
 
-    Picker::Config cfg;
+    Panel::Config cfg;
     cfg.title      = " Providers ";
     cfg.accent     = highlight;
     cfg.min_width  = 52;
@@ -475,7 +473,7 @@ Element provider_picker(const Model& m) {
     int i = 0;
     for (const auto& r : rows) {
         const bool sel = (i == picker->index);
-        Picker::Config::Row row;
+        Panel::Row row;
 
         if (const auto* p = r.preset()) {
             const bool active = (p->id == active_id);
@@ -525,7 +523,6 @@ Element provider_picker(const Model& m) {
             row.trailing       = "\xe2\x9c\x8e edit";
             row.trailing_style = fg_of(info);
         }
-        row.selected = sel;
         // Under width pressure the STATUS chip gives way, not the provider
         // name — the name is what you select; "✓ signed in · accounts" is
         // reference data. Same policy as the command palette and the model
@@ -568,7 +565,7 @@ Element provider_picker(const Model& m) {
         {"Esc", "close", 4},
     }));
 
-    return Picker{std::move(cfg)}.build();
+    return Panel{std::move(cfg)}.build();
 }
 
 } // namespace agentty::ui

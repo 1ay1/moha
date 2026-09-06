@@ -122,6 +122,8 @@ set(AGENTTY_DIFF_SOURCES
 # retrieval boundary onto rag::Engine remains in-tree.
 set(AGENTTY_RAG_SOURCES
     src/rag/adapter.cpp
+    src/rag/embed_backend.cpp
+    src/rag/embed_secret.cpp
 )
 
 set(AGENTTY_TOOL_SOURCES
@@ -148,6 +150,7 @@ set(AGENTTY_TOOL_SOURCES
 set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/composer_attachment.cpp
     src/runtime/app/deps.cpp
+    src/runtime/app/settings_cache.cpp
     src/runtime/app/init.cpp
     src/runtime/app/cmd_factory.cpp
     src/runtime/app/update.cpp
@@ -167,6 +170,12 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/app/update/rag_settings.cpp
     src/runtime/app/update/settings_list.cpp
     src/runtime/settings_items.cpp
+    src/runtime/form.cpp
+    src/runtime/form_keys.cpp
+    src/runtime/view/form_view.cpp
+    src/runtime/rag_settings_form.cpp
+    src/runtime/settings_registry.cpp
+    src/runtime/smart_form.cpp
     src/runtime/app/update/fork.cpp
     src/runtime/app/update/diff.cpp
     src/runtime/app/update/meta.cpp

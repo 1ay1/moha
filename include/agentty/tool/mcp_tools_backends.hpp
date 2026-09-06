@@ -38,6 +38,32 @@ void install_host_backends(::mcp::tools::HostServices& svc);
 // to the process-wide retriever. Rebuilds indexes lazily. Never throws.
 void rag_apply_settings(const store::RagConfig& cfg);
 
+// Live dense-embedder status for the RAG picker's status row and
+// `agentty diagnostics`. When the embedder is unavailable, `reason` says why
+// — the point being that a misconfigured endpoint is visible rather than
+// retrieval silently degrading to keyword-only forever.
+struct RagEmbedStatus {
+    enum class State : std::uint8_t { Unprobed, Ready, Unavailable };
+    State         state      = State::Unprobed;
+    std::uint32_t dim        = 0;
+    int           latency_ms = 0;
+    std::string   reason;
+    std::string   describe;
+};
+[[nodiscard]] RagEmbedStatus rag_embed_status();
+
+// Probe an ARBITRARY embed configuration without disturbing the live
+// retriever — what the picker's "Test connection" row runs on a worker
+// thread. Returns the MEASURED dimension, the only trustworthy source for it.
+struct RagProbeOutcome {
+    bool          ok = false;
+    std::uint32_t dim = 0;
+    int           latency_ms = 0;
+    std::string   error;
+};
+[[nodiscard]] RagProbeOutcome rag_probe_embedder(const store::RagConfig& cfg,
+                                                 const std::string& api_key);
+
 // Stop the process-wide retriever's in-flight background warm and reclaim its
 // worker. Call EARLY in teardown (before static destruction) so ^C is prompt:
 // otherwise the retriever's warm jthread is joined at static-dtor time, after

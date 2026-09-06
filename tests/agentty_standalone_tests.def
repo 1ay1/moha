@@ -27,6 +27,7 @@ FOLD_NOARGS(md_shape_sweep)
 FOLD_NOARGS(reveal_headroom_test)
 
 FOLD_ARGS(external_acp_backend_test)
+FOLD_ARGS(embed_render_probe)
 FOLD_ARGS(long_session_bench)
 FOLD_ARGS(anthropic_md_stream)
 FOLD_ARGS(md_cache_probe)

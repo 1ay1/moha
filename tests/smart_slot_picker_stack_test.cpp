@@ -23,9 +23,12 @@
 #include "agentty/runtime/app/update/internal.hpp"  // app::detail::fused_rows_for_model
 #include "agentty/runtime/picker.hpp"
 #include "agentty/domain/smart_mode.hpp"   // kSmartModeRows
+#include "agentty/runtime/smart_form.hpp"
+#include "agentty/runtime/form_keys.hpp"
 #include "agentty/provider/selection.hpp"
 
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -102,7 +105,9 @@ TEST_CASE("smart slot picker stack") {
         CHECK(!m2.ui.smart_assign_slot,
               "the pending slot-assign is cleared on back-out");
         if (auto* o = m2.ui.overlay.get<ov::SmartMode>()) {
-            CHECK(o->row == smart::row_of(static_cast<smart::ModelRole>(slot)),
+            const auto* row = o->form.focused();
+            CHECK(row && row->id == smart_form::field_of_role(
+                             static_cast<smart::ModelRole>(slot)),
                   "cursor lands back on the slot row you descended from");
         } else {
             CHECK(false, "smart_mode must be OpenAt after Esc");
@@ -137,7 +142,9 @@ TEST_CASE("smart slot picker stack") {
               "Enter returns to Smart Mode so sibling slots stay one step away");
         CHECK(!m2.ui.smart_assign_slot, "slot-assign consumed");
         if (auto* o = m2.ui.overlay.get<ov::SmartMode>()) {
-            CHECK(o->row == smart::row_of(static_cast<smart::ModelRole>(slot)),
+            const auto* row = o->form.focused();
+            CHECK(row && row->id == smart_form::field_of_role(
+                             static_cast<smart::ModelRole>(slot)),
                   "cursor on the slot just set");
         }
 
@@ -225,29 +232,44 @@ TEST_CASE("smart slot picker stack") {
         auto [m1, _] = app::update(std::move(m), Msg{OpenSmartMode{}});
         Model cur = std::move(m1);
 
-        auto row_of_overlay = [](const Model& mm) {
+        auto row_id = [](const Model& mm) -> std::string {
             auto* o = mm.ui.overlay.get<ov::SmartMode>();
-            return o ? o->row : smart::OverlayRow::Master;
+            if (!o) return {};
+            const auto* r = o->form.focused();
+            return r ? r->id : std::string{};
         };
-        CHECK(row_of_overlay(cur) == smart::OverlayRow::Master,
+        auto rows_in = [](const Model& mm) -> int {
+            auto* o = mm.ui.overlay.get<ov::SmartMode>();
+            return o ? static_cast<int>(o->form.fields.size()) : 0;
+        };
+        auto move = [](Model mm, int d) {
+            return app::update(std::move(mm),
+                Msg{SmartModeKey{form::keys::Action{
+                    d > 0 ? form::keys::Intent::MoveNext
+                          : form::keys::Intent::MovePrev}}});
+        };
+
+        CHECK(row_id(cur) == smart_form::kFieldEnabled,
               "the overlay opens on the master switch");
+        const int n = rows_in(cur);
+        CHECK(n > 1, "the pane has a switch plus its slots");
 
         // A full lap down returns to the start, visiting each row once.
-        std::vector<smart::OverlayRow> seen;
-        for (int i = 0; i < smart::kSmartModeRows; ++i) {
-            auto [next, c] = app::update(std::move(cur), Msg{SmartModeMove{+1}});
+        std::set<std::string> seen;
+        for (int i = 0; i < n; ++i) {
+            auto [next, c] = move(std::move(cur), +1);
             cur = std::move(next);
-            seen.push_back(row_of_overlay(cur));
+            seen.insert(row_id(cur));
         }
-        CHECK(row_of_overlay(cur) == smart::OverlayRow::Master,
+        CHECK(row_id(cur) == smart_form::kFieldEnabled,
               "a full lap down returns to the first row");
-        CHECK(seen.size() == static_cast<std::size_t>(smart::kSmartModeRows),
-              "one step per row");
+        CHECK(seen.size() == static_cast<std::size_t>(n),
+              "one distinct row per step");
 
         // Up from the first row lands on the last — no phantom rows between.
-        auto [up, c1] = app::update(std::move(cur), Msg{SmartModeMove{-1}});
+        auto [up, c1] = move(std::move(cur), -1);
         cur = std::move(up);
-        CHECK(row_of_overlay(cur) == smart::OverlayRow::Utility,
+        CHECK(row_id(cur) == smart_form::kFieldUtility,
               "up from the master switch wraps to the last row");
     }
 }

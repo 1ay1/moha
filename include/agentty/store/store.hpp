@@ -56,6 +56,15 @@ struct RagConfig {
     bool  stitch     = true;
     bool  autocut    = true;
 
+    // Numeric tuning for the stages above. These lived only in rag::Config
+    // and were reachable only through environment variables — so they were
+    // undiscoverable and reset every shell. They are persisted now because
+    // the settings registry exposes them as rows; see
+    // runtime/settings_registry.hpp for the table that owns their ranges.
+    float mmr_lambda          = 0.65f;
+    float dedup_threshold     = 0.92f;
+    float autocut_sensitivity = 2.0f;
+
     // Power modes (latency / round-trip cost).
     bool  prf        = false;   // pseudo-relevance-feedback expansion
     bool  corrective = false;   // CRAG grading
@@ -66,6 +75,9 @@ struct RagConfig {
     // Fusion.
     std::string fusion = "convex";   // "convex" | "rrf"
     bool  adaptive_fusion = true;
+    // RRF-mode weights (ignored under convex fusion).
+    float dense_weight = 1.0f;
+    float bm25_weight  = 1.0f;
 
     // Proactive / pre-turn injection tuning. `proactive` is DERIVED from
     // `mode` (On/FirstTurnOnly ⇒ true, Off ⇒ false) at apply time; the bar
@@ -78,6 +90,26 @@ struct RagConfig {
     bool  persist = true;   // .ragdb cache under .agentty/
     bool  learn   = false;  // implicit file-open feedback loop
     bool  trace   = false;  // fold per-stage trace into the mode label
+
+    // ── Embeddings (RAG picker → Embeddings) ──
+    // WHICH embedder retrieval uses. An empty `embed_backend` means "never
+    // configured" — the env-derived default stands, so upgrading users keep
+    // exactly today's behaviour.
+    //
+    // The API KEY IS DELIBERATELY ABSENT: it lives in the OS keystore keyed
+    // by endpoint, never in settings.json. A credential in a plaintext config
+    // file is a leak waiting for a screen-share or a bug-report attachment.
+    std::string   embed_backend;             // "auto" | "ollama" | "openai" | …
+    std::string   embed_model;
+    std::string   embed_host;
+    std::uint16_t embed_port = 0;            // 0 = backend default
+    bool          embed_tls  = false;
+    std::string   embed_path;
+    std::string   embed_model_path;
+    std::string   embed_tokenizer_path;
+    // The MEASURED dimension from the last successful probe. Persisted so a
+    // restart can reuse the warm index; never user-typed (see embed_backend.hpp).
+    std::uint32_t embed_dim = 0;
 };
 
 // Persisted user settings — model + profile + favorites.  Lives with the

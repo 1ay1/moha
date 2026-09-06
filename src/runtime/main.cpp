@@ -76,6 +76,7 @@
 #include "agentty/mcp/oauth.hpp"
 #include "agentty/mcp/client.hpp"   // mcp::release_servers
 #include "agentty/rag/rag_adapter.hpp"
+#include "agentty/rag/embed_secret.hpp"
 #include "agentty/util/update.hpp"
 #include "agentty/util/user_root.hpp"   // user_logs_dir (stderr.log home)
 #include "agentty/provider/anthropic/provider.hpp"
@@ -333,6 +334,55 @@ int cmd_diagnostics() {
     // the failing session used — printing it would state a confident lie.
     // The real provider/model is in the log's `provider.select` line, which
     // the tail below carries. One truth, from the session that mattered.
+    section("retrieval (embeddings)");
+    {
+        // Unlike the provider section above, this is NOT a lie in a separate
+        // process: the embedder is configured by settings.json + env, the same
+        // two sources the failing session read, so re-deriving it here yields
+        // the same value. The probe is explicitly labelled as run-now, because
+        // reachability is exactly the thing a user filing "retrieval is bad"
+        // needs answered — and a silent fall back to keyword-only search is
+        // this subsystem's most common invisible failure.
+        namespace eb = agentty::rag::embed;
+        eb::EmbedConfig ec;
+        eb::apply_env(ec);
+        try {
+            const auto s = agentty::persistence::load_settings();
+            if (!s.rag.embed_backend.empty()) {
+                ec.backend = eb::backend_from_id(s.rag.embed_backend);
+                if (!s.rag.embed_model.empty()) ec.model = s.rag.embed_model;
+                if (!s.rag.embed_host.empty())  ec.host  = s.rag.embed_host;
+                if (s.rag.embed_port != 0)      ec.port  = s.rag.embed_port;
+                ec.tls            = s.rag.embed_tls;
+                ec.path           = s.rag.embed_path;
+                ec.model_path     = s.rag.embed_model_path;
+                ec.tokenizer_path = s.rag.embed_tokenizer_path;
+                ec.dim            = s.rag.embed_dim;
+            }
+        } catch (...) { /* env config stands */ }
+
+        out += "config: " + eb::describe(ec) + "\n";
+        out += "identity: " + eb::identity_tag(ec) + "\n";
+        // The credential is never printed — only whether one is present.
+        if (eb::needs_api_key(ec.backend)) {
+            const auto slot = eb::endpoint_key(ec);
+            out += std::string{"api key: "}
+                 + (eb::load_key(slot).empty() ? "not set" : "set (stored securely)") + "\n";
+        }
+        if (auto v = eb::validate(ec); const auto* bad = std::get_if<eb::Invalid>(&v)) {
+            out += "invalid: " + bad->why + "\n";
+        } else {
+            if (!ec.api_key.empty()) { /* not printed */ }
+            const auto r = eb::probe(ec);
+            if (const auto* ok = std::get_if<eb::ProbeOk>(&r))
+                out += "probe: ok · " + std::to_string(ok->dim) + "d · "
+                     + std::to_string(ok->latency_ms) + "ms\n";
+            else
+                out += "probe: FAILED — " + std::get<eb::ProbeErr>(r).why
+                     + "\n         (retrieval falls back to keyword-only/BM25)\n";
+        }
+    }
+
     section("session (from the log)");
     {
         const auto lf = agentty::logx::log_file();

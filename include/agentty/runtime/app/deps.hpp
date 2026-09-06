@@ -21,6 +21,7 @@
 #include "agentty/domain/conversation.hpp"
 #include "agentty/runtime/msg.hpp"
 #include "agentty/provider/provider.hpp"
+#include "agentty/runtime/app/settings_cache.hpp"
 #include "agentty/store/store.hpp"
 
 namespace agentty::app {
@@ -37,6 +38,23 @@ struct Deps {
     std::function<std::vector<Thread>()>        load_threads;
     std::function<std::optional<Thread>(const ThreadId&)> load_thread;
     std::function<store::Settings()>            load_settings;
+    // WRITE-BEHIND. Returns immediately: the value is published to an
+    // in-memory cache that `load_settings` reads, and the actual
+    // load-modify-fsync-rename happens on a background worker.
+    //
+    // Why this is a SEAM concern and not each caller's problem: settings are
+    // written from ~8 reducers (profile cycle, Smart Mode toggle, slot clear,
+    // provider switch, model select, quit, RAG commit …). A reducer is a pure
+    // function on the UI thread; a synchronous disk round-trip inside one
+    // stalls the render loop, which is what made toggling Smart Mode hitch
+    // mid-animation. Fixing that per call site is eight chances to forget —
+    // and every new settings write would be a ninth. Fixing it HERE means no
+    // reducer can block on settings IO even if it tries.
+    //
+    // Ordering: writes are applied in submission order on a single worker, so
+    // a later save cannot land before an earlier one. Reads see the newest
+    // submitted value immediately, so a save-then-load in the same reducer
+    // observes what it just wrote.
     std::function<void(const store::Settings&)> save_settings;
     std::function<ThreadId()>                    new_thread_id;
     std::function<std::string(std::string_view)> title_from;
@@ -81,6 +99,14 @@ void switch_provider(auth::AuthHeader auth);
 // Convenience: bind a Provider + Store satisfying the concepts.
 template <provider::Provider P, store::Store S>
 void install(P& p, S& s, auth::AuthHeader auth) {
+    // Settings IO goes through the write-behind cache. Wrapping HERE — the one
+    // place a Deps is built — is what makes "a reducer never blocks on
+    // settings IO" a property of the framework rather than a rule eight call
+    // sites have to remember. See runtime/app/settings_cache.hpp.
+    auto seam = settings_cache::wrap(
+        [&s] { return s.load_settings(); },
+        [&s](const store::Settings& x) { s.save_settings(x); });
+
     install_deps(Deps{
         .stream = [&p](provider::Request req, provider::EventSink sink) {
             p.stream(std::move(req), std::move(sink));
@@ -88,8 +114,8 @@ void install(P& p, S& s, auth::AuthHeader auth) {
         .save_thread     = [&s](const Thread& t) { s.save_thread(t); },
         .load_threads    = [&s] { return s.load_threads(); },
         .load_thread     = [&s](const ThreadId& id) { return s.load_thread(id); },
-        .load_settings   = [&s] { return s.load_settings(); },
-        .save_settings   = [&s](const store::Settings& x) { s.save_settings(x); },
+        .load_settings   = std::move(seam.load),
+        .save_settings   = std::move(seam.save),
         .new_thread_id   = [&s] { return s.new_id(); },
         .title_from      = [&s](std::string_view t) { return s.title_from(t); },
         .auth            = std::move(auth),

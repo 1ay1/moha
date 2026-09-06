@@ -36,6 +36,25 @@ static void write_file(const fs::path& p, const std::string& body) {
     std::ofstream(p) << body;
 }
 
+// Persisted indexes are named `<stem><8-hex-identity>.ragdb`, where the hash
+// identifies the EMBEDDER's vector space (see rag/embed_backend.hpp). Tests
+// must not hardcode a name: the identity changes with the embedder, which is
+// the whole point — switching backends switches between warm indexes instead
+// of silently reopening one built with incompatible geometry.
+static fs::path find_index(const fs::path& root, std::string_view stem) {
+    std::error_code ec;
+    const auto dir = root / ".agentty";
+    if (!fs::is_directory(dir, ec)) return {};
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        const auto name = e.path().filename().string();
+        if (name.rfind(std::string{stem}, 0) == 0
+            && name.size() > 6
+            && name.compare(name.size() - 6, 6, ".ragdb") == 0)
+            return e.path();
+    }
+    return {};
+}
+
 TEST_CASE("rag adapter") {
     std::printf("rag_adapter_test\n");
 
@@ -142,12 +161,24 @@ TEST_CASE("rag adapter") {
         }
 
         // A real persisted index and validation manifest must be written.
+        //
+        // The filename carries the EMBEDDER IDENTITY hash (see
+        // embed_backend.hpp): a .ragdb is only reusable by an embedder that
+        // produces the same vector geometry, and keying the path on that
+        // means switching backends switches between warm indexes instead of
+        // silently reopening one built by a different embedder. So this
+        // asserts the SHAPE (rag_docs.<8 hex>.ragdb + its manifest) rather
+        // than a fixed name.
         {
             std::error_code ec;
-            auto ragdb = tmp / ".agentty" / "rag_docs.ragdb";
-            auto meta = fs::path{ragdb.string() + ".meta.json"};
-            check(fs::is_regular_file(ragdb, ec), "persisted .ragdb is written");
-            check(fs::is_regular_file(meta, ec), "persisted source manifest is written");
+            const auto ragdb = find_index(tmp, "rag_docs.");
+            check(!ragdb.empty() && fs::is_regular_file(ragdb, ec),
+                  "persisted .ragdb is written under an identity-keyed name");
+            if (!ragdb.empty()) {
+                auto meta = fs::path{ragdb.string() + ".meta.json"};
+                check(fs::is_regular_file(meta, ec),
+                      "persisted source manifest is written");
+            }
         }
 
         // Requested breadth is honored; corrective retrieval must not silently
@@ -271,7 +302,7 @@ TEST_CASE("rag adapter") {
 
     // A fresh Retriever opens the persisted corpus without rewriting it.
     {
-        auto db = tmp / ".agentty" / "rag_docs.ragdb";
+        auto db = find_index(tmp, "rag_docs.");
         std::error_code ec;
         auto before = fs::last_write_time(db, ec);
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -284,7 +315,7 @@ TEST_CASE("rag adapter") {
             check(res.passages.front().path.find("auth") != std::string::npos,
                   "warm-opened index preserves ranking");
 
-        auto code_db = tmp / ".agentty" / "rag_code.ragdb";
+        auto code_db = find_index(tmp, "rag_code.");
         auto code_before = fs::last_write_time(code_db, ec);
         auto code = warm.retrieve_code("rotate session nonce", 5);
         auto code_after = fs::last_write_time(code_db, ec);
@@ -299,10 +330,10 @@ TEST_CASE("rag adapter") {
     // written meta from a killed process is recovered from, never fatal.
     {
         std::error_code ec;
-        auto meta = tmp / ".agentty" / "rag_docs.ragdb.meta.json";
+        auto meta = fs::path{find_index(tmp, "rag_docs.").string() + ".meta.json"};
         // Truncated JSON object: exactly what an interrupted write could leave
         // if writes were not atomic.
-        write_file(meta, "{\"version\": 2, \"root\": \"/tmp\", \"docs_fp\":");
+        write_file(meta, "{\"version\": 3, \"root\": \"/tmp\", \"docs_fp\":");
         agentty::rag::Retriever r;
         auto res = r.retrieve("encrypted OAuth keystore", 5);
         check(res.error.empty(), "corrupt .meta.json recovers via rebuild, no crash");

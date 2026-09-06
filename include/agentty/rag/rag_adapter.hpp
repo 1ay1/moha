@@ -22,6 +22,8 @@
 // lives in the .cpp (src/rag/adapter.cpp).
 
 #include <cstdint>
+
+#include "agentty/rag/embed_backend.hpp"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -56,9 +58,17 @@ struct Retrieval {
 // quality feature agentty drives has a toggle here.
 struct Config {
     std::string  docs_root;               // AGENTTY_DOCS_DIR (or ./docs, ./.agentty/knowledge)
-    std::string  embed_model  = "nomic-embed-text";   // AGENTTY_EMBED_MODEL
-    std::string  embed_host   = "127.0.0.1";          // AGENTTY_OLLAMA_HOST (host part)
-    std::uint16_t embed_port  = 11434;                 // AGENTTY_OLLAMA_HOST (:port)
+
+    // WHICH embedder, and how to reach it. Was three loose fields hardwired to
+    // a local Ollama daemon; now one value the user can configure from the TUI
+    // (Ctrl+K -> RAG -> Embeddings). Defaults reproduce the old behaviour
+    // exactly: Auto -> Ollama on 127.0.0.1:11434 with nomic-embed-text.
+    //
+    // NOTE `embed.dim` is DERIVED by embed::probe(), never typed by a user:
+    // rag-cpp's HNSW silently drops vectors whose size disagrees with the
+    // index, so a guessed dimension yields an empty index and no error.
+    embed::EmbedConfig embed;
+
     bool         skills   = true;         // AGENTTY_RAG_SKILLS
     bool         memory   = true;         // AGENTTY_RAG_MEMORY
     bool         mcp_resources = false;   // AGENTTY_RAG_MCP, explicit opt-in
@@ -179,6 +189,32 @@ public:
 
     // The currently-live config (for the picker's initial state / round-trip).
     [[nodiscard]] Config snapshot_config() const;
+
+    // Live dense-embedder status, for the RAG picker's status row and
+    // `agentty diagnostics`. Mirrors the internal DenseState: when the
+    // embedder is unavailable this carries the REASON, so a misconfigured
+    // endpoint is a visible message rather than retrieval quietly falling
+    // back to BM25 forever.
+    //
+    // NEVER BLOCKS. Safe to call from the UI thread on any frame: if the
+    // retriever is mid-reconfiguration (apply_config re-probes the embedder
+    // and rebuilds three engines while holding the lock) this reports
+    // Unprobed instead of waiting. A status readout that can stall the render
+    // loop is worse than a status readout that is briefly vague.
+    struct EmbedStatus {
+        enum class State : std::uint8_t { Unprobed, Ready, Unavailable };
+        State         state      = State::Unprobed;
+        std::uint32_t dim        = 0;   // MEASURED, never user-supplied
+        int           latency_ms = 0;
+        std::string   reason;           // populated when Unavailable
+        std::string   describe;         // "nomic-embed-text via ollama 127.0.0.1:11434"
+    };
+    [[nodiscard]] EmbedStatus embed_status() const;
+
+    // Re-run the availability probe against the CURRENT config and adopt the
+    // measured dimension. Blocking; call off the UI thread. This is what the
+    // picker's "Test connection" row drives.
+    EmbedStatus reprobe_embedder();
 
 private:
     struct Impl;

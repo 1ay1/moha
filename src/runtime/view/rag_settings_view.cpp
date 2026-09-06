@@ -6,11 +6,14 @@
 
 #include "agentty/runtime/view/pickers.hpp"
 
+#include "agentty/runtime/view/form_view.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/rag_settings.hpp"
+#include "pickers/pickers_common.hpp"
 
-#include <maya/widget/picker.hpp>
+#include <maya/widget/panel.hpp>
+#include <maya/widget/panel.hpp>
 #include <maya/platform/io.hpp>
 
 #include <algorithm>
@@ -28,45 +31,16 @@ Element rag_settings_picker(const Model& m) {
     const auto* o = m.ui.overlay.get<ov::RagSettings>();
     if (!o) return nothing();
 
-    // Which mode is currently persisted (to mark the active row with a dot).
-    const store::RagMode active = o->active;
-
-    Picker::Config cfg;
-    cfg.title      = " RAG ";
-    cfg.accent     = info;
-    cfg.min_width  = 46;
-    cfg.viewport_h = rs::kModeCount + 2;
-    cfg.scroll     = nullptr;
-    // Selected index is derived for the widget only; identity is by VALUE.
-    {
-        int sel = 0;
-        for (int i = 0; i < rs::kModeCount; ++i)
-            if (rs::kModes[i] == o->cursor) { sel = i; break; }
-        cfg.selected = sel;
-    }
-
-    for (const store::RagMode mode : rs::kModes) {
-        const bool is_active = (mode == active);
-
-        Picker::Config::Row row;
-        row.badge       = is_active ? "\xe2\x97\x8f" : " ";   // ● active marker
-        row.badge_style = fg_of(success);
-        row.leading       = std::string{store::to_string(mode)};
-        row.leading_style = fg_of(fg);
-        row.trailing      = std::string{store::describe(mode)};
-        row.trailing_style = fg_dim(muted);
-        row.selected      = (mode == o->cursor);
-        cfg.rows.push_back(std::move(row));
-    }
-
-    cfg.footer.push_back(text(""));
-    cfg.footer.push_back(h(
-        text("\xe2\x86\x91\xe2\x86\x93 ", fg_of(fg)),   text("move   ", fg_dim(muted)),
-        text("Enter ", fg_of(fg)), text("select   ", fg_dim(muted)),
-        text("Esc ", fg_of(fg)),   text("close", fg_dim(muted))
-    ).build());
-
-    return Picker{std::move(cfg)}.build();
+    // ONE pane, always the form. Mode and embedder are two rows of the same
+    // question; every glyph belongs to maya::Panel and this host does nothing
+    // but project state onto its Config.
+    //
+    // The registry makes this pane taller than a short terminal, so it
+    // scrolls — same viewport arithmetic every other picker uses.
+    return maya::Panel{form_config(o->embed.form, info,
+                                  &m.ui.rag_settings_scroll,
+                                  picker_detail::picker_viewport_h(),
+                                  picker_detail::picker_terminal_cols())}.build();
 }
 
 } // namespace agentty::ui

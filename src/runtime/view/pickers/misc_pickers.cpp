@@ -2,7 +2,7 @@
 // the todo modal. Split out of the former monolithic pickers.cpp; shared
 // scaffolding lives in pickers_prologue.hpp / pickers_common.hpp.
 //
-// Pure adapter: builds maya::Picker::Config values from Model state. The
+// Pure adapter: builds maya::Panel::Config values from Model state. The
 // widget owns every chrome decision — border style, viewport clipping,
 // scrollbar glyph + thumb math, keep-selection-in-view auto-scroll. agentty
 // supplies only the row-level Elements and the typed cursor index.
@@ -36,7 +36,7 @@ Element checkpoint_picker(const Model& m) {
         return std::to_string(s / 86400) + "d ago";
     };
 
-    Picker::Config cfg;
+    Panel::Config cfg;
     cfg.title      = " Rewind to Checkpoint ";
     cfg.accent     = warn;
     cfg.min_width  = 52;
@@ -47,7 +47,7 @@ Element checkpoint_picker(const Model& m) {
     cfg.rows.reserve(o->entries.size());
     for (int i = 0; i < static_cast<int>(o->entries.size()); ++i) {
         const auto& e = o->entries[static_cast<std::size_t>(i)];
-        Picker::Config::Row row;
+        Panel::Row row;
         row.leading = "#" + std::to_string(e.turn) + "  " + e.preview;
         row.leading_style = fg_of(fg);
 
@@ -81,7 +81,6 @@ Element checkpoint_picker(const Model& m) {
         const bool has_changes =
             e.diff_state == checkpoint_picker::Entry::DiffState::Ready && !e.clean;
         row.trailing_style = has_changes ? fg_of(success) : fg_dim(muted);
-        row.selected = (i == o->index);
         cfg.rows.push_back(std::move(row));
     }
 
@@ -95,13 +94,13 @@ Element checkpoint_picker(const Model& m) {
         {"Esc", "cancel", 4},
     }));
 
-    return Picker{std::move(cfg)}.build();
+    return Panel{std::move(cfg)}.build();
 }
 
 Element todo_modal(const Model& m) {
     if (!pick::is_open(m.ui.todo.open)) return nothing();
 
-    Picker::Config cfg;
+    Panel::Config cfg;
     cfg.title      = " Plan ";
     cfg.accent     = info;
     cfg.min_width  = 45;
@@ -148,7 +147,7 @@ Element todo_modal(const Model& m) {
         text("Esc", fg_of(fg)), text(" close", fg_dim(muted))
     ).build());
 
-    return Picker{std::move(cfg)}.build();
+    return Panel{std::move(cfg)}.build();
 }
 
 } // namespace agentty::ui

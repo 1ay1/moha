@@ -3,7 +3,7 @@
 // the former monolithic pickers.cpp; shared scaffolding lives in
 // pickers_prologue.hpp / pickers_common.hpp.
 //
-// Pure adapter: builds maya::Picker::Config values from Model state. The
+// Pure adapter: builds maya::Panel::Config values from Model state. The
 // widget owns every chrome decision — border style, viewport clipping,
 // scrollbar glyph + thumb math, keep-selection-in-view auto-scroll. agentty
 // supplies only the row-level Elements and the typed cursor index.
@@ -20,7 +20,7 @@ Element code_block_picker(const Model& m) {
     auto* o = m.ui.overlay.get<ov::CodeBlocks>();
     if (!o) return nothing();
 
-    Picker::Config cfg;
+    Panel::Config cfg;
     cfg.title      = " Run Code Block ";
     cfg.accent     = success;
     cfg.min_width  = 60;
@@ -57,7 +57,7 @@ Element code_block_picker(const Model& m) {
         const std::string lang = b.language.empty() ? std::string{"sh"}
                                                     : b.language;
 
-        Picker::Config::Row row;
+        Panel::Row row;
         // Badge = the run affordance, a stable colour anchor (NOT dimmed on
         // the selected row, so "which of these actually runs" reads at a
         // glance): a ` ▶ ` play glyph in the success hue for a runnable
@@ -83,7 +83,6 @@ Element code_block_picker(const Model& m) {
                      + std::to_string(b.line_count)
                      + (b.line_count == 1 ? " line" : " lines");
         row.trailing_style = fg_dim(muted);
-        row.selected = (i == o->index);
         cfg.rows.push_back(std::move(row));
     }
 
@@ -96,7 +95,7 @@ Element code_block_picker(const Model& m) {
         {"Esc", "close", 4},
     }));
 
-    return Picker{std::move(cfg)}.build();
+    return Panel{std::move(cfg)}.build();
 }
 
 // Post-run result card. The user already watched the full output live
@@ -109,7 +108,7 @@ Element code_block_result_card(const Model& m) {
 
     const bool ok_exit = !r->timed_out && r->exit_code == 0;
 
-    Picker::Config cfg;
+    Panel::Config cfg;
     cfg.title      = " Run Result ";
     cfg.accent     = ok_exit ? success : danger;
     cfg.min_width  = 60;
@@ -239,7 +238,7 @@ Element code_block_result_card(const Model& m) {
         {"Esc", "discard", 4},
     }));
 
-    return Picker{std::move(cfg)}.build();
+    return Panel{std::move(cfg)}.build();
 }
 
 // Ctrl+O tool-output viewer. Two stages inside one Picker chrome:
@@ -264,7 +263,7 @@ Element tool_output_viewer(const Model& m) {
     const int sz = static_cast<int>(o->entries.size());
     const int cur = std::clamp(o->index, 0, std::max(0, sz - 1));
 
-    Picker::Config cfg;
+    Panel::Config cfg;
     // Overlay stretch supplies all available columns. A large minimum used to
     // force the picker past phone/SSH terminal bounds and clip its right side;
     // keep only the border's structural floor and let row flex do the rest.
@@ -300,7 +299,7 @@ Element tool_output_viewer(const Model& m) {
         cfg.rows.reserve(o->entries.size());
         for (int i = 0; i < sz; ++i) {
             const auto& e = o->entries[static_cast<std::size_t>(i)];
-            Picker::Config::Row row;
+            Panel::Row row;
             const Color cat_hue = tool_category_color(e.name);
             if (e.is_live) {
                 // The currently-running tool, pinned to the top. A bright
@@ -317,7 +316,6 @@ Element tool_output_viewer(const Model& m) {
                 row.leading_style  = fg_of(fg);
                 row.trailing       = e.trailing;
                 row.trailing_style = fg_dim(cat_hue);
-                row.selected       = (i == cur);
                 cfg.rows.push_back(std::move(row));
                 continue;
             }
@@ -336,7 +334,6 @@ Element tool_output_viewer(const Model& m) {
             row.leading_style  = e.failed ? fg_of(danger) : fg_of(fg);
             row.trailing       = e.trailing;
             row.trailing_style = e.failed ? fg_of(danger) : fg_dim(muted);
-            row.selected       = (i == cur);
             cfg.rows.push_back(std::move(row));
         }
         if (!compact_list) {
@@ -348,7 +345,7 @@ Element tool_output_viewer(const Model& m) {
                 {"Esc", "close", 3},
             }));
         }
-        return Picker{std::move(cfg)}.build();
+        return Panel{std::move(cfg)}.build();
     }
 
     // ── BODY stage ──
@@ -455,7 +452,7 @@ Element tool_output_viewer(const Model& m) {
                             .style   = fg_of(fg),
                             .wrap    = maya::TextWrap::Wrap,
                         }} | grow(1.0f)));
-                cache.rows.push_back(sep | height(1));
+                cache.rows.push_back(sep);
             }
         }
 
@@ -595,7 +592,7 @@ Element tool_output_viewer(const Model& m) {
         }
         cfg.footer.push_back(key_hints(std::move(viewer_hints)));
     }
-    return Picker{std::move(cfg)}.build();
+    return Panel{std::move(cfg)}.build();
 }
 
 } // namespace agentty::ui

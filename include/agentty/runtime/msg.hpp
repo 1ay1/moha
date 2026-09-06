@@ -38,6 +38,7 @@
 #include "agentty/provider/copilot/copilot_oauth.hpp"
 #include "agentty/provider/kimi/kimi_oauth.hpp"
 #include "agentty/runtime/fork_picker.hpp"
+#include "agentty/runtime/form_keys.hpp"
 #include "agentty/runtime/settings_categories.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/tool/registry.hpp"
@@ -605,10 +606,13 @@ struct UpdateTodos { std::vector<TodoItem> items; };
 // Strategic / Implementation / Utility slots. Enter on row 0 flips enabled;
 // Enter on a slot row opens the model picker in slot-assign mode. All changes
 // persist to settings.json.
+//
+// ONE key message, like the Retrieval pane: navigation, the master toggle and
+// the picker hand-off are all resolved by the shared form layer, so this pane
+// cannot drift from that one.
 struct OpenSmartMode {};
 struct CloseSmartMode {};
-struct SmartModeMove { int delta; };
-struct SmartModeSelect {};        // Enter: toggle (row 0) or open model chooser (rows 1-3)
+struct SmartModeKey { form::keys::Action action; };
 struct SmartModeClearSlot {};     // 'x' on a slot row: reset it to auto
 
 // ── In-app login modal ───────────────────────────────────────────────────
@@ -762,6 +766,30 @@ struct CloseRagSettings {};
 struct RagSettingsMove   { int delta; };   // move the row cursor
 struct RagSettingsAdjust {};               // select the highlighted mode
 struct RagSettingsReset  {};               // back to default (On)
+
+// ── Embeddings sub-form (RAG picker → Embeddings) ──────────────────
+// Which embedder retrieval uses, configured entirely in the TUI.
+//
+// There is ONE key message, not fifteen. Navigation, editing and the dropdown
+// are owned by the shared form layer (runtime/form_keys.hpp), which turns a
+// KeyEvent into a pane-agnostic intent; the reducer applies it and handles
+// only what is genuinely embeddings-specific. A pane that spelled out
+// Char/Backspace/CursorLeft/… messages would be re-deriving that key map, and
+// two panes doing so is how they drift apart.
+struct RagEmbedOpen  {};                   // enter the embeddings pane
+struct RagEmbedClose {};                   // leave one level (menu/field/pane)
+struct RagEmbedKey   { form::keys::Action action; };
+struct RagEmbedTest  {};                   // run the probe (worker thread)
+// Probe result. Carries the MEASURED dimension — the only trustworthy source
+// for it, since a wrong dim makes rag-cpp's HNSW silently drop every vector.
+struct RagEmbedTestDone {
+    bool          ok = false;
+    std::uint32_t dim = 0;
+    int           latency_ms = 0;
+    std::string   error;
+};
+struct RagEmbedSave  {};                    // persist + live-apply
+struct RagEmbedRevert{};                    // discard edits, reload from config
 
 // ── Settings pickers (Ctrl+K → Plugins/Commands/Agents/Hooks) ──────
 // One shared list modal, parameterised by the config concern. Opening
@@ -992,7 +1020,9 @@ using CheckpointMsg = std::variant<
 
 using RagSettingsMsg = std::variant<
     OpenRagSettings, CloseRagSettings, RagSettingsMove,
-    RagSettingsAdjust, RagSettingsReset>;
+    RagSettingsAdjust, RagSettingsReset,
+    RagEmbedOpen, RagEmbedClose, RagEmbedKey,
+    RagEmbedTest, RagEmbedTestDone, RagEmbedSave, RagEmbedRevert>;
 
 using SettingsListMsg = std::variant<
     OpenSettingsList, CloseSettingsList, SettingsListMove,
@@ -1024,7 +1054,7 @@ using MetaMsg = std::variant<
     CompactContext, CycleProfile, RestoreCheckpoint, CheckpointRestored,
     ScrollThread, ToggleRetrievedExpanded,
     TerminalFocus,
-    OpenSmartMode, CloseSmartMode, SmartModeMove, SmartModeSelect,
+    OpenSmartMode, CloseSmartMode, SmartModeKey,
     SmartModeClearSlot,
     Tick, Quit, NoOp, ClearStatus, RedrawScreen,
     UpdateCheckDone, UpdateApplied>;

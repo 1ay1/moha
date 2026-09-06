@@ -34,8 +34,18 @@ static void palette_checks() {
     m.d.pending_changes.push_back(FileChange{});
     auto rend = [&]{ return maya::render_to_string(ui::command_palette(m), 82); };
     std::string out = rend();
-    check(has(out, "\xe2\x94\x8c\xe2\x94\x80 THREAD"), "palette: bracket section header");
-    check(has(out, "\xe2\x94\x82"), "palette: spine");
+    // `--dump` prints the frame so a human can look at it, the same way
+    // embed_render_probe does. Checks still run either way.
+    if (const char* d = std::getenv("PALETTE_DUMP"); d && d[0])
+        std::printf("%s\n", out.c_str());
+    // Sections are plain headers now: Panel renders one as caps + a rule to
+    // the right edge. The old "┌─ THREAD" bracket, its │ spine down every row
+    // and its └ closer were a SECOND grouping system drawn on top of that —
+    // and the spine cost a badge column on every row to repeat what the
+    // header above it already said.
+    check(has(out, "THREAD"), "palette: section header present");
+    check(has(out, "\xe2\x94\x80\xe2\x94\x80"), "palette: header rule");
+    check(!has(out, "\xe2\x94\x8c\xe2\x94\x80 THREAD"), "palette: no bracket header");
     check(!has_mojibake(out), "palette: no mojibake");
     auto* o = m.ui.overlay.get<agentty::ui::overlay::CommandPalette>();
     o->query = "rev";

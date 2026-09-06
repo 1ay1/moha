@@ -23,7 +23,7 @@
 #include <variant>
 #include <vector>
 
-#include <maya/widget/picker.hpp>
+#include <maya/widget/panel.hpp>
 #include <maya/widget/plan_view.hpp>
 #include <maya/widget/tool_body_preview.hpp>
 #include <maya/platform/io.hpp>

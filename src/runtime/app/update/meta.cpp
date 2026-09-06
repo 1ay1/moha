@@ -23,6 +23,9 @@
 #include "agentty/runtime/view/helpers.hpp"   // ui::profile_label
 #include "agentty/store/store.hpp"
 #include "agentty/workspace/checkpoint.hpp"
+#include "agentty/runtime/smart_form.hpp"
+#include "agentty/runtime/app/settings_cache.hpp"
+#include "agentty/runtime/view/helpers.hpp"
 
 namespace ov = agentty::ui::overlay;
 
@@ -30,6 +33,42 @@ namespace agentty::app::detail {
 
 using maya::overload;
 using maya::Cmd;
+
+// Resolve the three role slots for DISPLAY and build the pane.
+//
+// Resolution is provider-scoped like the wire path, so a pin made under
+// another provider shows the auto-fill that will really serve the turn rather
+// than a model this endpoint cannot stream. That lookup needs the catalogue,
+// which is why it lives here and not in smart_form.cpp — that file stays pure.
+//
+// Shared with picker.cpp, which reopens the pane after a slot assignment: one
+// builder means the reopened pane cannot differ from the original.
+form::Form build_smart_form(const Model& m) {
+    const auto& sm = m.d.smart;
+    const std::string parent = m.d.model_id.value;
+
+    auto slot = [&](smart::ModelRole role) {
+        auto rp = smart::resolve_role(role, parent, m.d.effort,
+                                      m.d.available_models, sm,
+                                      active_provider_id());
+        std::string label = ui::pretty_model_label(rp.model);
+        smart_form::SlotView v;
+        v.label  = label.empty() ? rp.model : label;
+        v.pinned = sm.enabled && sm.slot(role).set;
+        return v;
+    };
+
+    smart_form::Inputs in;
+    in.enabled = sm.enabled;
+    // An env pin is a LOCK, not a late refusal: the row renders read-only and
+    // names the variable, instead of looking live and toasting on Enter.
+    if (smart::tuning::enabled_override())
+        in.enabled_lock = "env: AGENTTY_SMART_MODE";
+    in.strategic      = slot(smart::ModelRole::Strategic);
+    in.implementation = slot(smart::ModelRole::Implementation);
+    in.utility        = slot(smart::ModelRole::Utility);
+    return smart_form::build_form(in);
+}
 
 Step meta_update(Model m, msg::MetaMsg mm) {
     return std::visit(overload{
@@ -113,57 +152,76 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return {std::move(m), std::move(toast)};
         },
         [&](OpenSmartMode) -> Step {
-            m.ui.overlay = ov::SmartMode{smart::OverlayRow::Master};
+            m.ui.overlay = ov::SmartMode{build_smart_form(m)};
             return done(std::move(m));
         },
         [&](CloseSmartMode) -> Step {
             m.ui.overlay.close<ov::SmartMode>();
             return done(std::move(m));
         },
-        [&](SmartModeMove& e) -> Step {
-            if (auto* o = m.ui.overlay.get<ov::SmartMode>()) {
-                // Wrapping belongs to the row type, so there is no modulus
-                // here to get wrong and no index that can leave the drawn
-                // rows — next_row is closed over the enumeration.
-                o->row = smart::next_row(o->row, e.delta);
-            }
-            return done(std::move(m));
-        },
-        [&](SmartModeSelect) -> Step {
+        [&](SmartModeKey& e) -> Step {
             auto* o = m.ui.overlay.get<ov::SmartMode>();
             if (!o) return done(std::move(m));
-            const auto role = smart::role_of(o->row);
-            if (!role) {
-                // Master switch. Session pin (AGENTTY_SMART_MODE) owns it: a
-                // toggle would be silently overridden at next launch and never
-                // persisted (see persist_settings). Hinted no-op beats a lying
-                // toggle.
-                if (smart::tuning::enabled_override())
-                    return {std::move(m), set_status_toast(m,
-                        "Smart Mode is pinned by AGENTTY_SMART_MODE — "
-                        "unset the env var to toggle")};
-                m.d.smart.enabled = !m.d.smart.enabled;
+
+            // What the cursor is on BEFORE the shared reducer runs — activate
+            // may hand off, and we need to know which row asked.
+            const auto* row = o->form.focused();
+            const std::string row_id = row ? row->id : std::string{};
+            const auto role = smart_form::role_of_field(row_id);
+
+            const auto applied = form::keys::apply(o->form, e.action);
+
+            if (applied.close) {
+                m.ui.overlay.close<ov::SmartMode>();
+                return done(std::move(m));
+            }
+
+            // The master toggle. A locked row is never `changed`, so the env
+            // pin is enforced by the form rather than by a toast after the
+            // fact — the row renders read-only and names the variable.
+            if (applied.changed && !role) {
+                m.d.smart.enabled = smart_form::enabled_from_form(o->form,
+                                                                 m.d.smart.enabled);
                 persist_settings(m);
+                // The slots' locked state depends on the switch, so rebuild.
+                const int cursor = o->form.cursor;
+                o->form = build_smart_form(m);
+                o->form.cursor = cursor;
                 return {std::move(m), set_status_toast(m,
                     m.d.smart.enabled ? "Smart Mode on" : "Smart Mode off")};
             }
-            // A slot row → open the model picker in slot-assign mode. The
-            // picker scopes itself to the active provider and writes the
-            // slot on Enter (see fused_picker_update's Select arm).
-            m.ui.smart_assign_slot = *role;
-            m.ui.overlay.close<ov::SmartMode>();
-            return agentty::app::update(std::move(m), Msg{OpenFusedPicker{}});
+
+            // A slot row → hand off to the model picker. The candidate set is
+            // the whole catalogue, which is exactly what a `Pick` row means:
+            // too large and too dynamic for an inline dropdown.
+            if (applied.hand_off && role) {
+                m.ui.smart_assign_slot = *role;
+                m.ui.overlay.close<ov::SmartMode>();
+                return agentty::app::update(std::move(m), Msg{OpenFusedPicker{}});
+            }
+
+            // 'x' resets the focused slot to auto.
+            if (e.action.intent == form::keys::Intent::ResetField && role) {
+                return agentty::app::update(std::move(m), Msg{SmartModeClearSlot{}});
+            }
+            return done(std::move(m));
         },
         [&](SmartModeClearSlot) -> Step {
             auto* o = m.ui.overlay.get<ov::SmartMode>();
             if (!o) return done(std::move(m));
-            // `x` only means something on a slot row. role_of returns nullopt
-            // for the master switch, so "not a slot" cannot fall through into
-            // a slot the way an int comparison could.
-            const auto role = smart::role_of(o->row);
+            // `x` only means something on a slot row. role_of_field returns
+            // nullopt for the master switch, so "not a slot" cannot fall
+            // through into a slot the way an int comparison could.
+            const auto* row = o->form.focused();
+            if (!row || row->locked) return done(std::move(m));
+            const auto role = smart_form::role_of_field(row->id);
             if (!role) return done(std::move(m));
             m.d.smart.slot(*role) = smart::SlotOverride{};   // reset to auto
             persist_settings(m);
+            // The row shows the RESOLVED model, which just changed.
+            const int cursor = o->form.cursor;
+            o->form = build_smart_form(m);
+            o->form.cursor = cursor;
             return {std::move(m), set_status_toast(m, "slot reset to auto")};
         },
         [&](RestoreCheckpoint& e) -> Step {
@@ -778,6 +836,10 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             // using" complaint. persist_settings is load-modify-save, so it
             // preserves every other backend's recall + keys.
             persist_settings(m);
+            // The settings seam is write-behind, so that save is queued rather
+            // than on disk. Drain it here — the ONE place a synchronous wait is
+            // correct, because no frame is drawn after this.
+            settings_cache::flush();
             return {std::move(m), Cmd<Msg>::quit()};
         },
         [&](NoOp) -> Step { return done(std::move(m)); },

@@ -11,7 +11,7 @@
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/fork_picker.hpp"
 
-#include <maya/widget/picker.hpp>
+#include <maya/widget/panel.hpp>
 
 #include <string>
 
@@ -48,7 +48,7 @@ Element fork_picker_view(const Model& m) {
     const auto* o = m.ui.overlay.get<ov::Fork>();
     if (!o) return nothing();
 
-    Picker::Config cfg;
+    Panel::Config cfg;
     cfg.title      = " Fork thread ";
     cfg.accent     = info;
     cfg.min_width  = 52;
@@ -60,12 +60,11 @@ Element fork_picker_view(const Model& m) {
     // table to keep in order.
     for (const fp::Choice c : fp::kChoices) {
         const RowSpec spec = row_spec(c);
-        Picker::Config::Row row;
+        Panel::Row row;
         row.leading       = spec.label;
         row.leading_style = fg_of(fg);
         row.trailing      = spec.help;
         row.trailing_style = fg_dim(muted);
-        row.selected      = (c == o->choice);
         cfg.rows.push_back(std::move(row));
     }
 
@@ -80,7 +79,7 @@ Element fork_picker_view(const Model& m) {
         text("Esc ", fg_of(fg)),   text("close", fg_dim(muted))
     ).build());
 
-    return Picker{std::move(cfg)}.build();
+    return Panel{std::move(cfg)}.build();
 }
 
 } // namespace agentty::ui

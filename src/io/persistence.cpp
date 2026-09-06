@@ -1,4 +1,5 @@
 #include "agentty/io/persistence.hpp"
+#include "agentty/runtime/settings_registry.hpp"
 
 #include "agentty/util/logx.hpp"
 
@@ -1325,6 +1326,34 @@ store::Settings load_settings() {
             c.persist           = r.value("persist", c.persist);
             c.learn             = r.value("learn", c.learn);
             c.trace             = r.value("trace", c.trace);
+            // Registry-owned rows, read by walking the table — a knob added
+            // there is loaded here with no edit. Keys are the row ids
+            // ("rag.mmr_lambda"), stored flat so a rename is visible in the
+            // file rather than silently resetting to the default.
+            for (const auto& d : settings::registry::kSettings) {
+                const std::string key{d.id};
+                if (!r.contains(key)) continue;
+                const auto& v = r.at(key);
+                std::string as_text;
+                if      (v.is_boolean())        as_text = v.get<bool>() ? "true" : "false";
+                else if (v.is_number_integer()) as_text = std::to_string(v.get<long long>());
+                else if (v.is_number())         as_text = std::to_string(v.get<double>());
+                else if (v.is_string())         as_text = v.get<std::string>();
+                else continue;
+                (void)settings::registry::set(c, d, as_text);
+            }
+            // Embeddings. Absent keys leave the env-derived default intact.
+            c.embed_backend        = r.value("embed_backend", c.embed_backend);
+            c.embed_model          = r.value("embed_model", c.embed_model);
+            c.embed_host           = r.value("embed_host", c.embed_host);
+            c.embed_port           = static_cast<std::uint16_t>(
+                                        r.value("embed_port", static_cast<int>(c.embed_port)));
+            c.embed_tls            = r.value("embed_tls", c.embed_tls);
+            c.embed_path           = r.value("embed_path", c.embed_path);
+            c.embed_model_path     = r.value("embed_model_path", c.embed_model_path);
+            c.embed_tokenizer_path = r.value("embed_tokenizer_path", c.embed_tokenizer_path);
+            c.embed_dim            = static_cast<std::uint32_t>(
+                                        r.value("embed_dim", static_cast<int>(c.embed_dim)));
         }
         if (j.contains("smart") && j["smart"].is_object()) {
             const auto& sm = j["smart"];
@@ -1436,6 +1465,44 @@ void save_settings(const store::Settings& s) {
             {"learn",              c.learn},
             {"trace",              c.trace},
         };
+        // Registry-owned rows: written by walking the table, and ONLY when
+        // they differ from the shipped default. A config that never touched a
+        // knob stays clean, and a future change to a default reaches users
+        // who never overrode it.
+        {
+            auto& r = j["rag"];
+            for (const auto& d : settings::registry::kSettings) {
+                if (settings::registry::is_default(c, d)) continue;
+                const std::string key{d.id};
+                const std::string val = settings::registry::get(c, d);
+                switch (d.type) {
+                    case settings::registry::Type::Bool: r[key] = (val == "true"); break;
+                    case settings::registry::Type::Int:
+                        try { r[key] = std::stoll(val); } catch (...) {}
+                        break;
+                    case settings::registry::Type::Real:
+                        try { r[key] = std::stod(val); } catch (...) {}
+                        break;
+                    case settings::registry::Type::Enum: r[key] = val; break;
+                }
+            }
+        }
+        // Embeddings: written only once the user has actually chosen a
+        // backend, so a config that never touched the pane stays clean and
+        // keeps following the env/default path. The API key is NEVER written
+        // here — it lives in the OS keystore.
+        if (!c.embed_backend.empty()) {
+            auto& r = j["rag"];
+            r["embed_backend"] = c.embed_backend;
+            if (!c.embed_model.empty())          r["embed_model"]          = c.embed_model;
+            if (!c.embed_host.empty())           r["embed_host"]           = c.embed_host;
+            if (c.embed_port != 0)               r["embed_port"]           = c.embed_port;
+            if (c.embed_tls)                     r["embed_tls"]            = true;
+            if (!c.embed_path.empty())           r["embed_path"]           = c.embed_path;
+            if (!c.embed_model_path.empty())     r["embed_model_path"]     = c.embed_model_path;
+            if (!c.embed_tokenizer_path.empty()) r["embed_tokenizer_path"] = c.embed_tokenizer_path;
+            if (c.embed_dim != 0)                r["embed_dim"]            = c.embed_dim;
+        }
     }
     // Smart Mode: persist only when meaningfully configured (enabled, or any
     // slot pinned) so a fresh config stays clean.

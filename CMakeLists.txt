@@ -194,6 +194,16 @@ function(agentty_objlib name)
     add_library(${name} OBJECT ${ARGN})
     target_include_directories(${name} PRIVATE include)
     target_compile_definitions(${name} PRIVATE AGENTTY_VERSION="${PROJECT_VERSION}")
+    # No C++20 module scanning. This tree uses headers, not modules, so the
+    # scan finds nothing -- but CMake still passes `-fmodule-mapper=<...>.modmap`
+    # to every compile, and ccache classifies that as an UNSUPPORTED COMPILER
+    # OPTION and refuses to cache the TU. Measured: 100% uncacheable calls with
+    # scanning on, so `ccache` was installed and doing nothing.
+    #
+    # maya already does this for the same reason (see maya/CMakeLists.txt,
+    # which also hit a scan-vs-archive ordering bug). Turning it off here makes
+    # the object libraries cacheable and is otherwise a no-op.
+    set_target_properties(${name} PROPERTIES CXX_SCAN_FOR_MODULES OFF)
     if(AGENTTY_UNITY_BUILD)
         set_target_properties(${name} PROPERTIES
             UNITY_BUILD ON
@@ -320,6 +330,10 @@ add_executable(agentty
 )
 
 target_include_directories(agentty PRIVATE include)
+# Same reason as agentty_objlib(): the module scan makes every compile
+# uncacheable by ccache. main.cpp is compiled straight into this target, so it
+# needs the property too.
+set_target_properties(agentty PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 # Bake the project version into the binary so `agentty --version` /
 # the User-Agent string don't drift from CMakeLists.txt's
 # `project(agentty VERSION X.Y.Z)`. Single source of truth — bumping

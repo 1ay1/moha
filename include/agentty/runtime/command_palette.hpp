@@ -103,7 +103,7 @@ inline constexpr std::array kCommands = std::array{
     CommandDef{Command::SwapModel,     "Swap to previous model", "Jump back to the model you used before (cross-provider)", "Ctrl+Tab", Category::Config},
     CommandDef{Command::OpenProviders, "Switch provider",    "Choose the LLM backend (Anthropic, OpenAI, …)", "Ctrl+P", Category::Config},
     CommandDef{Command::SmartMode,     "Smart Mode",         "Configure role-based routing — send cheap grunt work to a cheaper model", "Ctrl+S", Category::Config},
-    CommandDef{Command::OpenRagSettings,"Retrieval (RAG)",   "How proactive retrieval behaves: on / first turn only / off", "", Category::Config},
+    CommandDef{Command::OpenRagSettings,"Retrieval (RAG)",   "Proactive retrieval on / first turn / off, and which embedding backend to use", "", Category::Config},
     CommandDef{Command::OpenPlugins,   "MCP servers",        "Plugins / MCP servers (mcp.json) — list & remove; add with `agentty plugin add`", "", Category::Config},
     CommandDef{Command::OpenCommands,  "Slash commands",     "Discovered /commands — author in .agentty/commands/*.md", "", Category::Config},
     CommandDef{Command::OpenAgents,    "Subagents",          "Task agent types — built-ins + your .agentty/agents/*.md", "", Category::Config},

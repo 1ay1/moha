@@ -19,7 +19,7 @@
 #include <vector>
 
 #include <maya/dsl.hpp>
-#include <maya/widget/picker.hpp>
+#include <maya/widget/panel.hpp>
 #include <maya/platform/io.hpp>
 
 #include "agentty/runtime/model.hpp"
@@ -189,15 +189,14 @@ struct SectionHeader {
     int         count = 0;             // 0 = no count shown
 };
 
-// Build one `is_header` picker row from a SectionHeader. Uppercases the label
-// (colour + spacing is the divider — no ┌─/│ bracket glyphs, which would
-// imply a spine running through the rows below; grouped pickers here use the
-// badge cell for other content, so a bracket with no spine reads as broken).
-[[nodiscard]] inline Picker::Config::Row section_header(SectionHeader h) {
-    Picker::Config::Row hdr;
-    hdr.is_header = true;
-    for (char& ch : h.label)
-        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+// Build one `is_header` row from a SectionHeader.
+//
+// The label is passed through as-is: Panel uppercases a header and draws the
+// rule to the right edge. Doing it here too was the same transform applied
+// twice by two owners — harmless only because upper-casing is idempotent.
+[[nodiscard]] inline Panel::Row section_header(SectionHeader h) {
+    Panel::Row hdr;
+    hdr.is_header     = true;
     hdr.leading       = std::move(h.label);
     hdr.leading_style = fg_of(h.hue);
     if (h.count > 0) {

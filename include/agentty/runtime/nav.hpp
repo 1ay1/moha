@@ -176,3 +176,47 @@ struct CharView {
 }
 
 } // namespace agentty::ui::nav
+
+namespace agentty::ui::overlay {
+
+// The message that closes an overlay of this Kind.
+//
+// The BACKSTOP for the escape guarantee (see subscribe.cpp). Every exclusive
+// overlay swallows unclaimed keys — that is what makes it modal — so a handler
+// that fails to answer Esc strands the user with no way out and the app looks
+// frozen. The Retrieval pane shipped exactly that bug.
+//
+// Rather than trusting fifteen handlers to each get Esc right forever, the
+// dispatcher falls back to this. A modal can be buggy, half-built, or brand
+// new and STILL never trap the user.
+//
+// Exhaustive on Kind (-Wswitch), so adding an overlay without naming its close
+// message is a compile warning rather than a modal you cannot leave — the
+// guarantee must not depend on anyone remembering it.
+[[nodiscard]] inline Msg close_msg(Kind k) noexcept {
+    switch (k) {
+        case Kind::Login:           return Msg{CloseLogin{}};
+        case Kind::Permission:      return Msg{PermissionReject{}};
+        case Kind::CommandPalette:  return Msg{CloseCommandPalette{}};
+        case Kind::Mention:         return Msg{CloseMentionPalette{}};
+        case Kind::Symbol:          return Msg{CloseSymbolPalette{}};
+        case Kind::CodeBlocks:      return Msg{CloseCodeBlockPicker{}};
+        case Kind::CodeBlockResult: return Msg{CloseCodeBlockPicker{}};
+        case Kind::ToolViewer:      return Msg{CloseToolOutputViewer{}};
+        case Kind::Checkpoints:     return Msg{CloseCheckpointPicker{}};
+        case Kind::RagSettings:     return Msg{CloseRagSettings{}};
+        case Kind::SettingsList:    return Msg{CloseSettingsList{}};
+        case Kind::Fork:            return Msg{CloseForkPicker{}};
+        case Kind::FusedPicker:     return Msg{CloseFusedPicker{}};
+        case Kind::ProviderPicker:  return Msg{CloseProviderPicker{}};
+        case Kind::ThreadList:      return Msg{CloseThreadList{}};
+        case Kind::SmartMode:       return Msg{CloseSmartMode{}};
+        case Kind::DiffReview:      return Msg{CloseDiffReview{}};
+        // Ambient: never swallows, so it never needs rescuing.
+        case Kind::Todo:            return Msg{NoOp{}};
+        case Kind::None:            return Msg{NoOp{}};
+    }
+    return Msg{NoOp{}};
+}
+
+} // namespace agentty::ui::overlay

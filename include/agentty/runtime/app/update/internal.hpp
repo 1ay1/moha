@@ -348,6 +348,11 @@ Step login_update         (Model m, msg::LoginMsg          lm);
 Step diff_review_update   (Model m, msg::DiffReviewMsg     dm);
 Step meta_update          (Model m, msg::MetaMsg           mm);
 
+// Build the Smart Mode pane from the live model + catalogue (meta.cpp).
+// Shared with picker.cpp, which reopens the pane after a slot assignment —
+// one builder means the reopened pane cannot differ from the original.
+[[nodiscard]] form::Form build_smart_form(const Model& m);
+
 // ── Row estimation (frozen.cpp) ──────────────────────────────────────────
 //
 // Predicted RENDERED height of a message, in terminal rows, at `cols`.
