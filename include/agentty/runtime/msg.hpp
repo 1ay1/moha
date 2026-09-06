@@ -766,6 +766,9 @@ struct CloseRagSettings {};
 struct RagSettingsMove   { int delta; };   // move the row cursor
 struct RagSettingsAdjust {};               // select the highlighted mode
 struct RagSettingsReset  {};               // back to default (On)
+// Reveal/hide the Tier::Advanced rows (^A). The pane rebuilds its form; the
+// flag is view state, not config, so it is not persisted.
+struct RagSettingsAdvanced {};
 
 // ── Embeddings sub-form (RAG picker → Embeddings) ──────────────────
 // Which embedder retrieval uses, configured entirely in the TUI.
@@ -1020,7 +1023,7 @@ using CheckpointMsg = std::variant<
 
 using RagSettingsMsg = std::variant<
     OpenRagSettings, CloseRagSettings, RagSettingsMove,
-    RagSettingsAdjust, RagSettingsReset,
+    RagSettingsAdjust, RagSettingsReset, RagSettingsAdvanced,
     RagEmbedOpen, RagEmbedClose, RagEmbedKey,
     RagEmbedTest, RagEmbedTestDone, RagEmbedSave, RagEmbedRevert>;
 

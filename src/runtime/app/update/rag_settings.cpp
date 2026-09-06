@@ -80,14 +80,16 @@ void write_embed_into(store::RagConfig& r, const eb::EmbedConfig& c) {
 }
 
 // Rebuild the rows after a change that alters WHICH rows exist, keeping the
-// cursor on the same logical field.
-void resync_rows(rs::EmbedForm& f, store::RagMode mode) {
+// cursor on the same logical field. `advanced` must be carried through every
+// rebuild: dropping it would silently collapse the pane back to the basic rows
+// the next time any field changed the row set.
+void resync_rows(rs::EmbedForm& f, store::RagMode mode, bool advanced) {
     const auto* focused = f.form.focused();
     const std::string focused_id = focused ? focused->id : std::string{};
     f.cfg = rs::config_from_form(f.cfg, f.form);
 
     const bool was_dirty = f.form.dirty;
-    f.form = rs::build_form(f.cfg, mode, deps().load_settings());
+    f.form = rs::build_form(f.cfg, mode, deps().load_settings(), advanced);
     f.form.dirty = was_dirty;
     for (std::size_t i = 0; i < f.form.fields.size(); ++i)
         if (f.form.fields[i].id == focused_id) {
@@ -144,16 +146,21 @@ void refresh_status(rs::EmbedForm& f) {
     else if (f.form.dirty)
         f.form.note = "unsaved \xe2\x80\x94 ^T test, ^S save";
     else
-        f.form.note.clear();
+        // The RESTING note advertises ^A. Advanced rows are hidden by default,
+        // and a knob nobody can find is the problem this pane exists to fix —
+        // so the affordance has to be on screen, not in a doc. Shown only when
+        // there is nothing more urgent to say.
+        f.form.note = "^A advanced";
 }
 
 // Build the pane's form for `mode`, seeded with what the live retriever
 // already knows so opening it immediately shows whether embeddings work
 // rather than an empty "untested" state.
-[[nodiscard]] rs::EmbedForm make_embed_form(store::RagMode mode) {
+[[nodiscard]] rs::EmbedForm make_embed_form(store::RagMode mode,
+                                            bool advanced = false) {
     rs::EmbedForm f;
     f.cfg  = current_embed_config();
-    f.form = rs::build_form(f.cfg, mode, deps().load_settings());
+    f.form = rs::build_form(f.cfg, mode, deps().load_settings(), advanced);
     const auto st = tools::rag_embed_status();
     using S = tools::RagEmbedStatus::State;
     if (st.state == S::Ready)
@@ -209,12 +216,28 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             if (auto* f = form_of(m)) (void)form::activate(f->form);
             return {std::move(m), Cmd<Msg>::none()};
         },
+        [&](RagSettingsAdvanced) -> Step {
+            // Reveal/hide the Tier::Advanced rows. The form is rebuilt because
+            // the row SET changes; the cursor is kept where it was so the
+            // toggle does not also move the selection out from under the user.
+            if (auto* o = m.ui.overlay.get<ov::RagSettings>()) {
+                o->advanced = !o->advanced;
+                const int cursor = o->embed.form.cursor;
+                o->embed.form = rs::build_form(o->embed.cfg, o->cursor,
+                                               deps().load_settings(),
+                                               o->advanced);
+                // Clamp: hiding rows can leave the cursor past the end.
+                const int n = static_cast<int>(o->embed.form.fields.size());
+                o->embed.form.cursor = n > 0 ? std::min(cursor, n - 1) : 0;
+            }
+            return {std::move(m), Cmd<Msg>::none()};
+        },
         [&](RagSettingsReset) -> Step {
             commit_mode(store::RagMode::On);
             if (auto* o = m.ui.overlay.get<ov::RagSettings>()) {
                 o->cursor = store::RagMode::On;
                 o->active = store::RagMode::On;
-                o->embed  = make_embed_form(store::RagMode::On);
+                o->embed  = make_embed_form(store::RagMode::On, o->advanced);
             }
             return {std::move(m), Cmd<Msg>::none()};
         },
@@ -225,7 +248,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             // built on open), but a caller that wants a fresh probe state can
             // still ask for one.
             if (auto* o = m.ui.overlay.get<ov::RagSettings>())
-                o->embed = make_embed_form(o->cursor);
+                o->embed = make_embed_form(o->cursor, o->advanced);
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](RagEmbedClose) -> Step {
@@ -269,10 +292,9 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
                 } else {
                     invalidate_probe(*f);
                     if (on_backend) {
-                        const auto mode = m.ui.overlay.get<ov::RagSettings>()
-                                        ? m.ui.overlay.get<ov::RagSettings>()->cursor
-                                        : store::RagMode::On;
-                        resync_rows(*f, mode);
+                        auto* o = m.ui.overlay.get<ov::RagSettings>();
+                        const auto mode = o ? o->cursor : store::RagMode::On;
+                        resync_rows(*f, mode, o && o->advanced);
                     } else {
                         sync_cfg(*f);
                     }

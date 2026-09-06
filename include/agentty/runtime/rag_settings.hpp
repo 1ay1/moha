@@ -123,6 +123,13 @@ struct Open {
     // in by a deferred Cmd; it is now built at construction, so "open but
     // inert" is not representable.
     EmbedForm embed;
+
+    // Show the Tier::Advanced rows — the knobs whose effect a user cannot judge
+    // at a glance (numeric tuning, the routing policy). Hidden by DEFAULT, not
+    // absent: burying them in an env var is what made them undiscoverable in
+    // the first place, and a settings screen that lists thirty sliders is its
+    // own kind of unusable. Toggled with ^A; the pane rebuilds its form.
+    bool advanced = false;
 };
 
 // The rows, in display order — 1:1 with store::RagMode. The ONE place the

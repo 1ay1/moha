@@ -282,7 +282,20 @@ template <class Wrap>
 // Key routing for the Retrieval overlay. The ENTIRE key map lives in the
 // shared form layer — which mode owns the keyboard, what Enter does per row
 // kind, how Esc unwinds — so this only forwards.
+//
+// ^A is the one exception, and it is checked FIRST: it changes which rows
+// EXIST rather than acting on a row, so it is pane state, not a form action.
+// Guarded on !editing so it stays literal while a text field has the keyboard
+// — typing ^A into an endpoint should not reshuffle the pane underneath.
 std::optional<Msg> on_rag_settings(const FormFocus& f, const KeyEvent& ev) {
+    if (f.open && !f.editing)
+        if (const auto* ck = std::get_if<CharKey>(&ev.key)) {
+            const char32_t c = ck->codepoint;
+            // 0x01 is what legacy terminals send for ^A, the same way ^C
+            // arrives as 0x03 above.
+            if (c == 0x01 || (ev.mods.ctrl && (c == U'a' || c == U'A')))
+                return Msg{RagSettingsAdvanced{}};
+        }
     return on_form(f, ev, [](form::keys::Action a) { return Msg{RagEmbedKey{a}}; });
 }
 

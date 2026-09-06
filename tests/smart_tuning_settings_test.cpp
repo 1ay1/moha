@@ -22,6 +22,7 @@
 
 #include "agentty/domain/smart_tuning.hpp"
 #include "agentty/io/persistence.hpp"
+#include "agentty/runtime/rag_settings.hpp"
 #include "agentty/runtime/settings_registry.hpp"
 #include "agentty/store/store.hpp"
 
@@ -153,6 +154,41 @@ TEST_CASE("smart tuning: a configured value survives save and load") {
     CHECK(back.smart_deep_margin == 7);
     // A row left alone is not written, and comes back as the shipped default.
     CHECK(back.smart_bias_clamp == tun::kBiasClampDefault);
+}
+
+TEST_CASE("smart tuning: the rows are REACHABLE from the settings pane") {
+    // The rows existed, persisted, clamped and round-tripped — and were
+    // invisible. Every build_form call site omitted `advanced`, which defaults
+    // to false, and all three routing rows are Tier::Advanced. So the feature
+    // shipped complete and unreachable: exactly the "undiscoverable" failure
+    // it was written to fix, one layer up.
+    //
+    // Asserted on the FORM, which is what the pane renders: absent by default
+    // (thirty sliders is its own kind of unusable), present once ^A is on.
+    namespace rs = agentty::rag_settings;
+    agentty::rag::embed::EmbedConfig cfg;
+    const Settings s;
+
+    const auto basic = rs::build_form(cfg, agentty::store::RagMode::On, s,
+                                      /*advanced=*/false);
+    const auto adv   = rs::build_form(cfg, agentty::store::RagMode::On, s,
+                                      /*advanced=*/true);
+
+    for (const char* id : {"smart.complex_threshold", "smart.deep_margin",
+                           "smart.bias_clamp"}) {
+        CHECK(basic.find(id) == nullptr);
+        CHECK(adv.find(id) != nullptr);
+    }
+
+    // And they are real, editable Number rows carrying the registry's range —
+    // not locked placeholders.
+    const auto* cut = adv.find("smart.complex_threshold");
+    REQUIRE(cut != nullptr);
+    CHECK_FALSE(cut->locked);
+    const auto* num = std::get_if<agentty::form::field::Number>(&cut->value);
+    REQUIRE(num != nullptr);
+    CHECK(num->min == tun::kComplexMin);
+    CHECK(num->max == tun::kComplexMax);
 }
 
 #if !defined(_WIN32)
