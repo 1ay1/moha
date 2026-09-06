@@ -689,6 +689,74 @@ TEST_CASE("panel: multi-row items scroll in row space") {
     CHECK(out.find("item3-c") != std::string::npos);
 }
 
+TEST_CASE("panel: the dropdown reads as one attached block") {
+    // The dropdown's job is to look like a dropdown — a list belonging to the
+    // row above it — and not like four more panel rows that happen to sit
+    // nearby. Two properties carry that, and both were absent when every
+    // option was right-aligned on its own:
+    //
+    //   1. The radios share a COLUMN. Independently right-aligned lines put
+    //      them in as many columns as there were distinct label lengths, and
+    //      a radio group whose radios do not line up does not read as a group.
+    //   2. The block has a BOUNDARY, so where the options start and stop is
+    //      drawn rather than inferred.
+    maya::ScrollState s;
+    Panel::Config c;
+    c.title      = " Menu ";
+    c.min_width  = 60;
+    c.viewport_h = 12;
+    c.scroll     = &s;
+    for (int i = 0; i < 3; ++i) {
+        Panel::Row r;
+        r.leading = "field" + std::to_string(i);
+        if (i == 1) r.control = maya::panel::Choice{.label = "beta"};
+        c.rows.push_back(std::move(r));
+    }
+    Panel::Menu m;
+    // Deliberately ragged: the shortest and longest differ by a lot, which is
+    // exactly when per-line alignment scattered the radios.
+    m.options     = {"a", "beta", "a considerably longer option label"};
+    m.highlighted = 1;
+    m.current     = 1;
+    m.viewport    = 3;
+    c.menu     = m;
+    c.menu_row = 1;
+    c.selected = 1;
+
+    const auto out = render(std::move(c), 72);
+
+    // Column of the radio glyph on each option line. All three must agree.
+    std::vector<std::size_t> radio_cols;
+    std::size_t start = 0;
+    while (start <= out.size()) {
+        const std::size_t nl = out.find('\n', start);
+        const std::string line =
+            out.substr(start, nl == std::string::npos ? std::string::npos
+                                                      : nl - start);
+        // ◉ (selected) or ○ (unselected)
+        std::size_t at = line.find("\xe2\x97\x89");
+        if (at == std::string::npos) at = line.find("\xe2\x97\x8b");
+        if (at != std::string::npos) {
+            // Count DISPLAY columns, not bytes: the chevron ahead of it is
+            // multi-byte, so a byte offset would differ per line by construction.
+            radio_cols.push_back(
+                static_cast<std::size_t>(maya::string_width(line.substr(0, at))));
+        }
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+
+    REQUIRE(radio_cols.size() == 3);
+    CHECK(radio_cols[0] == radio_cols[1]);
+    CHECK(radio_cols[1] == radio_cols[2]);
+
+    // And the block is bracketed above and below.
+    CHECK(out.find("\xe2\x95\xad") != std::string::npos);   // ╭ opens it
+    CHECK(out.find("\xe2\x95\xb0") != std::string::npos);   // ╰ closes it
+    // The top rule ties back to the row's chevron.
+    CHECK(out.find("\xe2\x94\xb4") != std::string::npos);   // ┴
+}
+
 TEST_CASE("panel: a Secret is never rendered in the clear") {
     // The control carries a LENGTH, not a string — there is no plaintext in
     // the widget's inputs, so no render path can leak one.
@@ -803,10 +871,12 @@ TEST_CASE("panel: an open menu is measured at the height it draws") {
         return render(std::move(c), 60);
     };
 
-    // A windowed list with a hint: row + 3 options + hint + "2/5". Every one
-    // of those lines must be on screen at once.
+    // A windowed list with a hint: row + the block's two rules + 3 options +
+    // hint + "2/5". Every one of those lines must be on screen at once, which
+    // is what the measure pass has to have predicted for the scroll to keep
+    // the group together.
     {
-        const auto out = frame(5, 3, 1, true, 6);
+        const auto out = frame(5, 3, 1, true, 8);
         CHECK(out.find("field3")  != std::string::npos);
         CHECK(out.find("option0") != std::string::npos);
         CHECK(out.find("option2") != std::string::npos);
@@ -815,14 +885,14 @@ TEST_CASE("panel: an open menu is measured at the height it draws") {
     }
     // No hints: the counter is then the last line of the group.
     {
-        const auto out = frame(5, 3, 1, false, 5);
+        const auto out = frame(5, 3, 1, false, 7);
         CHECK(out.find("option2") != std::string::npos);
         CHECK(out.find("2/5")     != std::string::npos);
         CHECK(out.find("about1")  == std::string::npos);
     }
     // Fits: no counter at all, and the last option is the last line.
     {
-        const auto out = frame(3, 5, 1, false, 4);
+        const auto out = frame(3, 5, 1, false, 6);
         CHECK(out.find("option2") != std::string::npos);
         CHECK(out.find("3/3")     == std::string::npos);
     }
