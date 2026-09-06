@@ -199,12 +199,18 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](CloseRagSettings) -> Step {
-            // Esc backs out to the command palette it was opened from,
-            // matching the other Ctrl+K settings pickers. (Selecting a
-            // mode, below, commits and drops to the thread — that's "done",
-            // not "back".)
+            // Esc unwinds ONE level, to whatever opened this pane. It used to
+            // always reopen the command palette — right when you came from ^K,
+            // wrong from the settings list, which is now a real entry point.
+            // (Selecting a mode, below, commits and drops to the thread —
+            // that's "done", not "back".)
+            const auto from = m.ui.overlay.get<ov::RagSettings>()
+                            ? m.ui.overlay.get<ov::RagSettings>()->from
+                            : ui::settings_origin::Origin{
+                                  ui::settings_origin::Palette{
+                                      Command::OpenRagSettings}};
             m.ui.overlay.close<ov::RagSettings>();
-            m.ui.overlay = ov::CommandPalette{{"", palette_index_of(Command::OpenRagSettings)}};
+            back_to(m, from);
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](RagSettingsMove& e) -> Step {

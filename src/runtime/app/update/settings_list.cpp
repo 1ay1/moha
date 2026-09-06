@@ -215,12 +215,29 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
             switch (row.action) {
                 case se::Action::CycleProfile:
                     return agentty::app::update(std::move(m), Msg{CycleProfile{}});
-                case se::Action::OpenRag:
+                case se::Action::OpenRag: {
+                    // Descending, not jumping: the target records that it came
+                    // from THIS list on THIS category, so Esc lands back here
+                    // rather than dropping to the thread. Constructed directly
+                    // instead of dispatching Open* — those arms mean "opened
+                    // from the thread" and set the origin accordingly.
+                    const auto cat = o->concern;
                     m.ui.overlay.close<ov::SettingsList>();
-                    return agentty::app::update(std::move(m), Msg{OpenRagSettings{}});
-                case se::Action::OpenSmart:
+                    auto st = agentty::app::update(std::move(m),
+                                                   Msg{OpenRagSettings{}});
+                    if (auto* r = st.first.ui.overlay.get<ov::RagSettings>())
+                        r->from = ui::settings_origin::SettingsList{cat};
+                    return st;
+                }
+                case se::Action::OpenSmart: {
+                    const auto cat = o->concern;
                     m.ui.overlay.close<ov::SettingsList>();
-                    return agentty::app::update(std::move(m), Msg{OpenSmartMode{}});
+                    auto st = agentty::app::update(std::move(m),
+                                                   Msg{OpenSmartMode{}});
+                    if (auto* s = st.first.ui.overlay.get<ov::SmartMode>())
+                        s->from = ui::settings_origin::SettingsList{cat};
+                    return st;
+                }
                 case se::Action::RemovePlugin: {
                     auto path = edit_target(row);
                     auto r = tools::plugin::remove_server(path, row.arg);

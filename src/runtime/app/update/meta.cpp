@@ -160,7 +160,11 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return {std::move(m), std::move(toast)};
         },
         [&](OpenSmartMode) -> Step {
-            m.ui.overlay = ov::SmartMode{build_smart_form(m)};
+            // ^S opens from the thread. Callers that open it from somewhere
+            // else (the palette, the settings list) construct the overlay
+            // themselves with the right origin — see settings_list.cpp.
+            m.ui.overlay = ov::SmartMode{build_smart_form(m), false,
+                                         ui::settings_origin::Thread{}};
             return done(std::move(m));
         },
         [&](SmartModeAdvanced) -> Step {
@@ -177,7 +181,15 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return done(std::move(m));
         },
         [&](CloseSmartMode) -> Step {
+            // Esc unwinds ONE level, to whatever opened this pane — ^S from the
+            // thread closes; a palette row or the settings list reopens that.
+            // This used to always drop to the thread, which threw away the
+            // palette a user had just navigated through.
+            const auto from = m.ui.overlay.get<ov::SmartMode>()
+                            ? m.ui.overlay.get<ov::SmartMode>()->from
+                            : ui::settings_origin::Origin{ui::settings_origin::Thread{}};
             m.ui.overlay.close<ov::SmartMode>();
+            back_to(m, from);
             return done(std::move(m));
         },
         [&](SmartModeKey& e) -> Step {
@@ -193,8 +205,11 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             const auto applied = form::keys::apply(o->form, e.action);
 
             if (applied.close) {
-                m.ui.overlay.close<ov::SmartMode>();
-                return done(std::move(m));
+                // Route through CloseSmartMode rather than closing here: that
+                // is where the origin is read, so a direct close would send
+                // Esc to the thread no matter how the pane was opened. Two
+                // ways to close one pane is two behaviours to keep in step.
+                return agentty::app::update(std::move(m), Msg{CloseSmartMode{}});
             }
 
             // The master toggle. A locked row is never `changed`, so the env
@@ -243,6 +258,7 @@ Step meta_update(Model m, msg::MetaMsg mm) {
                 // advanced flag on the Model — the picker reopens this pane
                 // and must bring it back in the state the user left it.
                 m.ui.smart_assign_advanced = o->advanced;
+                m.ui.smart_assign_from     = o->from;
                 m.ui.overlay.close<ov::SmartMode>();
                 return agentty::app::update(std::move(m), Msg{OpenFusedPicker{}});
             }
@@ -980,6 +996,22 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return {std::move(m), std::move(toast)};
         },
     }, mm);
+}
+
+void back_to(Model& m, const ui::settings_origin::Origin& from) {
+    namespace so = ui::settings_origin;
+    std::visit(maya::overload{
+        [&](const so::Thread&) {
+            // Nothing to go back to — the pane was opened by a direct chord,
+            // so Esc means "done", and the overlay slot is already empty.
+        },
+        [&](const so::Palette& p) {
+            m.ui.overlay = ov::CommandPalette{{"", palette_index_of(p.row)}};
+        },
+        [&](const so::SettingsList& s) {
+            m.ui.overlay = ov::SettingsList{{s.category, 0}};
+        },
+    }, from);
 }
 
 void apply_smart(Model& m, smart::RoleConfig cfg) {

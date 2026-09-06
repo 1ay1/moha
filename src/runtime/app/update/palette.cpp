@@ -69,6 +69,23 @@ template <class T, class V>
 [[nodiscard]] CommandHandler emit_val(V v) {
     return [v](Model m) { return agentty::app::update(std::move(m), Msg{T{v}}); };
 }
+// emit_settings<Msg, Overlay>(row): open a settings pane and record that the
+// PALETTE opened it, at `row`.
+//
+// The Open* messages mean "opened from the thread" — that is what ^S and ^K's
+// own chord do — so a palette row has to say otherwise, or Esc would close to
+// the thread and throw away the palette the user just navigated. Stamping it
+// here keeps the Open* arms honest about their default instead of teaching
+// them about every possible caller.
+template <class T, class Ov>
+[[nodiscard]] CommandHandler emit_settings(Command row) {
+    return [row](Model m) {
+        auto st = agentty::app::update(std::move(m), Msg{T{}});
+        if (auto* o = st.first.ui.overlay.template get<Ov>())
+            o->from = ui::settings_origin::Palette{row};
+        return st;
+    };
+}
 } // namespace
 
 // The registry: Command → what it does. Ordered for readability, not lookup
@@ -110,8 +127,11 @@ template <class T, class V>
         add(Command::OpenModels,       emit<OpenFusedPicker>());
         add(Command::SwapModel,        emit<SwitchToPreviousModel>());
         add(Command::OpenProviders,    emit<OpenProviderPicker>());
-        add(Command::SmartMode,        emit<OpenSmartMode>());
-        add(Command::OpenRagSettings,  emit<OpenRagSettings>());
+        add(Command::SmartMode,
+            emit_settings<OpenSmartMode, ov::SmartMode>(Command::SmartMode));
+        add(Command::OpenRagSettings,
+            emit_settings<OpenRagSettings, ov::RagSettings>(
+                Command::OpenRagSettings));
         add(Command::OpenPlugins,      emit_val<OpenSettingsList>(settings::Category::Plugins));
         add(Command::OpenCommands,     emit_val<OpenSettingsList>(settings::Category::Commands));
         add(Command::OpenAgents,       emit_val<OpenSettingsList>(settings::Category::Agents));

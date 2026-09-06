@@ -57,6 +57,7 @@
 #include "agentty/runtime/checkpoint_picker.hpp"
 #include "agentty/runtime/rag_settings.hpp"
 #include "agentty/runtime/settings_list.hpp"
+#include "agentty/runtime/settings_origin.hpp"   // Esc target, one level up
 #include "agentty/runtime/fork_picker.hpp"
 #include "agentty/runtime/form.hpp"
 
@@ -84,6 +85,12 @@ struct SmartMode {
     // rebuild (a slot assignment reopens the pane) must preserve it, or the
     // rows would vanish the moment the user pinned a model.
     bool advanced = false;
+    // Where Esc goes: one level UP, to whatever opened this. ^S opened it from
+    // the thread, so Esc closes; a palette row or the settings list opened it,
+    // so Esc reopens that with its cursor intact. See settings_origin.hpp —
+    // the close handler used to hardcode one answer, which was necessarily
+    // wrong for two of the three entry points.
+    settings_origin::Origin from = settings_origin::Thread{};
 };
 struct CommandPalette  : agentty::palette::Open {};
 struct Mention         : agentty::mention::Open {};
@@ -92,7 +99,12 @@ struct CodeBlocks      : agentty::code_block_picker::Open {};
 struct CodeBlockResult : agentty::code_block_picker::Result {};
 struct ToolViewer      : agentty::tool_viewer::Open {};
 struct Checkpoints     : agentty::checkpoint_picker::Open {};
-struct RagSettings     : agentty::rag_settings::Open {};
+struct RagSettings     : agentty::rag_settings::Open {
+    // Same contract as SmartMode::from — Esc unwinds one level to whatever
+    // opened this pane, rather than always to the command palette.
+    settings_origin::Origin from =
+        settings_origin::Palette{Command::OpenRagSettings};
+};
 struct SettingsList    : agentty::settings::ListOpen {};
 struct Fork            : agentty::fork_picker::Open {};
 struct DiffReview      : pick::OpenAtCell {};

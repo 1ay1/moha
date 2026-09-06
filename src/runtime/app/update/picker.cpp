@@ -987,7 +987,8 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // with a row set that is now derived.
                 auto f = build_smart_form(m, m.ui.smart_assign_advanced);
                 smart_form::focus_role(f, *role);
-                m.ui.overlay = ov::SmartMode{std::move(f), m.ui.smart_assign_advanced};
+                m.ui.overlay = ov::SmartMode{std::move(f), m.ui.smart_assign_advanced,
+                                             m.ui.smart_assign_from};
             }
             return done(std::move(m));
         },
@@ -1266,7 +1267,8 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // exact tedium this fixes.
                 auto f = build_smart_form(m, m.ui.smart_assign_advanced);
                 smart_form::focus_role(f, assigned);
-                m.ui.overlay = ov::SmartMode{std::move(f), m.ui.smart_assign_advanced};
+                m.ui.overlay = ov::SmartMode{std::move(f), m.ui.smart_assign_advanced,
+                                             m.ui.smart_assign_from};
                 auto toast = set_status_toast(m, "Smart Mode slot set");
                 return {std::move(m), std::move(toast)};
             }
