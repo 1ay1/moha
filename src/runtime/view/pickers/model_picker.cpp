@@ -389,7 +389,7 @@ Element provider_picker(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Providers ";
     cfg.accent     = highlight;
-    cfg.min_width  = 52;
+    cfg.min_width  = kPanelStandard;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.provider_picker_scroll;
     cfg.selected   = picker->index;

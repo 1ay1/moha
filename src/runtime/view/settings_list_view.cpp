@@ -11,6 +11,7 @@
 //             the format hint + submit/cancel keys.
 
 #include "agentty/runtime/view/pickers.hpp"
+#include "pickers/pickers_common.hpp"   // kPanel* widths, picker_viewport_h
 
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
@@ -91,8 +92,12 @@ Element settings_list_picker(const Model& m) {
     Panel::Config cfg;
     cfg.title      = std::string{" "} + se::label(o->concern) + " ";
     cfg.accent     = highlight;   // cyan, matching the command palette
-    cfg.min_width  = 64;
-    cfg.viewport_h = 14;
+    cfg.min_width  = picker_detail::kPanelWide;   // value + provenance column
+    // The SHARED responsive height, not a hardcoded 14. A fixed list taller
+    // than the terminal scrolls the base's top rows into native scrollback
+    // that cannot be reclaimed — which is the whole reason
+    // picker_viewport_h() exists (see pickers_common.hpp).
+    cfg.viewport_h = picker_detail::picker_viewport_h();
     cfg.scroll     = nullptr;
     cfg.selected   = adding ? -1 : o->index;
 

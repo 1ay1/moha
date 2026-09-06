@@ -39,7 +39,7 @@ Element checkpoint_picker(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Rewind to Checkpoint ";
     cfg.accent     = warn;
-    cfg.min_width  = 52;
+    cfg.min_width  = kPanelStandard;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.checkpoints_scroll;
     cfg.selected   = o->entries.empty() ? -1 : o->index;
@@ -103,7 +103,7 @@ Element todo_modal(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Plan ";
     cfg.accent     = info;
-    cfg.min_width  = 45;
+    cfg.min_width  = kPanelNarrow;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.todo_scroll;
     // No selection cursor in the todo modal — read-only. Pass -1

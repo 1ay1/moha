@@ -6,6 +6,7 @@
 // row. Own TU, matching rag_settings_view.
 
 #include "agentty/runtime/view/pickers.hpp"
+#include "pickers/pickers_common.hpp"   // kPanel* widths, picker_viewport_h
 
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
@@ -51,7 +52,10 @@ Element fork_picker_view(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Fork thread ";
     cfg.accent     = info;
-    cfg.min_width  = 52;
+    cfg.min_width  = picker_detail::kPanelStandard;
+    // Height is CONTENT-sized, not the shared viewport: this is a fixed,
+    // four-choice menu with nothing to scroll, so clamping it to a scrollable
+    // list's height would leave dead rows under the last choice.
     cfg.viewport_h = fp::kChoiceCount + 2;
     cfg.scroll     = nullptr;
     cfg.selected   = static_cast<int>(o->choice);

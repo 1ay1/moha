@@ -61,6 +61,39 @@ split_name_dir(std::string_view path) {
     return out;
 }
 
+// ── Panel width floors (shared by every overlay that isn't content-sized) ──
+//
+// Three named sizes rather than a number per pane. The widths had drifted to
+// 45 / 50 / 52 / 54 / 60 / 64 across twelve overlays with no story behind the
+// differences — which is accretion, not decision.
+//
+// Be precise about what this buys, because it is less than it looks. These are
+// FLOORS, and maya::Panel treats min_width as a minimum on a box that still
+// stretches to its container: on any terminal wider than the floor every pane
+// renders at the same width regardless, and on a NARROWER one the caller
+// clamps it down anyway (see form_view.cpp, which caps min_width at
+// max_width - 6 so a floor wider than the screen cannot push the label column
+// off both edges). So the old numbers were mostly inert, and unifying them
+// changes no pixels today.
+//
+// What it does buy: a new pane picks a NAME that says what shape its content
+// is, instead of inventing a number nobody can later justify — and the floor
+// is then right on the narrow terminals where it does bind.
+
+// One column of short text — a plan item, a mode name. Enough to read a
+// sentence fragment without wrapping on a phone-sized terminal.
+inline constexpr int kPanelNarrow = 48;
+
+// The default: a label column plus a value/meta column. Threads, providers,
+// checkpoints, the command palette — anything shaped "name … detail". Matches
+// maya::Panel::Config's own default, so a pane that says nothing gets this.
+inline constexpr int kPanelStandard = 60;
+
+// Three columns, or one column carrying a path. Symbol and code-block pickers
+// show file:line alongside their subject, and the settings list carries a
+// value plus a provenance tag.
+inline constexpr int kPanelWide = 68;
+
 // ── Viewport sizing (shared by every picker's scrollable list) ────────────
 
 // Viewport height (rows) for every picker's scrollable list. Single constant

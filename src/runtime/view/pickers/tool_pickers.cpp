@@ -23,7 +23,7 @@ Element code_block_picker(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Run Code Block ";
     cfg.accent     = success;
-    cfg.min_width  = 60;
+    cfg.min_width  = kPanelWide;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.code_blocks_scroll;
     cfg.selected   = o->blocks.empty() ? -1 : o->index;
@@ -111,7 +111,7 @@ Element code_block_result_card(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Run Result ";
     cfg.accent     = ok_exit ? success : danger;
-    cfg.min_width  = 60;
+    cfg.min_width  = kPanelWide;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.code_blocks_scroll;
     cfg.selected   = -1;   // read-only — no cursor row
@@ -264,9 +264,12 @@ Element tool_output_viewer(const Model& m) {
     const int cur = std::clamp(o->index, 0, std::max(0, sz - 1));
 
     Panel::Config cfg;
-    // Overlay stretch supplies all available columns. A large minimum used to
-    // force the picker past phone/SSH terminal bounds and clip its right side;
-    // keep only the border's structural floor and let row flex do the rest.
+    // Deliberately NOT one of the shared kPanel* floors. Overlay stretch
+    // supplies all available columns, and a large minimum used to force the
+    // picker past phone/SSH terminal bounds and clip its right side; keep only
+    // the border's structural floor and let row flex do the rest. Captured
+    // output is arbitrary-width content, so "how narrow may this get" is
+    // answered by the terminal, not by the shape of a label column.
     cfg.min_width  = 1;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.tool_viewer_scroll;

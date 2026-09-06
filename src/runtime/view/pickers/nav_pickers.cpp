@@ -23,7 +23,7 @@ Element thread_list(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Threads ";
     cfg.accent     = info;
-    cfg.min_width  = 50;
+    cfg.min_width  = kPanelStandard;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.thread_list_scroll;
     cfg.selected   = picker->index;
@@ -118,7 +118,7 @@ Element command_palette(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Command Palette ";
     cfg.accent     = highlight;
-    cfg.min_width  = 54;
+    cfg.min_width  = kPanelStandard;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.command_palette_scroll;
     cfg.selected   = matches.empty() ? -1 : o->index;
@@ -259,7 +259,7 @@ Element mention_palette(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Mention File ";
     cfg.accent     = info;
-    cfg.min_width  = 50;
+    cfg.min_width  = kPanelStandard;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.mention_palette_scroll;
     cfg.selected   = matches.empty() ? -1 : o->index;
@@ -336,7 +336,7 @@ Element symbol_palette(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Symbol ";
     cfg.accent     = highlight;
-    cfg.min_width  = 60;
+    cfg.min_width  = kPanelWide;
     cfg.viewport_h = picker_viewport_h();
     cfg.scroll     = &m.ui.symbol_palette_scroll;
     cfg.selected   = matches.empty() ? -1 : o->index;
