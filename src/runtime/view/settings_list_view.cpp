@@ -12,6 +12,11 @@
 
 #include "agentty/runtime/view/pickers.hpp"
 
+// picker_viewport_h — shared picker viewport sizing (src/runtime/view/
+// pickers/pickers_common.hpp). Not part of the public pickers.hpp API; the
+// settings list is the newest adopter of the shared sizing helper.
+#include "pickers/pickers_common.hpp"
+
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/settings_list.hpp"
@@ -92,8 +97,14 @@ Element settings_list_picker(const Model& m) {
     cfg.title      = std::string{" "} + se::label(o->concern) + " ";
     cfg.accent     = highlight;   // cyan, matching the command palette
     cfg.min_width  = 64;
-    cfg.viewport_h = 14;
-    cfg.scroll     = nullptr;
+    // Scroll like every other picker: the Plugins pane lists every
+    // advertised tool and easily exceeds any fixed viewport (125 tools
+    // ⇒ 135+ rows), which used to paint the overflow right off the
+    // screen. viewport_h follows the terminal height, the ScrollState
+    // (auto_dispatch = false) lets the widget clamp the viewport to the
+    // selection on every ↑↓/PageUp/End move.
+    cfg.viewport_h = picker_detail::picker_viewport_h();
+    cfg.scroll     = &m.ui.settings_list_scroll;
     cfg.selected   = adding ? -1 : o->index;
 
     // ── Header ───────────────────────────────────────────────────

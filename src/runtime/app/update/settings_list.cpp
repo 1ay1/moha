@@ -76,6 +76,10 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
             const int start =
                 first_actionable(se::items_for(m, e.concern), 0, +1);
             m.ui.overlay = ov::SettingsList{{e.concern, start}};
+            // Fresh pane, fresh viewport — a stale scroll offset from a
+            // previous open would otherwise start the list mid-way (the
+            // ToolViewer/CodeBlocks open-handers do the same reset).
+            m.ui.settings_list_scroll.y = 0;
             // Opening the Plugins panel is what CONNECTS the servers (and
             // refreshes the snapshot): the connection is driven by the update
             // loop, not a lazy side effect of the first tool call. Without
