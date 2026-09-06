@@ -22,7 +22,7 @@ set(_AGENTTY_CONSOLIDATED
     image_dims_test
     quit_cancels_stream_test
     midrun_freeze_test smart_mode_test stream_liveness_test wire_golden_test
-    smart_tuning_settings_test
+    smart_tuning_settings_test smart_routing_card_test
     wire_shared_test complexity_test copilot_token_test kimi_token_test
     chatgpt_bundled_models_test settings_default_test
     turn_provenance_test subagent_pin_test

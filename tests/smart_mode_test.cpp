@@ -353,21 +353,25 @@ TEST_CASE("smart_mode") {
         const auto gpt = ModelCapabilities::from_id("gpt-5");
         const char* probe = "update the parser and re-run the formatter";
 
-        // complex_threshold moves the tier boundary. Asserted on
-        // classify_score, which is where the cut is APPLIED — classify_turn
-        // layers momentum, a continuation lift and a correction floor on top,
-        // and for this probe those pin the result to Standard whatever the cut
-        // is. That is correct product behaviour (a follow-up should not swing
-        // tiers because a threshold moved) and the wrong lens for this
-        // property. classify_turn threads the parameter down to the same call,
-        // so covering the base covers both.
-        const auto at_default = sm::classify_score(probe, sm::tuning::kComplexDefault);
-        const auto at_low     = sm::classify_score(probe, /*complex_min=*/1);
+        // complex_threshold moves the tier boundary. Asserted on classify_turn
+        // — THE composed classifier both launch_stream and the routing card
+        // call — rather than on classify_score, because the cut has to survive
+        // the momentum/continuation/correction layers stacked on top of it.
+        //
+        // It did not, once: classify_score honoured the cut and
+        // classify_with_context then re-derived the tier at the DEFAULT and
+        // overwrote it, so the setting persisted, rendered, round-tripped and
+        // changed nothing. Asserting the base call would have passed happily.
+        const auto at_default = sm::classify_turn(
+            probe, sm::Complexity::Standard, 0, 0, sm::tuning::kComplexDefault);
+        const auto at_low = sm::classify_turn(
+            probe, sm::Complexity::Standard, 0, 0, /*complex_min=*/1);
         CHECK(at_low.tier == sm::Complexity::Complex,
               "WIRE: a lower cut escalates a borderline turn");
         CHECK(at_default.tier != at_low.tier,
-              "WIRE: the threshold parameter is not ignored");
-        CHECK(sm::classify_score(probe).tier == at_default.tier,
+              "WIRE: the threshold parameter survives the composed classifier");
+        CHECK(sm::classify_turn(probe, sm::Complexity::Standard, 0, 0).tier
+                  == at_default.tier,
               "WIRE: the default parameter is the shipped classification");
 
         // deep_margin decides whether a deep band earns the extra step. A

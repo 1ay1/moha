@@ -284,8 +284,8 @@ ComplexityScore classify_score(std::string_view text, int complex_min) noexcept 
     return {tier, score, margin};
 }
 
-Complexity classify_complexity(std::string_view text) noexcept {
-    return classify_score(text).tier;
+Complexity classify_complexity(std::string_view text, int complex_min) noexcept {
+    return classify_score(text, complex_min).tier;
 }
 
 bool is_routing_correction(std::string_view text) noexcept {

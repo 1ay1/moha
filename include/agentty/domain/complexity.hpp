@@ -55,7 +55,9 @@ enum class Complexity : std::uint8_t {
 //   • MORPHOLOGICAL: token-shape variety (prose vs. identifiers vs. paths).
 // Conservative: ties break upward (under-thinking a hard turn costs more than
 // over-thinking a cheap one).
-[[nodiscard]] Complexity classify_complexity(std::string_view text) noexcept;
+[[nodiscard]] Complexity classify_complexity(
+        std::string_view text,
+        int complex_min = tuning::kComplexDefault) noexcept;
 
 // The scored classification: the tier PLUS the continuous score and the margin
 // to the nearest tier boundary (0 = right on a threshold, larger = more
@@ -86,8 +88,9 @@ struct ComplexityScore {
 // at face value — an ack is an ack regardless of what came before. A fresh
 // Complex signal in the text always wins outright.
 [[nodiscard]] inline Complexity classify_with_context(
-        std::string_view text, Complexity prev) noexcept {
-    const Complexity self = classify_complexity(text);
+        std::string_view text, Complexity prev,
+        int complex_min = tuning::kComplexDefault) noexcept {
+    const Complexity self = classify_complexity(text, complex_min);
     if (self == Complexity::Trivial || self == Complexity::Complex) return self;
     if (static_cast<int>(prev) <= static_cast<int>(self))           return self;
     // Inherit ONE tier below the previous turn (a continuation of hard work is
@@ -109,7 +112,11 @@ struct ComplexityScore {
         std::string_view text, Complexity prev,
         int complex_min = tuning::kComplexDefault) noexcept {
     ComplexityScore s = classify_score(text, complex_min);
-    const Complexity lifted = classify_with_context(text, prev);
+    // The SAME cut, or this call would undo the one above: classify_with_context
+    // re-derives the tier from the text and overwrites `s.tier` with it, so a
+    // default threshold here silently discarded the configured one and made
+    // classify_turn wholly insensitive to the setting.
+    const Complexity lifted = classify_with_context(text, prev, complex_min);
     if (lifted == s.tier) return s;            // no inheritance change
     s.tier   = lifted;
     s.margin = 0;                              // sits AT the boundary, not deep
