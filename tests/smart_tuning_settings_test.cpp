@@ -20,6 +20,7 @@
 
 #include "agtest.hpp"
 
+#include "agentty/domain/smart_mode.hpp"
 #include "agentty/domain/smart_tuning.hpp"
 #include "agentty/io/persistence.hpp"
 #include "agentty/runtime/rag_settings.hpp"
@@ -189,6 +190,40 @@ TEST_CASE("smart tuning: the rows are REACHABLE from the settings pane") {
     REQUIRE(num != nullptr);
     CHECK(num->min == tun::kComplexMin);
     CHECK(num->max == tun::kComplexMax);
+}
+
+TEST_CASE("smart tuning: apply_tuning is the one resolution rule") {
+    // Startup and the settings-pane save both resolve env-over-stored into
+    // RoleConfig. They call the SAME function, because a rule written out at
+    // both is how a pane ends up applying something different from what a
+    // restart would — the user changes a knob, sees it take effect, restarts,
+    // and gets a different answer.
+    //
+    // Without the save-side call the knobs were persisted but not LIVE: the
+    // classifier reads m.d.smart, so a change appeared to do nothing until the
+    // next launch.
+    namespace sm = agentty::smart;
+
+    clear_env();
+    {
+        sm::RoleConfig c;
+        sm::apply_tuning(c, /*deep=*/6, /*bias=*/3, /*cut=*/7);
+        CHECK(c.deep_margin == 6);
+        CHECK(c.bias_clamp == 3);
+        CHECK(c.complex_threshold == 7);
+    }
+#if !defined(_WIN32)
+    // An env override beats the stored value — the same layering the locked
+    // row in the pane advertises.
+    {
+        setenv("AGENTTY_SMART_COMPLEX_THRESHOLD", "2", 1);
+        sm::RoleConfig c;
+        sm::apply_tuning(c, 6, 3, 7);
+        CHECK(c.complex_threshold == 2);   // env wins
+        CHECK(c.deep_margin == 6);         // others untouched
+        clear_env();
+    }
+#endif
 }
 
 #if !defined(_WIN32)
