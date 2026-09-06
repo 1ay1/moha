@@ -603,6 +603,92 @@ TEST_CASE("panel: a built Element outlives the Config it came from") {
     CHECK(out.find("SECTION") != std::string::npos);
 }
 
+TEST_CASE("panel: landing on a header does not move the view") {
+    // A header cannot take focus — it carries no action, so the widget refuses
+    // to render it as the cursor. But "no row is focused" is NOT the same as
+    // "the cursor is on line 0", and conflating them made the keep-in-view
+    // clamp dutifully scroll line 0 into view: navigating down a long grouped
+    // list snapped it back to the top the moment the cursor crossed a section
+    // header, losing the user's place entirely.
+    //
+    // The same applies to an absent or out-of-range selection, which is how a
+    // picker with no matches renders while the user is still scrolling.
+    constexpr int kRows = 60;
+    constexpr int kVh   = 8;
+
+    const auto scrolled_state = [&](maya::ScrollState& s) {
+        // Walk far enough down that the view is genuinely scrolled.
+        for (int sel = 0; sel < 40; ++sel) {
+            Panel::Config c;
+            c.title = " Nav "; c.viewport_h = kVh; c.scroll = &s;
+            c.rows = mixed_rows(kRows); c.selected = sel;
+            (void)render(std::move(c), 72);
+        }
+    };
+    const auto render_at = [&](maya::ScrollState& s, int sel) {
+        Panel::Config c;
+        c.title = " Nav "; c.viewport_h = kVh; c.scroll = &s;
+        c.rows = mixed_rows(kRows); c.selected = sel;
+        (void)render(std::move(c), 72);
+    };
+
+    // mixed_rows makes every 11th row a header.
+    {
+        maya::ScrollState s;
+        scrolled_state(s);
+        const int before = s.y;
+        REQUIRE(before > 0);
+        render_at(s, 44);                     // a header
+        CHECK(s.y == before);
+    }
+    // No selection at all.
+    {
+        maya::ScrollState s;
+        scrolled_state(s);
+        const int before = s.y;
+        REQUIRE(before > 0);
+        render_at(s, -1);
+        CHECK(s.y == before);
+    }
+    // A selection left over from a longer list.
+    {
+        maya::ScrollState s;
+        scrolled_state(s);
+        const int before = s.y;
+        REQUIRE(before > 0);
+        render_at(s, 9999);
+        CHECK(s.y == before);
+    }
+}
+
+TEST_CASE("panel: multi-row items scroll in row space") {
+    // Config::items are caller-built Elements and may be MULTI-ROW: the todo
+    // picker pushes one PlanView covering every task. Measuring them as one
+    // line each put the auto-scroll clamp in INDEX space, so the last of four
+    // 3-row items — which begins at row 9, not row 3 — scrolled to 0 and left
+    // the selection off-screen entirely.
+    maya::ScrollState s;
+    Panel::Config c;
+    c.title      = " Items ";
+    c.viewport_h = 4;
+    c.scroll     = &s;
+    for (int i = 0; i < 4; ++i) {
+        const std::string n = std::to_string(i);
+        c.items.push_back(maya::dsl::v(
+            maya::dsl::text("item" + n + "-a"),
+            maya::dsl::text("item" + n + "-b"),
+            maya::dsl::text("item" + n + "-c")).build());
+    }
+    c.selected = 3;
+
+    const auto out = render(std::move(c), 50);
+
+    // Four 3-row items = 12 rows, viewport 4 ⇒ the last item ends at row 12,
+    // so the offset must be 8. Index space would have said 0.
+    CHECK(s.y == 8);
+    CHECK(out.find("item3-c") != std::string::npos);
+}
+
 TEST_CASE("panel: a Secret is never rendered in the clear") {
     // The control carries a LENGTH, not a string — there is no plaintext in
     // the widget's inputs, so no render path can leak one.
