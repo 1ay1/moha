@@ -226,6 +226,30 @@ TEST_CASE("smart tuning: the rows live in the SMART MODE pane") {
     CHECK(row->origin == "env: AGENTTY_SMART_COMPLEX_THRESHOLD");
 }
 
+TEST_CASE("smart tuning: the pane advertises the key that reveals them") {
+    // Hidden rows plus an unadvertised key is an env var with extra steps.
+    // The note is the only thing on screen saying the rows exist, so it is
+    // part of the feature rather than decoration — asserted in BOTH states so
+    // the way back is visible too.
+    //
+    // The key is a bare letter, not ^A: ^A is the form layer's caret-home and
+    // the default tmux prefix, so a chord there never reaches the app. That is
+    // why this pins the TEXT rather than just "a note exists".
+    namespace sf = agentty::smart_form;
+
+    sf::Inputs in;
+    in.enabled = true;
+
+    const auto basic = sf::build_form(in);
+    CHECK(basic.note.find("a") != std::string::npos);
+    CHECK(basic.note.find("advanced") != std::string::npos);
+    CHECK(basic.note.find("^A") == std::string::npos);
+
+    in.advanced = true;
+    const auto adv = sf::build_form(in);
+    CHECK(adv.note.find("hide") != std::string::npos);
+}
+
 TEST_CASE("smart tuning: apply_tuning is the one resolution rule") {
     // Startup and the settings-pane save both resolve env-over-stored into
     // RoleConfig. They call the SAME function, because a rule written out at

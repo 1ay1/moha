@@ -314,6 +314,11 @@ public:
     explicit Builder(std::string title) { form_.title = std::move(title); }
 
     Builder& subtitle(std::string s) { form_.subtitle = std::move(s); return *this; }
+    // The footer line under the rows: a validation summary, a save hint, or a
+    // key affordance. Same field the panes already set directly — exposed on
+    // the builder so a form that is built in one pass can say its piece
+    // without the caller reaching into the result.
+    Builder& note(std::string s) { form_.note = std::move(s); return *this; }
 
     Builder& toggle(std::string id, std::string label, bool on, std::string help = {});
 

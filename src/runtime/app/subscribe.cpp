@@ -283,13 +283,13 @@ template <class Wrap>
 // shared form layer — which mode owns the keyboard, what Enter does per row
 // kind, how Esc unwinds — so this only forwards.
 //
-// ^A is the one exception, and it is checked FIRST: it changes which rows
-// EXIST rather than acting on a row, so it is pane state, not a form action.
-// Guarded on !editing so it stays literal while a text field has the keyboard
-// — typing ^A into an endpoint should not reshuffle the pane underneath.
+// `a` is the one exception: it changes which rows EXIST rather than acting on
+// a row, so it is pane state. A bare letter rather than ^A, which the form
+// layer uses for caret-home and which tmux takes as its default prefix.
+// Suppressed while editing so it stays literal in a text field.
 std::optional<Msg> on_rag_settings(const FormFocus& f, const KeyEvent& ev) {
     if (f.open && !f.editing)
-        if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U'a')
+        if (const auto v = nav::char_view(ev); v && !v->ctrl && v->c == U'a')
             return Msg{RagSettingsAdvanced{}};
     return on_form(f, ev, [](form::keys::Action a) { return Msg{RagEmbedKey{a}}; });
 }
@@ -460,11 +460,13 @@ std::optional<Msg> on_smart_mode(const FormFocus& f, const KeyEvent& ev) {
     // pane-specific (the form layer has no concept of an open chord).
     if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U's')
         return Msg{CloseSmartMode{}};
-    // ^A reveals the advanced routing-policy rows. Checked before the form
-    // claims the key because it changes which rows EXIST rather than acting on
-    // one; suppressed while editing so it stays literal in a text field.
+    // `a` reveals the advanced routing-policy rows. A BARE letter, not ^A:
+    // ^A is the form layer's caret-home while editing, and it is the default
+    // tmux prefix, so a chord there is swallowed before the app ever sees it.
+    // In nav mode the form only claims k/j/h/l/x and space, so `a` is free —
+    // the same vocabulary as the `x` that resets a slot.
     if (!f.editing)
-        if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U'a')
+        if (const auto v = nav::char_view(ev); v && !v->ctrl && v->c == U'a')
             return Msg{SmartModeAdvanced{}};
     return on_form(f, ev, [](form::keys::Action a) { return Msg{SmartModeKey{a}}; });
 }

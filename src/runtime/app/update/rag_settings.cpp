@@ -147,11 +147,11 @@ void refresh_status(rs::EmbedForm& f) {
     else if (f.form.dirty)
         f.form.note = "unsaved \xe2\x80\x94 ^T test, ^S save";
     else
-        // The RESTING note advertises ^A. Advanced rows are hidden by default,
-        // and a knob nobody can find is the problem this pane exists to fix —
-        // so the affordance has to be on screen, not in a doc. Shown only when
-        // there is nothing more urgent to say.
-        f.form.note = "^A advanced";
+        // The RESTING note advertises the advanced key. A bare letter, not ^A:
+        // that chord is the form layer's caret-home and tmux's default prefix,
+        // so it never reaches the app. Shown only when there is nothing more
+        // urgent to say.
+        f.form.note = "a  advanced";
 }
 
 // Build the pane's form for `mode`, seeded with what the live retriever
