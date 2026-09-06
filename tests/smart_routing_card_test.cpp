@@ -100,6 +100,62 @@ TEST_CASE("smart card: the card's effort is the wire's effort") {
     }
 }
 
+TEST_CASE("smart card: an inserted proactive block cannot change the route") {
+    // The load-bearing assumption behind computing the routing decision ONCE
+    // per turn instead of twice.
+    //
+    // On a proactive turn the launch is DEFERRED: submit_turn builds the card,
+    // then retrieval runs, a context message is spliced into the transcript,
+    // and ProactiveContextReady fires launch_stream from a different handler.
+    // If that insertion could move the classification, a decision computed at
+    // submit and read at launch would be stale — and the whole reason the two
+    // sites re-derive independently today is that re-deriving is trivially
+    // correct under transcript mutation.
+    //
+    // It cannot move it: both scans walk backward for the newest message that
+    // is `role == User && !is_proactive_context() && !smart_routing &&
+    // !fork_note`, and the inserted block is exactly a proactive-context user
+    // message. This asserts that rather than trusting the reading.
+    const std::string probe = "redesign the auth module end to end across services";
+
+    // Model is move-only (it owns a ViewCache and a ScrollbackLedger), so each
+    // variant is built rather than copied.
+    const auto route_of = [&](bool with_proactive, bool with_card) {
+        Model m = turn_with(probe, sm::RoleConfig{});
+        if (with_proactive) {
+            // Exactly what ProactiveContextReady splices in: a retrieved-
+            // context user message carrying a large, Complex-looking payload.
+            // If the scan were not skipping it, THIS is what would classify.
+            Message ctx;
+            ctx.role = Role::User;
+            ctx.proactive =
+                Message::ProactiveContext{.confidence = 0.9, .expanded = false};
+            ctx.text = "retrieved context: " + std::string(4096, 'x');
+            m.d.current.messages.push_back(std::move(ctx));
+        }
+        if (with_card) {
+            // The 🧠 card itself, the other thing that lands between submit and
+            // launch. Zero-text and Role::User — classifying it would produce
+            // an empty string.
+            Message card;
+            card.role = Role::User;
+            card.smart_routing = true;
+            m.d.current.messages.push_back(std::move(card));
+        }
+        auto c = app::cmd::build_smart_routing_card(m);
+        REQUIRE(c.has_value());
+        return std::tuple{c->smart_route_complexity, c->smart_route_effort,
+                          c->smart_route_model};
+    };
+
+    const auto plain     = route_of(false, false);
+    const auto proactive = route_of(true,  false);
+    const auto both      = route_of(true,  true);
+
+    CHECK(proactive == plain);
+    CHECK(both == plain);
+}
+
 TEST_CASE("smart card: moving a knob actually moves the card") {
     // The tests above would pass vacuously if the card were insensitive to the
     // tuning — both sides would just be wrong together. So: at least one

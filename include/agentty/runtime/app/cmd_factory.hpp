@@ -19,6 +19,48 @@
 
 namespace agentty::app::cmd {
 
+// ── The per-turn routing DECISION ────────────────────────────────
+//
+// Which model serves this turn, at what effort, and why. ONE value, computed
+// once by resolve_turn_routing() — the 🧠 card renders it and launch_stream
+// dispatches it.
+//
+// The two used to derive it INDEPENDENTLY from the same Model, each running
+// the same scan, the same classifier and the same effort scaler. The comment
+// on both said "same call as launch_stream so card == wire", and keeping that
+// true meant passing every argument identically at two sites forever. It did
+// not stay true: a threshold added to the classifier reached one site and not
+// the other, so the card advertised a route the request never took, and the
+// only thing that noticed was a test written specifically to look for it.
+//
+// With one value there is nothing to keep in step. card == wire stops being an
+// invariant under test and becomes an identity.
+struct TurnRouting {
+    // Empty model ⇒ orchestration is off and the plain selection serves the
+    // turn; the card is not shown at all.
+    bool                    orchestrate = false;
+    std::string             model;      // resolved Strategic model ("" = selection)
+    Effort                  base = Effort::None;     // BEFORE complexity scaling
+    Effort                  effort = Effort::None;   // AFTER complexity scaling
+    smart::ComplexityScore  cx{};       // the classification that scaled it
+    smart::ComplexityScore  cx_text{};  // text-only score, for lift provenance
+    bool                    subagents = false;
+
+    // The prompt the decision was made about. Held so the card can NAME why a
+    // tier was lifted (payload / continuation / correction) without re-walking
+    // the transcript and risking a scan that drifts from the one above.
+    std::string             prompt;
+};
+
+// THE routing decision for the turn about to launch. Pure: reads the
+// transcript, the catalog and m.d.smart, and writes nothing.
+//
+// Safe to call at submit and read at launch even on the DEFERRED proactive
+// path, where retrieval splices a context message in between: the newest-user
+// scan skips proactive-context, 🧠-card and fork-note messages, which is
+// everything that can land in that window. smart_routing_card_test pins it.
+[[nodiscard]] TurnRouting resolve_turn_routing(const Model& m);
+
 // Mutates `m` to install a fresh cancel token in m.stream.cancel, then
 // dispatches the streaming task on a worker. Esc (CancelStream) flips the
 // token to abort the in-flight stream.
@@ -30,7 +72,8 @@ namespace agentty::app::cmd {
 // transcript just before the assistant placeholder so the user sees, as a
 // first-class thread event, which model + effort the turn was routed to, the
 // classified complexity that scaled it, and which layers are active. Pure;
-// mints a fresh MessageId.
+// mints a fresh MessageId. Renders `routing` — the SAME value launch_stream
+// dispatches.
 [[nodiscard]] std::optional<Message> build_smart_routing_card(const Model& m);
 
 // What the model actually sees on the next request: applies any

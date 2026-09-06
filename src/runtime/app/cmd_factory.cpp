@@ -586,28 +586,34 @@ int estimate_wire_tokens(const Thread& t) {
     return tokens_from(bytes, images);
 }
 
-std::optional<Message> build_smart_routing_card(const Model& m) {
-    // Only emit the card when orchestration is actually driving the turn.
-    // (Internal/subagent routing without orchestration doesn't change the
-    // MAIN turn's model, so there's no per-turn decision worth surfacing.)
-    if (!m.d.smart.orchestration()) return std::nullopt;
+TurnRouting resolve_turn_routing(const Model& m) {
+    TurnRouting r;
+    r.orchestrate = m.d.smart.orchestration();
+    r.subagents   = m.d.smart.subagent_routing();
+    if (!r.orchestrate) return r;
 
-    const std::string& model_id = m.d.model_id.value;
+    // Layer 3a (orchestration): the MAIN turn runs on the Strategic role's
+    // (model, effort) so the flagship orchestrates and delegates grunt work.
+    // Needs the live catalog, so this is UI-thread work.
     smart::RoleProfile prof =
-        smart::resolve_role(smart::ModelRole::Strategic, model_id,
+        smart::resolve_role(smart::ModelRole::Strategic, m.d.model_id.value,
                             m.d.effort, m.d.available_models, m.d.smart,
                             detail::active_provider_id());
-    // Classify the newest real user turn (same logic launch_stream uses) so
-    // the card's effort matches what the wire will actually carry.
+
+    // The newest REAL user turn. Skips three things that can sit after it:
+    // the zero-text 🧠 routing card (submit inserts it before the assistant
+    // placeholder, so classifying it would score an empty string), a
+    // proactive-context block (spliced in by deferred retrieval), and a fork
+    // provenance note. None is the user's prompt.
+    //
+    // That skip set is also what makes this decision safe to compute once and
+    // read later — it covers everything that lands between submit and a
+    // deferred launch.
     std::string_view newest_user;
     std::size_t nu_attach_bytes = 0;
     int         nu_images = 0;
     for (auto it = m.d.current.messages.rbegin();
          it != m.d.current.messages.rend(); ++it)
-        // !smart_routing: never classify a prior turn's zero-text 🧠 card —
-        // keeps this scan IDENTICAL to launch_stream's so the card's shown
-        // route can never disagree with the wire. !fork_note: the fork
-        // provenance card is not the user's prompt either.
         if (it->role == Role::User && !it->is_proactive_context()
             && !it->smart_routing && !it->fork_note) {
             newest_user = it->text;
@@ -615,38 +621,60 @@ std::optional<Message> build_smart_routing_card(const Model& m) {
             nu_images = static_cast<int>(it->images.size());
             break;
         }
-    const smart::ComplexityScore cx_text =
-        smart::classify_score_with_context(newest_user, m.s.smart_turn_complexity,
-                                           m.d.smart.complex_threshold);
-    // THE composed classifier — same call as launch_stream so card == wire.
-    // That equality now includes the TUNING: a card classified at the default
-    // threshold while the wire used the user's would show a route the request
-    // never took.
-    const smart::ComplexityScore cx = smart::classify_turn(
-        newest_user, m.s.smart_turn_complexity, nu_attach_bytes, nu_images,
-        m.d.smart.complex_threshold);
+
+    // Text-only score, kept for the card's lift provenance: it names WHY the
+    // tier moved past the raw text (payload, continuation cue, correction
+    // floor) and needs the unlifted score to compare against.
+    r.cx_text = smart::classify_score_with_context(
+        newest_user, m.s.smart_turn_complexity, m.d.smart.complex_threshold);
+
+    // THE composed classifier: context-aware (a short follow-up to a Complex
+    // turn keeps some of that weight), payload-aware, continuation-aware and
+    // correction-floored. m.s.smart_turn_complexity still holds the PREVIOUS
+    // turn's tier here.
+    r.cx = smart::classify_turn(newest_user, m.s.smart_turn_complexity,
+                                nu_attach_bytes, nu_images,
+                                m.d.smart.complex_threshold);
+
+    // Session cascade bias only. The per-workspace learned prior, the regret
+    // denominator it needed and the plan-recall few-shot all went with the
+    // self-supervised layers — see RoleConfig's comment.
     const auto caps = resolved_caps(prof.model);
-    // Session cascade bias only. The per-workspace LEARNED prior (a Beta-
-    // smoothed regret rate keyed by turn signature) was deleted with the rest
-    // of the self-supervised layers: it mutated routing from persisted state
-    // that was never measured against the fixed policy.
+    r.prompt = std::string{newest_user};
+    r.model  = prof.model;
+    r.base   = prof.effort;
+    r.effort = smart::effort_for_score(prof.effort, r.cx, caps,
+                                       m.s.smart_effort_bias,
+                                       m.d.smart.deep_margin);
+    return r;
+}
+
+std::optional<Message> build_smart_routing_card(const Model& m) {
+    // ONE derivation, shared with launch_stream. The card renders a decision;
+    // it does not make one. Everything below is presentation.
+    const TurnRouting r = resolve_turn_routing(m);
+
+    // Only emit the card when orchestration is actually driving the turn.
+    // (Internal/subagent routing without orchestration doesn't change the
+    // MAIN turn's model, so there's no per-turn decision worth surfacing.)
+    if (!r.orchestrate) return std::nullopt;
+
     const int bias = m.s.smart_effort_bias;
-    const Effort scaled = smart::effort_for_score(prof.effort, cx, caps, bias,
-                                                  m.d.smart.deep_margin);
 
     // Effort PROVENANCE — make the adaptive decision legible: base effort, the
-    // complexity step, and the blended correction that moved it (shown as the
-    // winning source so the card matches what the wire actually carries).
-    std::string note{effort_label(prof.effort)};
+    // complexity step, and the blended correction that moved it. Every value
+    // here comes off `r`, so the card cannot describe a route other than the
+    // one being dispatched.
+    std::string note{effort_label(r.base)};
     note += " \xe2\x86\x92 ";                       // →
-    note += smart::to_string(cx.tier);
+    note += smart::to_string(r.cx.tier);
     // Lift provenance: the tier moved past the raw text score — an attached
     // payload, a continuation cue ("continue" resuming hard work), or a
     // correction floor ("still broken" never routes below Standard). Name it
     // so a heavy route on a 3-word prompt doesn't read as classifier noise.
-    if (cx.tier != cx_text.tier) {
-        if (smart::is_routing_correction(newest_user)) note += " (correction)";
-        else if (smart::is_continuation_cue(newest_user)) note += " (continuation)";
+    if (r.cx.tier != r.cx_text.tier) {
+        if (smart::is_routing_correction(r.prompt)) note += " (correction)";
+        else if (smart::is_continuation_cue(r.prompt)) note += " (continuation)";
         else note += " (payload)";
     }
     if (bias != 0) {
@@ -662,12 +690,12 @@ std::optional<Message> build_smart_routing_card(const Model& m) {
     // via the smart_routing flag, so the role is a pure rendering choice.
     card.role          = Role::User;
     card.smart_routing = true;
-    card.smart_route_model      = prof.model;
-    card.smart_route_effort     = std::string{effort_label(scaled)};
-    card.smart_route_complexity = std::string{smart::to_string(cx.tier)};
+    card.smart_route_model      = r.model;
+    card.smart_route_effort     = std::string{effort_label(r.effort)};
+    card.smart_route_complexity = std::string{smart::to_string(r.cx.tier)};
     card.smart_route_note       = std::move(note);
-    card.smart_route_orchestrate = m.d.smart.orchestration();
-    card.smart_route_subagents   = m.d.smart.subagent_routing();
+    card.smart_route_orchestrate = r.orchestrate;
+    card.smart_route_subagents   = r.subagents;
     return card;
 }
 
@@ -783,58 +811,25 @@ Cmd<Msg> launch_stream(Model& m) {
 
     // Layer 3a (orchestration): when active, the MAIN turn runs on the
     // Strategic role's (model, effort) so the flagship orchestrates and
-    // delegates grunt work to subagents. Resolved here on the UI thread
-    // (needs the live catalog); a no-op profile == (model_id, effort) when
-    // orchestration is off, so the captured values below are always valid.
-    const bool orchestrate = m.d.smart.orchestration();
-    smart::RoleProfile strategic_profile =
-        smart::resolve_role(smart::ModelRole::Strategic, model_id,
-                            m.d.effort, m.d.available_models, m.d.smart,
-                            detail::active_provider_id());
-    // SOTA effort scaling (Anthropic multi-agent: "scale effort to query
-    // complexity"). Classify the newest user turn and bump/drop the Strategic
-    // model's reasoning effort accordingly, clamped to what the model supports.
-    // Conservative: Standard leaves it unchanged, ambiguity biases upward.
-    smart::Complexity turn_complexity = smart::Complexity::Standard;
-    if (orchestrate) {
-        std::string_view newest_user;
-        std::size_t nu_attach_bytes = 0;
-        int         nu_images = 0;
-        for (auto it = m.d.current.messages.rbegin();
-             it != m.d.current.messages.rend(); ++it)
-            // Skip the zero-text 🧠 routing card (Role::User, smart_routing):
-            // submit_message inserts it AFTER the real user message, so
-            // without this guard the scan classifies an empty string — wrong
-            // effort on the wire and a card that disagrees with it.
-            if (it->role == Role::User && !it->is_proactive_context()
-                && !it->smart_routing && !it->fork_note) {
-                newest_user = it->text;
-                for (const auto& a : it->attachments)
-                    nu_attach_bytes += a.body.size();
-                nu_images = static_cast<int>(it->images.size());
-                break;
-            }
-        // Context-aware: a short follow-up to a Complex turn keeps some of
-        // that weight instead of collapsing to Simple. m.s.smart_turn_complexity
-        // still holds the PREVIOUS turn's tier here (overwritten below at 776).
-        // Payload-aware + continuation-aware + correction-floored — the ONE
-        // composed classifier, shared with build_smart_routing_card so the
-        // 🧠 card can never disagree with the wire.
-        const smart::ComplexityScore turn_cx = smart::classify_turn(
-            newest_user, m.s.smart_turn_complexity, nu_attach_bytes, nu_images,
-            m.d.smart.complex_threshold);
-        turn_complexity = turn_cx.tier;
-        const auto caps = resolved_caps(strategic_profile.model);
-        // Session cascade bias only. The per-workspace learned prior, the
-        // regret denominator it needed, and the plan-recall few-shot all went
-        // with the self-supervised layers — see RoleConfig's comment.
-        strategic_profile.effort =
-            smart::effort_for_score(strategic_profile.effort, turn_cx,
-                                    caps, m.s.smart_effort_bias,
-                                    m.d.smart.deep_margin);
-        // Stash for the cascade feedback at finalize_turn.
-        m.s.smart_turn_complexity = turn_complexity;
-    }
+    // delegates grunt work to subagents.
+    //
+    // ONE derivation, shared with build_smart_routing_card. These used to be
+    // two independent copies of the same scan + classifier + effort scaler,
+    // held in step by a comment. They drifted: a threshold added to the
+    // classifier reached one and not the other, and the 🧠 card advertised a
+    // route the wire never took. Reading a single value makes card == wire an
+    // identity rather than an invariant to police.
+    const TurnRouting routing = resolve_turn_routing(m);
+    const bool orchestrate = routing.orchestrate;
+    // A no-op profile == (model_id, effort) when orchestration is off, so the
+    // captured values below are always valid.
+    smart::RoleProfile strategic_profile{
+        .model  = orchestrate ? routing.model  : model_id,
+        .effort = orchestrate ? routing.effort : m.d.effort};
+    const smart::Complexity turn_complexity =
+        orchestrate ? routing.cx.tier : smart::Complexity::Standard;
+    // Stash for the cascade feedback at finalize_turn.
+    if (orchestrate) m.s.smart_turn_complexity = turn_complexity;
 
     // Record what this turn will ACTUALLY be dispatched on, so the assistant
     // header can name its true author instead of the picker selection (which
