@@ -190,10 +190,10 @@ TEST_CASE("smart tuning: the rows live in the SMART MODE pane") {
     namespace sf = agentty::smart_form;
 
     sf::Inputs in;
-    in.enabled           = true;
-    in.complex_threshold = 5;
-    in.deep_margin       = 6;
-    in.bias_clamp        = 4;
+    in.enabled = true;
+    in.settings.smart_complex_threshold = 5;
+    in.settings.smart_deep_margin       = 6;
+    in.settings.smart_bias_clamp        = 4;
 
     const auto basic = sf::build_form(in);
     in.advanced = true;
@@ -206,25 +206,49 @@ TEST_CASE("smart tuning: the rows live in the SMART MODE pane") {
     }
 
     // Real editable Number rows showing the CONFIGURED value, carrying the
-    // registry's range.
+    // registry's range — all of it projected from the table, none of it
+    // retyped into the pane.
     const auto* cut = adv.find(sf::kFieldComplexCut);
     REQUIRE(cut != nullptr);
     CHECK_FALSE(cut->locked);
+    CHECK(cut->label == "Complexity cut");     // the registry's label
     const auto* num = std::get_if<agentty::form::field::Number>(&cut->value);
     REQUIRE(num != nullptr);
     CHECK(num->value == 5);
     CHECK(num->min == tun::kComplexMin);
     CHECK(num->max == tun::kComplexMax);
+}
 
-    // An env override LOCKS the row and names the variable, rather than
-    // letting it look editable and silently lose the edit.
-    in.complex_threshold_lock = "env: AGENTTY_SMART_COMPLEX_THRESHOLD";
-    const auto locked = sf::build_form(in);
-    const auto* row = locked.find(sf::kFieldComplexCut);
+#if !defined(_WIN32)
+TEST_CASE("smart tuning: an env override locks the row in the pane") {
+    // Provenance and locking are the REGISTRY's, not the pane's. The pane used
+    // to compute "is an env var shadowing this?" itself and pass three lock
+    // strings in — a second implementation of a rule the table already
+    // enforces for every other row. Walking the table means the Smart Mode
+    // rows get the same treatment the Retrieval rows always had, for free.
+    namespace sf = agentty::smart_form;
+
+    clear_env();
+    setenv("AGENTTY_SMART_COMPLEX_THRESHOLD", "5", 1);
+
+    sf::Inputs in;
+    in.enabled  = true;
+    in.advanced = true;
+    const auto f = sf::build_form(in);
+
+    const auto* row = f.find(sf::kFieldComplexCut);
     REQUIRE(row != nullptr);
     CHECK(row->locked);
     CHECK(row->origin == "env: AGENTTY_SMART_COMPLEX_THRESHOLD");
+
+    // The rows NOT overridden stay editable — the lock is per row, not a mode.
+    const auto* other = f.find(sf::kFieldDeepMargin);
+    REQUIRE(other != nullptr);
+    CHECK_FALSE(other->locked);
+
+    clear_env();
 }
+#endif
 
 TEST_CASE("smart tuning: the pane advertises the key that reveals them") {
     // Hidden rows plus an unadvertised key is an env var with extra steps.

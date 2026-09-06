@@ -21,6 +21,7 @@
 
 #include "agentty/domain/smart_mode.hpp"
 #include "agentty/runtime/form.hpp"
+#include "agentty/store/store.hpp"   // Settings: what the advanced rows read
 
 namespace agentty::smart_form {
 
@@ -30,9 +31,10 @@ inline constexpr const char* kFieldEnabled  = "enabled";
 inline constexpr const char* kFieldStrategic = "strategic";
 inline constexpr const char* kFieldImpl      = "implementation";
 inline constexpr const char* kFieldUtility   = "utility";
-// The advanced tuning rows. Ids match the settings-registry row ids exactly,
-// so the reducer writes them back by walking the table rather than naming
-// each one — the row IS the binding.
+// The advanced routing-policy rows are REGISTRY rows, not hand-written ones:
+// their ids are the registry ids, so a pane writes an edit back by looking the
+// row up in the table rather than naming each knob. Kept as named constants
+// because the reducer and the tests refer to them.
 inline constexpr const char* kFieldComplexCut = "smart.complex_threshold";
 inline constexpr const char* kFieldDeepMargin = "smart.deep_margin";
 inline constexpr const char* kFieldBiasClamp  = "smart.bias_clamp";
@@ -56,23 +58,14 @@ struct Inputs {
     SlotView implementation;
     SlotView utility;
 
-    // Numeric routing policy. These belong HERE, next to the switch and the
-    // slots they govern — they are how Smart Mode decides, and a user looking
-    // for "how eagerly does it escalate" looks at the Smart Mode pane, not at
-    // Retrieval. Advanced: the values are meaningful but not self-explanatory,
-    // so they sit behind ^A rather than crowding the four rows that matter.
-    int complex_threshold = 3;
-    int deep_margin       = 3;
-    int bias_clamp        = 2;
+    // The persisted config the advanced rows are projected from. The registry
+    // reads the VALUE, the range, the label, the help and the env-override
+    // state out of this — which is why the three ints and three lock strings
+    // that used to sit here are gone: every one of them was a copy of
+    // something the table already knew.
+    store::Settings settings{};
 
-    // Non-empty ⇒ an AGENTTY_SMART_* export is overriding that row, which
-    // renders read-only naming the variable. Same rule as enabled_lock: a row
-    // that looks editable and silently loses the edit is the worst outcome.
-    std::string complex_threshold_lock;
-    std::string deep_margin_lock;
-    std::string bias_clamp_lock;
-
-    // Reveal the advanced rows (^A).
+    // Reveal the advanced rows (`a`).
     bool advanced = false;
 };
 

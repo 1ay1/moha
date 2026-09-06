@@ -26,6 +26,11 @@ void add_slot(form::Builder& b, const char* id, std::string label,
 
 form::Form build_form(const Inputs& in) {
     form::Builder b{" Smart Mode "};
+    // Group-header bookkeeping for the registry walk below. The slot rows are
+    // hand-written (they are model pickers, not table rows), so the walk starts
+    // fresh and emits its own header.
+    bool first = true;
+    auto last_group = settings::registry::Group::Sources;
     b.subtitle(in.enabled
         ? "routing each turn to the cheapest model that can do it"
         : "every turn goes to the main model");
@@ -52,43 +57,18 @@ form::Form build_form(const Inputs& in) {
     if (!live) b.lock("Smart Mode off");
 
     // ── Advanced: the numeric policy ────────────────────────────────
-    // Hidden behind ^A. These decide HOW Smart Mode routes, so they belong
-    // beside the switch that turns routing on — but they are the kind of knob
-    // a user cannot judge at a glance, and four rows that matter should not
-    // compete with three that mostly should not be touched.
+    // WALKED from the settings registry, exactly as the Retrieval pane walks
+    // its half. Label, help, control kind, range, group header, env lock and
+    // provenance all come from the row — this pane contributes only "the
+    // Settings-owned rows are mine".
     //
-    // Ranges come from the settings registry, which is also what clamps them
-    // on the way in, so the row and the store agree by construction.
-    if (in.advanced) {
-        namespace reg = settings::registry;
-        b.header("Routing policy");
-
-        const auto row = [&](const char* id, std::string label,
-                             int value, std::string help,
-                             const std::string& lock) {
-            const auto* d = reg::find(id);
-            if (!d) return;              // unreachable: ids are registry ids
-            b.number(id, std::move(label), value,
-                     static_cast<std::int64_t>(d->min),
-                     static_cast<std::int64_t>(d->max), std::move(help));
-            if (!lock.empty()) {
-                b.lock(lock);
-                b.origin(lock);
-            } else if (!live) {
-                b.lock("Smart Mode off");
-            }
-        };
-
-        row(kFieldComplexCut, "Complexity cut", in.complex_threshold,
-            "score at which a turn routes as Complex; lower spends more",
-            in.complex_threshold_lock);
-        row(kFieldDeepMargin, "Deep-band margin", in.deep_margin,
-            "how far into a tier a turn must sit to earn the extra effort step",
-            in.deep_margin_lock);
-        row(kFieldBiasClamp, "Self-correction cap", in.bias_clamp,
-            "how far this session's own corrections may drift effort",
-            in.bias_clamp_lock);
-    }
+    // These were hand-rolled here first: three labels, three help strings and
+    // three ranges retyped out of the table that already declared them, plus a
+    // second implementation of the env-lock rule. Everything the registry
+    // exists to prevent.
+    settings::registry::add_rows(b, in.settings,
+                                 settings::registry::Owner::Settings,
+                                 in.advanced, first, last_group);
 
     // The affordance has to be ON SCREEN. Advanced rows are hidden by default,
     // and a key nobody can see is exactly the discoverability failure these

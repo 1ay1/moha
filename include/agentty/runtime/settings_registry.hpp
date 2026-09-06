@@ -41,6 +41,7 @@
 #include <variant>
 
 #include "agentty/domain/smart_tuning.hpp"   // shipped defaults + ranges
+#include "agentty/runtime/form.hpp"           // Builder (add_rows)
 #include "agentty/store/store.hpp"
 
 namespace agentty::settings::registry {
@@ -427,5 +428,89 @@ void apply_env(store::Settings& s);
 // Restore a row to its shipped default.
 void reset(store::RagConfig& c, const SettingDef& d);
 void reset(store::Settings& s, const SettingDef& d);
+
+// ── Rows ───────────────────────────────────────────────────
+//
+// Project this table's rows onto a form. THE way a pane renders settings —
+// label, help, control kind, range, group header, env lock and provenance all
+// come from the row, so a pane contributes only WHICH rows it owns.
+//
+// This lives here rather than in one pane's .cpp because both panes need it.
+// It was private to the RAG pane, so the Smart Mode pane hand-rolled its three
+// rows instead: labels, help strings and ranges retyped from the table they
+// were already declared in, and the env-lock/provenance handling quietly
+// reimplemented and subtly different. Two panes rendering settings two ways is
+// exactly the duplication the table exists to remove.
+//
+// `first` and `last_group` thread across calls so group headers stay correct
+// when a pane walks more than one owner.
+template <class C>
+inline void add_rows(form::Builder& b, const C& cfg, Owner owner, bool advanced,
+                     bool& first, Group& last_group) {
+    for (const auto& d : kSettings) {
+        if (d.owner() != owner) continue;
+
+        // Advanced rows are hidden, not disabled: a knob whose effect a user
+        // cannot judge is noise on the main screen, but it still has to be
+        // reachable (`a`) rather than env-only.
+        if (d.tier == Tier::Advanced && !advanced) continue;
+
+        // A group header separates sections. It is a real field kind, not a
+        // locked text row: faking it leaked a placeholder into the value
+        // column and let the cursor land on a label that does nothing.
+        if (first || d.group != last_group) {
+            b.header(std::string{label_of(d.group)});
+            last_group = d.group;
+            first = false;
+        }
+
+        const std::string id{d.id};
+        const std::string label{d.label};
+        const std::string help{d.help};
+
+        switch (d.type) {
+            case Type::Bool:
+                b.toggle(id, label, get(cfg, d) == "true", help);
+                break;
+            case Type::Real: {
+                double v = d.min;
+                try { v = std::stod(get(cfg, d)); } catch (...) {}
+                b.slider(id, label, v, d.min, d.max, d.step, help);
+                break;
+            }
+            case Type::Int: {
+                long long v = 0;
+                try { v = std::stoll(get(cfg, d)); } catch (...) {}
+                b.number(id, label, v, static_cast<std::int64_t>(d.min),
+                         static_cast<std::int64_t>(d.max), help);
+                break;
+            }
+            case Type::Enum: {
+                std::vector<std::string> opts;
+                std::string_view rest = d.options;
+                while (!rest.empty()) {
+                    const auto bar = rest.find('|');
+                    opts.emplace_back(rest.substr(0, bar));
+                    if (bar == std::string_view::npos) break;
+                    rest.remove_prefix(bar + 1);
+                }
+                b.choice(id, label, opts, {}, get(cfg, d), help);
+                break;
+            }
+        }
+
+        // An env var overriding this row makes it READ-ONLY and names the
+        // variable. The row would otherwise look editable and silently lose
+        // the edit on the next read — layered config's worst failure, and the
+        // reason `origin` exists at all.
+        if (const std::string env = env_override(d); !env.empty()) {
+            b.origin("env: " + env);
+            b.lock("env: " + env);
+        }
+        // Provenance: a row still on its shipped value says so, which is the
+        // difference between "I never touched this" and "I set it to that".
+        else if (is_default(cfg, d)) b.origin("default");
+    }
+}
 
 } // namespace agentty::settings::registry

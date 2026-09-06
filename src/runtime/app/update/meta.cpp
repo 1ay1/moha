@@ -70,20 +70,11 @@ form::Form build_smart_form(const Model& m, bool advanced) {
     in.implementation = slot(smart::ModelRole::Implementation);
     in.utility        = slot(smart::ModelRole::Utility);
 
-    // The numeric policy, read from the RESOLVED config the router is
-    // actually using — not from settings.json, which an env override may be
-    // shadowing. The row shows what routes; the lock says why it cannot be
-    // edited when an export owns it.
-    in.advanced          = advanced;
-    in.complex_threshold = sm.complex_threshold;
-    in.deep_margin       = sm.deep_margin;
-    in.bias_clamp        = sm.bias_clamp;
-    if (smart::tuning::complex_threshold_env())
-        in.complex_threshold_lock = "env: AGENTTY_SMART_COMPLEX_THRESHOLD";
-    if (smart::tuning::deep_margin_env())
-        in.deep_margin_lock = "env: AGENTTY_SMART_DEEP_MARGIN";
-    if (smart::tuning::bias_clamp_env())
-        in.bias_clamp_lock = "env: AGENTTY_SMART_BIAS_CLAMP";
+    // The advanced rows are projected straight from the persisted config by
+    // the settings registry — value, range, label, help, env lock and
+    // provenance all come from the row. Nothing to mirror here.
+    in.advanced = advanced;
+    in.settings = deps().load_settings();
     return smart_form::build_form(in);
 }
 

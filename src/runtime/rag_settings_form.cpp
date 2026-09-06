@@ -39,89 +39,6 @@ namespace {
     return t ? t->on : fallback;
 }
 
-// Append every registry row, grouped, in table order. NOTHING here names an
-// individual setting — the table is the source of truth and this is a walk.
-// That is what makes "adding a knob is adding a row" true rather than
-// aspirational.
-//
-// Generic over the OWNING config struct so one walk serves both halves of the
-// table — the RAG rows read from a RagConfig, the Smart Mode routing rows from
-// a store::Settings. `owner` selects which rows this pass is responsible for;
-// the rest belong to the other call and are skipped.
-template <class C>
-void add_registry_rows(form::Builder& b, const C& cfg,
-                       settings::registry::Owner owner, bool advanced,
-                       bool& first, settings::registry::Group& last_group) {
-    namespace reg = settings::registry;
-
-    for (const auto& d : reg::kSettings) {
-        if (d.owner() != owner) continue;
-
-        // Advanced rows are hidden, not disabled: a knob whose effect a user
-        // cannot judge is noise on the main screen, but it still has to be
-        // reachable (^A) rather than env-only.
-        if (d.tier == reg::Tier::Advanced && !advanced) continue;
-
-        // A group header separates sections. It is a real field kind, not a
-        // locked text row: faking it leaked a placeholder into the value
-        // column and let the cursor land on a label that does nothing.
-        if (first || d.group != last_group) {
-            b.header(std::string{reg::label_of(d.group)});
-            last_group = d.group;
-            first = false;
-        }
-
-        const std::string id{d.id};
-        const std::string label{d.label};
-        const std::string help{d.help};
-
-        switch (d.type) {
-            case reg::Type::Bool: {
-                const bool on = reg::get(cfg, d) == "true";
-                b.toggle(id, label, on, help);
-                break;
-            }
-            case reg::Type::Real: {
-                double v = 0.0;
-                try { v = std::stod(reg::get(cfg, d)); } catch (...) { v = d.min; }
-                b.slider(id, label, v, d.min, d.max, d.step, help);
-                break;
-            }
-            case reg::Type::Int: {
-                long long v = 0;
-                try { v = std::stoll(reg::get(cfg, d)); } catch (...) { v = 0; }
-                b.number(id, label, v, static_cast<std::int64_t>(d.min),
-                         static_cast<std::int64_t>(d.max), help);
-                break;
-            }
-            case reg::Type::Enum: {
-                std::vector<std::string> opts;
-                std::string_view rest = d.options;
-                while (!rest.empty()) {
-                    const auto bar = rest.find('|');
-                    opts.emplace_back(rest.substr(0, bar));
-                    if (bar == std::string_view::npos) break;
-                    rest.remove_prefix(bar + 1);
-                }
-                b.choice(id, label, opts, {}, reg::get(cfg, d), help);
-                break;
-            }
-        }
-
-        // An env var overriding this row makes it READ-ONLY and names the
-        // variable. The row would otherwise look editable and silently lose
-        // the edit on the next read — layered config's worst failure, and the
-        // reason `origin` exists at all.
-        if (const std::string env = reg::env_override(d); !env.empty()) {
-            b.origin("env: " + env);
-            b.lock("env: " + env);
-        }
-        // Provenance: a row still on its shipped value says so, which is the
-        // difference between "I never touched this" and "I set it to that".
-        else if (reg::is_default(cfg, d)) b.origin("default");
-    }
-}
-
 // Both halves of the table, in table order, with the group headers running
 // continuously across the boundary.
 //
@@ -135,7 +52,7 @@ void add_all_registry_rows(form::Builder& b, const store::Settings& settings,
     namespace reg = agentty::settings::registry;
     auto last_group = reg::Group::Sources;
     bool first = true;
-    add_registry_rows(b, settings.rag, reg::Owner::Rag, advanced, first, last_group);
+    reg::add_rows(b, settings.rag, reg::Owner::Rag, advanced, first, last_group);
 }
 
 } // namespace
