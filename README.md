@@ -314,17 +314,20 @@ cd agentty && cmake -B build && cmake --build build -j
 ```
 
 **Named presets** (reproducible configs, no `-D` soup) — **use these if you are
-going to edit the code**: `dev` rebuilds in ~0.7 s after a one-line change vs
-~28 s for the plain `cmake -B build` above, because it skips LTO. See
+going to edit the code**: `debug` rebuilds in ~1.7 s after a one-line change vs
+~36 s for the plain `cmake -B build` above, because it skips LTO. See
 [Building from source](https://agentty.org/docs/building#the-development-loop).
 
 ```bash
-cmake --preset dev        && cmake --build --preset dev        # fast Debug loop (no LTO, ccache)
-cmake --preset release    && cmake --build --preset release    # optimized -O3 + LTO binary
-ctest  --preset dev                                             # run the suite
+cmake --preset debug   && cmake --build --preset debug     # fast Debug loop (no LTO, ccache)
+cmake --preset release && cmake --build --preset release   # optimized -O3 + LTO binary
+ctest  --preset debug                                      # run the suite
 ```
 
-`cmake --list-presets` shows them all (dev / release / ci / sanitizer / standalone / pch).
+Every preset shares one `build/` tree — switching preset reconfigures it in
+place instead of leaving a second multi-gigabyte copy on disk.
+`cmake --list-presets` shows them all (debug / debug-full / release / ci /
+sanitizer / standalone / pch).
 
 All binaries are a single fully-static executable (x86_64 + aarch64 on Linux, Intel + Apple Silicon on macOS; Termux/Android builds from source). Packaging details: [`packaging/README.md`](packaging/README.md).
 

@@ -406,7 +406,7 @@ default: **a non-release build (the `dev` preset) captures `trace` on every
 channel with no env var at all.** Just run your build:
 
 ```bash
-./build/dev/agentty
+./build/agentty
 ```
 
 Everything — wire bytes, `dispatch.turn` fingerprints, tool exec, salvage
@@ -463,7 +463,7 @@ Worth knowing:
   interleave:
 
   ```bash
-  AGENTTY_LOG_FILE=/tmp/agentty-$$.log ./build/dev/agentty
+  AGENTTY_LOG_FILE=/tmp/agentty-$$.log ./build/agentty
   ```
 
 Suggested muscle memory — the whole workflow is: see bug → mark → snapshot

@@ -6,8 +6,9 @@
     {
       "name": "base",
       "hidden": true,
+      "description": "Every preset builds into ONE tree: ${sourceDir}/build. Switching preset reconfigures that tree in place (`cmake --preset release` after `--preset debug` flips the build type) instead of leaving a second multi-gigabyte tree on disk. Need two configurations live at once? Override with an explicit -B: `cmake --preset debug -B build-other`.",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/${presetName}",
+      "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "AGENTTY_COMPILER_CACHE": "ON"
       }
@@ -32,7 +33,7 @@
 
     {
       "name": "dev",
-      "displayName": "Alias for `debug` (kept so existing build/dev trees and docs keep working)",
+      "displayName": "Alias for `debug` (kept so older docs/muscle memory keep working)",
       "inherits": "debug"
     },
 
