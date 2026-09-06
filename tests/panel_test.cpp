@@ -757,6 +757,70 @@ TEST_CASE("panel: the dropdown reads as one attached block") {
     CHECK(out.find("\xe2\x94\xb4") != std::string::npos);   // ┴
 }
 
+TEST_CASE("panel: a vertical list has no horizontal scroll extent") {
+    // A section header PAINTS a rule out to the right edge, but its natural
+    // size is just its label — the rule is decoration that expands into space
+    // offered, not content demanding room. Conflating the two made its
+    // ComponentElement::measure answer "I need all the width you have", and
+    // the width offered during measurement is not a terminal width: a scroll
+    // viewport probes its children against an UNBOUNDED width to discover the
+    // content extent, so the header claimed ~2^24 columns.
+    //
+    // Two consequences, both real. The panel reported itself horizontally
+    // scrollable by sixteen million columns, which is what the scrollbar and
+    // wheel-routing machinery reads. And because the bogus number was derived
+    // from the offered width, it CHANGED on every resize — dirtying the scroll
+    // state and making the run loop redraw the whole overlay a second time on
+    // 25 of 31 widths.
+    //
+    // The panel is a vertical list. max_x is 0, at every width, with any mix
+    // of rows.
+    for (int width : {40, 60, 80, 120, 160}) {
+        maya::ScrollState s;
+        Panel::Config c;
+        c.title      = " Wide ";
+        c.viewport_h = 10;
+        c.scroll     = &s;
+        c.rows       = mixed_rows(50);      // includes headers, help, errors
+        c.selected   = 1;
+        (void)render(std::move(c), width);
+        CHECK(s.max_x == 0);
+    }
+}
+
+TEST_CASE("panel: resizing settles in a single render") {
+    // The resize counterpart to the keystroke fixed-point test. Sweeping the
+    // terminal width must not leave the scroll state dirty: nothing about a
+    // panel's CONTENT height depends on its width (rows are one line, help and
+    // errors are NoWrap), so a writeback that disagrees is reporting geometry
+    // the view got wrong rather than a genuine reflow.
+    maya::ScrollState s;
+    const auto frame = [&](int width) {
+        Panel::Config c;
+        c.title      = " Resize ";
+        c.viewport_h = 10;
+        c.scroll     = &s;
+        c.rows       = mixed_rows(200);
+        c.selected   = 100;
+        return render(std::move(c), width);
+    };
+
+    frame(60);                              // establish a steady state
+
+    int dirty = 0, unstable = 0;
+    for (int width = 40; width <= 160; width += 4) {
+        maya::detail::scroll_writeback_dirty = false;
+        const auto f1 = frame(width);
+        const int max_y = s.max_y, y = s.y;
+        if (maya::detail::scroll_writeback_dirty) ++dirty;
+
+        const auto f2 = frame(width);       // same width twice: a fixed point
+        if (f1 != f2 || s.max_y != max_y || s.y != y) ++unstable;
+    }
+    CHECK(dirty == 0);
+    CHECK(unstable == 0);
+}
+
 TEST_CASE("panel: a Secret is never rendered in the clear") {
     // The control carries a LENGTH, not a string — there is no plaintext in
     // the widget's inputs, so no render path can leak one.
