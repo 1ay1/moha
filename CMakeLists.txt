@@ -23,6 +23,8 @@ include(AgenttySubmodules)
 # Per-domain source group lists (AGENTTY_*_SOURCES). See cmake/AgenttySources.cmake.
 include(AgenttySources)
 
+include(CheckCXXSourceCompiles)
+
 # ── Shared compile flags ────────────────────────────────────────────────
 # All agentty TUs (the main binary, the shared OBJECT libraries below, and
 # every test) MUST compile with byte-identical flags. The arch flag
@@ -607,8 +609,30 @@ if(NOT MSVC AND NOT AGENTTY_SANITIZE)
     endif()
     # _FORTIFY_SOURCE requires -O1+; only define it for optimizing configs so
     # a Debug build doesn't emit the "requires optimization" warning per TU.
-    target_compile_definitions(agentty PRIVATE
-        $<$<NOT:$<CONFIG:Debug>>:_FORTIFY_SOURCE=2>)
+    #
+    # A hardening toolchain spec or distro packager flags (e.g. Arch makepkg's
+    # `-D_FORTIFY_SOURCE=3` injected via CFLAGS) can already predefine
+    # _FORTIFY_SOURCE earlier on the command line. Adding our own -D after it
+    # trips GCC's "`_FORTIFY_SOURCE' redefined" warning on the only target
+    # carrying this def (`agentty`'s lone TU, src/runtime/main.cpp). Detect an
+    # injected definition at configure time and yield to it: the toolchain's
+    # value is already the packager's hardening choice, and skipping ours drops
+    # the redefinition warning with no functional loss. When nothing predefines
+    # the macro we add =2 exactly as before.
+    set(_agt_req_quiet_save ${CMAKE_REQUIRED_QUIET})
+    set(CMAKE_REQUIRED_QUIET YES)
+    check_cxx_source_compiles("
+        #ifndef _FORTIFY_SOURCE
+        #error _FORTIFY_SOURCE is not predefined by the toolchain
+        #endif
+        int main() { return 0; }
+    " AGENTTY_FORTIFY_PREDEFINED)
+    set(CMAKE_REQUIRED_QUIET ${_agt_req_quiet_save})
+    unset(_agt_req_quiet_save)
+    if(NOT AGENTTY_FORTIFY_PREDEFINED)
+        target_compile_definitions(agentty PRIVATE
+            $<$<NOT:$<CONFIG:Debug>>:_FORTIFY_SOURCE=2>)
+    endif()
     # A fully-static build already carries its own PIE decision (-static-pie
     # or -no-pie); adding a bare -pie here would fight it. Only add -pie for
     # the non-static path.

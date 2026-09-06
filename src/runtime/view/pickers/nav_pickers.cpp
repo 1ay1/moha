@@ -35,7 +35,6 @@ Element thread_list(const Model& m) {
             fg_italic(muted)));
     } else {
         cfg.rows.reserve(m.d.threads.size());
-        int i = 0;
         for (const auto& t : m.d.threads) {
             const bool is_current = (t.id == m.d.current.id);
             const bool confirming = (picker->confirm_remove == t.id.value);
@@ -62,7 +61,6 @@ Element thread_list(const Model& m) {
             // data and yields first on a narrow terminal.
             row.trailing_secondary = true;
             cfg.rows.push_back(std::move(row));
-            ++i;
         }
     }
 

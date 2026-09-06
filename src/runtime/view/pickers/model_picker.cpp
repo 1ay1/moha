@@ -470,9 +470,7 @@ Element provider_picker(const Model& m) {
     };
 
     cfg.rows.reserve(rows.size());
-    int i = 0;
     for (const auto& r : rows) {
-        const bool sel = (i == picker->index);
         Panel::Row row;
 
         if (const auto* p = r.preset()) {
@@ -530,7 +528,6 @@ Element provider_picker(const Model& m) {
         // trailing cell matters more, like the file picker's diffstat.
         row.trailing_secondary = true;
         cfg.rows.push_back(std::move(row));
-        ++i;
     }
 
     // Enter opens the accounts drill-down on an account-capable OAuth
