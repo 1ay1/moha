@@ -190,6 +190,66 @@ option(AGENTTY_PCH "Share a precompiled STL/maya-core header prefix across the o
 # Batch size 8 balances instantiation sharing against incremental cost.
 option(AGENTTY_UNITY_BUILD "Unity/jumbo build of the object libraries (big COLD-build win on this instantiation-bound tree; hurts incremental — for CI/cold only)." OFF)
 set(AGENTTY_UNITY_BATCH 8 CACHE STRING "TUs per unity batch when AGENTTY_UNITY_BUILD=ON")
+
+# ── Fast debug builds ───────────────────────────────────────────
+#
+# The edit-build loop was 36s for a ONE-FILE change. Measured on this tree
+# (GCC 16, 12 cores), that splits as:
+#
+#   compile one TU (meta.cpp)   ~10s   of which ~11s is -g on the biggest TUs
+#   link agentty                ~26s   an 827 MB binary through ld.bfd
+#
+# So the loop is LINK-bound, and the link is huge because full DWARF from
+# every objlib lands in it. Two changes, both Debug-only:
+#
+#   -g1  — line tables + function boundaries, no local-variable DWARF.
+#          Measured 23.7s -> 17.9s on the largest TU (-g0 is 12.8s, so ~half
+#          the remaining debug cost is the part that gives backtraces, which
+#          is the part worth keeping). Backtraces, file:line, and breakpoints
+#          all still work; `print localvar` in gdb does not. That is the right
+#          trade for a loop whose debugging is overwhelmingly "where did it
+#          crash" — and `--preset debug-full` exists for the other days.
+#
+# NOTE on fast linkers: they only work here because Debug now has LTO OFF (see
+# cmake/AgenttyStandalone.cmake). While debug objects were GCC SLIM LTO
+# bytecode ("__gnu_lto_slim", no real symbol table — only GNU ld reads those,
+# via the GCC plugin), lld failed with a wall of bogus "undefined symbol"
+# errors for functions that were demonstrably present. That was the symptom;
+# the LTO-on-a-debug-build was the disease.
+#
+# Release is untouched: it keeps full -O3 + LTO + strip.
+option(AGENTTY_FAST_DEBUG
+       "Debug builds: lighter debug info (-g1) + a fast linker. Big edit-loop win; costs local-variable inspection in gdb."
+       ON)
+
+if(AGENTTY_FAST_DEBUG AND NOT MSVC AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    # -g1 REPLACES the -g that CMAKE_CXX_FLAGS_DEBUG hardcodes; appending would
+    # leave both on the command line and the last one wins non-obviously.
+    string(REGEX REPLACE "(^| )-g( |$)" "\\1-g1\\2"
+           CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+    string(REGEX REPLACE "(^| )-g( |$)" "\\1-g1\\2"
+           CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+
+    # A faster linker, if one is installed. mold beats lld beats ld.bfd, and
+    # both are drop-in for ELF. Probed by ACTUALLY LINKING rather than by
+    # looking for the binary: a present-but-unusable linker would otherwise
+    # fail the whole build, and this block exists to make builds faster, not
+    # more fragile.
+    include(CheckCXXSourceCompiles)
+    foreach(_ld mold lld)
+        set(CMAKE_REQUIRED_LINK_OPTIONS -fuse-ld=${_ld})
+        check_cxx_source_compiles("int main(){return 0;}" AGENTTY_HAS_LD_${_ld})
+        unset(CMAKE_REQUIRED_LINK_OPTIONS)
+        if(AGENTTY_HAS_LD_${_ld})
+            add_link_options(-fuse-ld=${_ld})
+            set(_agentty_fast_ld ${_ld})
+            break()
+        endif()
+    endforeach()
+    message(STATUS "agentty: fast debug — -g1, no LTO, "
+                   "${_agentty_fast_ld} linker")
+endif()
+
 function(agentty_objlib name)
     add_library(${name} OBJECT ${ARGN})
     target_include_directories(${name} PRIVATE include)

@@ -138,7 +138,7 @@ if(AGENTTY_IPO_OK AND (CMAKE_BUILD_TYPE STREQUAL "Release"
                      OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"
                      OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"))
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-elseif(NOT AGENTTY_IPO_OK)
+else()
     # Set a DEFINED false value, not just "leave it unset". maya/CMakeLists.txt
     # has its own `if(NOT DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION) set(...
     # ON)` fallback (so a bare `add_subdirectory(maya)` from an external
@@ -150,6 +150,14 @@ elseif(NOT AGENTTY_IPO_OK)
     # bytecode objects in libmaya.a that the later `-fno-lto`-only link flags
     # can't consume ("plugin needed to handle lto object"). Defining it FALSE
     # here is the actual override maya's guard is designed to respect.
+    #
+    # This `else` used to be `elseif(NOT AGENTTY_IPO_OK)`, which left DEBUG in
+    # exactly the hole the paragraph above describes: IPO_OK is true and the
+    # build type is not a release one, so neither branch ran, the variable
+    # stayed undefined, and maya's fallback turned LTO ON for the debug build.
+    # A whole-program LTO link in the edit-build loop is the single most
+    # expensive thing it could have been doing — and it also made every debug
+    # object slim-LTO bytecode, which is why no fast linker could be used.
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
 endif()
 

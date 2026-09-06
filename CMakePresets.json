@@ -14,8 +14,8 @@
     },
 
     {
-      "name": "dev",
-      "displayName": "Dev (Debug, no LTO, ccache) — the fast edit-build-test loop",
+      "name": "debug",
+      "displayName": "Debug (DEFAULT) — fastest edit-build-test loop",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
@@ -24,8 +24,21 @@
     },
 
     {
+      "name": "debug-full",
+      "displayName": "Debug + full DWARF — when you need `print localvar` in gdb",
+      "inherits": "debug",
+      "cacheVariables": { "AGENTTY_FAST_DEBUG": "OFF" }
+    },
+
+    {
+      "name": "dev",
+      "displayName": "Alias for `debug` (kept so existing build/dev trees and docs keep working)",
+      "inherits": "debug"
+    },
+
+    {
       "name": "release",
-      "displayName": "Release (-O3 + thin LTO) — the optimized local binary",
+      "displayName": "Release (-O3 + thin LTO + strip) — the optimized binary",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
@@ -74,6 +87,8 @@
   ],
 
   "buildPresets": [
+    { "name": "debug",      "configurePreset": "debug" },
+    { "name": "debug-full", "configurePreset": "debug-full" },
     { "name": "dev",        "configurePreset": "dev" },
     { "name": "release",    "configurePreset": "release" },
     { "name": "pch",        "configurePreset": "pch" },
@@ -93,6 +108,11 @@
   ],
 
   "testPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true }
+    },
     {
       "name": "dev",
       "configurePreset": "dev",
