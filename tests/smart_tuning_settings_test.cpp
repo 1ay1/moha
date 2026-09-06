@@ -23,10 +23,14 @@
 #include "agentty/domain/smart_mode.hpp"
 #include "agentty/domain/smart_tuning.hpp"
 #include "agentty/io/persistence.hpp"
+#include "agentty/runtime/app/deps.hpp"
+#include "agentty/runtime/app/update/internal.hpp"   // apply_smart
+#include "agentty/runtime/model.hpp"
 #include "agentty/runtime/rag_settings.hpp"
 #include "agentty/runtime/settings_registry.hpp"
 #include "agentty/runtime/smart_form.hpp"
 #include "agentty/store/store.hpp"
+#include "agentty/tool/subagent.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -356,6 +360,74 @@ TEST_CASE("smart tuning: a pinned slot survives a save/load round trip") {
     CHECK(back.smart.deep_margin == 7);
     // Untouched slots stay unpinned rather than becoming empty pins.
     CHECK_FALSE(back.smart.utility.set);
+}
+
+TEST_CASE("smart tuning: a config change reaches all three holders") {
+    // The fan-out that made this feature hard. Smart Mode config lives in
+    // THREE places at once — settings.json, the Model the UI thread reads, and
+    // the subagent router's worker-thread copy — and every bug in the series
+    // was a call site that updated one or two of them.
+    //
+    // apply_smart is the only thing that knows all three. This asserts all
+    // three, so a future path that open-codes "save and install" and forgets
+    // the router fails here rather than in a user's `task` routing to a model
+    // they un-pinned ten minutes ago.
+    isolate_config_dir();
+    clear_env();
+
+    // apply_smart persists through deps(); a test binary has none installed.
+    // An in-memory pair is enough and keeps the assertion honest — what comes
+    // back out is what apply_smart put in, with no disk in the way.
+    static agentty::store::Settings persisted;
+    persisted = agentty::store::Settings{};
+    agentty::app::install_deps(agentty::app::Deps{
+        .stream        = [](auto, auto) {},
+        .save_thread   = [](const agentty::Thread&) {},
+        .delete_thread = [](const auto&) {},
+        .load_threads  = [] { return std::vector<agentty::Thread>{}; },
+        .load_thread   = [](const agentty::ThreadId&) {
+                             return std::optional<agentty::Thread>{}; },
+        .load_settings = [] { return persisted; },
+        .save_settings = [](const agentty::store::Settings& s) { persisted = s; },
+        .new_thread_id = [] { return agentty::ThreadId{"t-smart"}; },
+        .title_from    = [](std::string_view t) { return std::string{t}; },
+        .auth          = {},
+    });
+
+    // A fresh, INSTALLED router copy. set_smart() no-ops while the router is
+    // uninstalled (correct in production: `task` is unavailable, so there is
+    // nothing to configure) — so without installing one here the third
+    // assertion would pass vacuously against a config nobody kept.
+    agentty::tools::subagent::install(agentty::tools::subagent::Config{
+        .model = "stub", .installed = true});
+    agentty::tools::subagent::set_smart(agentty::smart::RoleConfig{});
+    REQUIRE_FALSE(agentty::tools::subagent::current().smart.enabled);
+
+    agentty::Model m;
+    agentty::smart::RoleConfig cfg;
+    cfg.enabled = true;
+    cfg.complex_threshold = 6;
+    cfg.strategic = agentty::smart::SlotOverride{
+        .model = "gpt-5", .effort = agentty::Effort::High,
+        .set = true, .provider = "openai"};
+
+    agentty::app::detail::apply_smart(m, cfg);
+
+    // 1. Persisted — survives a restart.
+    CHECK(persisted.smart.enabled);
+    CHECK(persisted.smart.complex_threshold == 6);
+    CHECK(persisted.smart.strategic.model == "gpt-5");
+
+    // 2. Installed on the Model — what the classifier reads on the next turn.
+    CHECK(m.d.smart.enabled);
+    CHECK(m.d.smart.complex_threshold == 6);
+    CHECK(m.d.smart.strategic.model == "gpt-5");
+
+    // 3. Pushed to the subagent router — what `task` workers route on.
+    const auto router = agentty::tools::subagent::current().smart;
+    CHECK(router.enabled);
+    CHECK(router.complex_threshold == 6);
+    CHECK(router.strategic.model == "gpt-5");
 }
 
 TEST_CASE("smart tuning: apply_tuning is the one resolution rule") {

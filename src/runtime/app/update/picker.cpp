@@ -985,9 +985,9 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // Rebuild through the SAME builder the pane opened with, then
                 // focus by field id — no `1 + slot` offset to keep in step
                 // with a row set that is now derived.
-                auto f = build_smart_form(m);
+                auto f = build_smart_form(m, m.ui.smart_assign_advanced);
                 smart_form::focus_role(f, *role);
-                m.ui.overlay = ov::SmartMode{std::move(f)};
+                m.ui.overlay = ov::SmartMode{std::move(f), m.ui.smart_assign_advanced};
             }
             return done(std::move(m));
         },
@@ -1234,7 +1234,8 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // One role->field mapping, shared with every other reader
                 // and writer (RoleConfig::slot). The switch on 0/1/2 that
                 // used to live here was a third copy of it.
-                smart::SlotOverride& slot = m.d.smart.slot(*assigning);
+                smart::RoleConfig cfg = m.d.smart;
+                smart::SlotOverride& slot = cfg.slot(*assigning);
                 slot.model = row.model.id.value;
                 slot.set   = true;
                 // Stamp the provider this pin was made under. A model id
@@ -1247,11 +1248,15 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 slot.provider = row.provider_id.empty()
                                   ? active_provider_id()
                                   : row.provider_id;
-                m.d.smart.enabled = true;   // pinning a slot means "on"
+                cfg.enabled = true;   // pinning a slot means "on"
 
                 const smart::ModelRole assigned = *assigning;
                 m.ui.smart_assign_slot.reset();
-                persist_settings(m);
+                // ONE entry point: persists, installs on the UI thread and
+                // pushes to the subagent router. Pinning a model and having
+                // `task` keep using the old one is exactly what the open-coded
+                // persist_settings here used to do.
+                apply_smart(m, std::move(cfg));
                 m.ui.overlay.close<ov::FusedPicker>();
                 m.d.fused_rows.clear();
                 // Pop back to the parent Smart Mode picker, cursor on the
@@ -1259,9 +1264,9 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // there and probably want to set the sibling slots too;
                 // forcing a re-open of Smart Mode after every slot is the
                 // exact tedium this fixes.
-                auto f = build_smart_form(m);
+                auto f = build_smart_form(m, m.ui.smart_assign_advanced);
                 smart_form::focus_role(f, assigned);
-                m.ui.overlay = ov::SmartMode{std::move(f)};
+                m.ui.overlay = ov::SmartMode{std::move(f), m.ui.smart_assign_advanced};
                 auto toast = set_status_toast(m, "Smart Mode slot set");
                 return {std::move(m), std::move(toast)};
             }

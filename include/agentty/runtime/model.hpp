@@ -390,6 +390,12 @@ struct Model {
         // around a value that is a role the whole time, and a -1 that had to
         // be remembered as "none" at every read.
         std::optional<smart::ModelRole> smart_assign_slot;
+        // Whether the Smart Mode pane had its advanced rows open when it handed
+        // off to the model picker. The overlay that held the flag is DESTROYED
+        // by the hand-off, so without parking it here the pane comes back
+        // collapsed — pinning a slot would silently close the routing-policy
+        // section the user had just opened.
+        bool smart_assign_advanced = false;
         // Effort tier changed via ←/→ in the model picker but not yet
         // flushed to disk. Persisting per keystroke is a synchronous
         // load+fsync+rename on the UI thread; instead the CycleEffort arm

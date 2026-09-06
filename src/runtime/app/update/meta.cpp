@@ -218,9 +218,14 @@ Step meta_update(Model m, msg::MetaMsg mm) {
                     return done(std::move(m));
                 }
 
-                m.d.smart.enabled = smart_form::enabled_from_form(o->form,
-                                                                 m.d.smart.enabled);
-                persist_settings(m);
+                // The master toggle. Routed through apply_smart like every
+                // other config change, so the subagent router is pushed too —
+                // turning Smart Mode on while a `task` was queued used to leave
+                // that worker routing as if it were still off.
+                smart::RoleConfig cfg = m.d.smart;
+                cfg.enabled = smart_form::enabled_from_form(o->form,
+                                                            m.d.smart.enabled);
+                apply_smart(m, std::move(cfg));
                 // The slots' locked state depends on the switch, so rebuild.
                 const int cursor = o->form.cursor;
                 o->form = build_smart_form(m, o->advanced);
@@ -234,6 +239,10 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             // too large and too dynamic for an inline dropdown.
             if (applied.hand_off && role) {
                 m.ui.smart_assign_slot = *role;
+                // The overlay is destroyed by the hand-off, so park the
+                // advanced flag on the Model — the picker reopens this pane
+                // and must bring it back in the state the user left it.
+                m.ui.smart_assign_advanced = o->advanced;
                 m.ui.overlay.close<ov::SmartMode>();
                 return agentty::app::update(std::move(m), Msg{OpenFusedPicker{}});
             }
@@ -254,11 +263,15 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             if (!row || row->locked) return done(std::move(m));
             const auto role = smart_form::role_of_field(row->id);
             if (!role) return done(std::move(m));
-            m.d.smart.slot(*role) = smart::SlotOverride{};   // reset to auto
-            persist_settings(m);
+            // Reset to auto through the ONE entry point, so the subagent
+            // router loses the pin too. Clearing a slot but leaving a worker
+            // routing on it is the same class of bug as the save-without-apply.
+            smart::RoleConfig cfg = m.d.smart;
+            cfg.slot(*role) = smart::SlotOverride{};
+            apply_smart(m, std::move(cfg));
             // The row shows the RESOLVED model, which just changed.
             const int cursor = o->form.cursor;
-            o->form = build_smart_form(m);
+            o->form = build_smart_form(m, o->advanced);
             o->form.cursor = cursor;
             return {std::move(m), set_status_toast(m, "slot reset to auto")};
         },
