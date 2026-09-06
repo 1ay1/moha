@@ -353,6 +353,26 @@ Step meta_update          (Model m, msg::MetaMsg           mm);
 // one builder means the reopened pane cannot differ from the original.
 [[nodiscard]] form::Form build_smart_form(const Model& m, bool advanced = false);
 
+// ── THE Smart Mode config entry point ───────────────────────────────
+//
+// Install `cfg` everywhere Smart Mode is read. There are THREE holders, and
+// this is the only place that knows all of them:
+//
+//   1. store::Settings   — persistence, so it survives restart
+//   2. Model::Domain     — the UI thread; the classifier reads it per turn
+//   3. tools::subagent   — a worker-thread copy, because `task` runs with no
+//                          access to the Model at all
+//
+// That fan-out is what made this feature hard. It used to be open-coded at
+// each call site, and every bug in the series was a site that did one or two
+// of the three: saved but never applied (took effect only after restart),
+// applied but never pushed to subagents (workers routed on stale policy).
+// A caller cannot forget a step it does not perform.
+//
+// Persists as a side effect: "change the config" and "write it down" are the
+// same intent, and splitting them is another pair of steps to get wrong.
+void apply_smart(Model& m, smart::RoleConfig cfg);
+
 // ── Row estimation (frozen.cpp) ──────────────────────────────────────────
 //
 // Predicted RENDERED height of a message, in terminal rows, at `cols`.

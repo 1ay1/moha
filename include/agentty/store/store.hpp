@@ -13,6 +13,7 @@
 #include "agentty/domain/conversation.hpp"
 #include "agentty/domain/catalog.hpp"
 #include "agentty/domain/profile.hpp"
+#include "agentty/domain/smart_mode.hpp"
 
 namespace agentty::store {
 
@@ -191,36 +192,19 @@ struct Settings {
     RagConfig rag;
 
     // Smart Mode (role-based execution routing, docs/design/smart-mode.md).
-    // Off by default. The three slot fields are WIRE model ids the user
-    // pinned for each role; empty = auto-fill from the catalog. Effort
-    // strings mirror the `effort` field's grammar (""/"low"/"medium"/…).
-    // Reloaded into Model::Domain::smart at startup.
-    bool                 smart_enabled = false;
-    std::string          smart_strategic_model,      smart_strategic_effort;
-    std::string          smart_impl_model,           smart_impl_effort;
-    std::string          smart_utility_model,        smart_utility_effort;
-    // Provider each pin was made under ("" = unknown provenance, honoured
-    // everywhere). See smart::SlotOverride::provider — a pinned model id is
-    // endpoint-scoped, so it must not be replayed against another provider.
-    std::string          smart_strategic_provider;
-    std::string          smart_impl_provider;
-    std::string          smart_utility_provider;
-
-    // Numeric routing policy — the same story as RagConfig's tuning block
-    // above. These were reachable only through AGENTTY_SMART_* environment
-    // variables, so they were undiscoverable (you had to read
-    // domain/smart_tuning.hpp to learn they existed), session-only, and
-    // unvalidated. They are persisted now because the settings registry gives
-    // them rows, enforced ranges and provenance; the env names still work and
-    // LOCK the row when set, so a shell export is visible rather than silently
-    // swallowing an edit.
+    // Off by default.
     //
-    // The shipped values live in smart::tuning as kDefault* and are mirrored
-    // here; a static_assert in settings_registry.hpp pins the two together so
-    // they cannot drift.
-    int                  smart_deep_margin       = 3;   // 1..8
-    int                  smart_bias_clamp        = 2;   // 1..4
-    int                  smart_complex_threshold = 3;   // 1..8
+    // The DOMAIN type, stored whole — the same move `profile` makes with
+    // domain::Profile. This used to be eleven flat fields (three per slot plus
+    // three ints), which is a RoleConfig taken apart: it made
+    // "model pinned but provider forgotten" representable, and it forced a
+    // hand-written mapping between the two shapes at every boundary (load,
+    // save, startup, the settings pane). Every one of those mappings was a
+    // place to forget a field, and several were.
+    //
+    // store -> domain is the direction this codebase already allows (see
+    // domain/rag_mode.hpp for the rule); domain never looks back this way.
+    smart::RoleConfig    smart;
 
     // Show the persistent "N changes" review strip after the agent edits
     // files (the banner above the composer). OFF by default — edits apply

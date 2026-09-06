@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #if defined(_WIN32)
@@ -60,10 +61,16 @@ long long now_ms() {
                std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-// A private config dir per call. Same discipline as the account tests: sibling
-// ctest processes can start in the same millisecond, and several cases in one
-// binary each want a clean store.
-void isolate_config_dir() {
+// A private data root per call. Settings live under $AGENTTY_HOME (see
+// util/user_root.hpp) — NOT AGENTTY_CONFIG_DIR, which this file used to set
+// and which persistence does not read, so every "isolated" test was quietly
+// sharing the developer's real ~/.agentty. Returns the root so a test can
+// write a fixture file into it.
+//
+// Same uniqueness discipline as the account tests: sibling ctest processes can
+// start in the same millisecond, and several cases in one binary each want a
+// clean store.
+fs::path isolate_config_dir() {
     static std::atomic<int> seq{0};
     auto dir = fs::temp_directory_path()
              / ("agentty_smarttune_" + std::to_string(now_ms())
@@ -77,10 +84,11 @@ void isolate_config_dir() {
                 + "_" + std::to_string(seq.fetch_add(1)));
     fs::create_directories(dir);
 #if defined(_WIN32)
-    _putenv_s("AGENTTY_CONFIG_DIR", dir.string().c_str());
+    _putenv_s("AGENTTY_HOME", dir.string().c_str());
 #else
-    setenv("AGENTTY_CONFIG_DIR", dir.string().c_str(), 1);
+    setenv("AGENTTY_HOME", dir.string().c_str(), 1);
 #endif
+    return dir;
 }
 
 void clear_env() {
@@ -98,17 +106,17 @@ TEST_CASE("smart tuning: rows bind to the config struct that owns them") {
 
     const auto* cut = reg::find(kCut);
     REQUIRE(cut != nullptr);
-    CHECK(cut->owner() == reg::Owner::Settings);
-    CHECK(reg::is_default(s, *cut));
+    CHECK(cut->owner() == reg::Owner::Smart);
+    CHECK(reg::is_default(s.smart, *cut));
 
-    CHECK(reg::set(s, *cut, "5"));
-    CHECK(reg::get(s, *cut) == "5");
-    CHECK(s.smart_complex_threshold == 5);
-    CHECK_FALSE(reg::is_default(s, *cut));
+    CHECK(reg::set(s.smart, *cut, "5"));
+    CHECK(reg::get(s.smart, *cut) == "5");
+    CHECK(s.smart.complex_threshold == 5);
+    CHECK_FALSE(reg::is_default(s.smart, *cut));
 
-    reg::reset(s, *cut);
-    CHECK(reg::is_default(s, *cut));
-    CHECK(s.smart_complex_threshold == tun::kComplexDefault);
+    reg::reset(s.smart, *cut);
+    CHECK(reg::is_default(s.smart, *cut));
+    CHECK(s.smart.complex_threshold == tun::kComplexDefault);
 
     // The other half of the table is unreachable through Settings, and the
     // barrier is stronger than a runtime check: `reg::set(settings, rag_row,
@@ -126,7 +134,7 @@ TEST_CASE("smart tuning: rows bind to the config struct that owns them") {
 
     int settings_rows = 0, rag_rows = 0;
     for (const auto& d : reg::kSettings)
-        (d.owner() == reg::Owner::Settings ? settings_rows : rag_rows)++;
+        (d.owner() == reg::Owner::Smart ? settings_rows : rag_rows)++;
     CHECK(settings_rows == 3);      // the three routing knobs
     CHECK(rag_rows > 0);
 }
@@ -138,10 +146,10 @@ TEST_CASE("smart tuning: every entry point clamps to the row's range") {
 
     // Clamped, never rejected-then-forgotten: a hand-edited settings.json must
     // not be able to put the config into a state the UI could never produce.
-    (void)reg::set(s, *cut, "999");
-    CHECK(s.smart_complex_threshold == tun::kComplexMax);
-    (void)reg::set(s, *cut, "-4");
-    CHECK(s.smart_complex_threshold == tun::kComplexMin);
+    (void)reg::set(s.smart, *cut, "999");
+    CHECK(s.smart.complex_threshold == tun::kComplexMax);
+    (void)reg::set(s.smart, *cut, "-4");
+    CHECK(s.smart.complex_threshold == tun::kComplexMin);
 
     // The registry's ranges and smart::tuning's are the same numbers — there
     // is a static_assert for this, but assert it dynamically too so a reader
@@ -155,15 +163,15 @@ TEST_CASE("smart tuning: a configured value survives save and load") {
     clear_env();
 
     Settings s;
-    s.smart_complex_threshold = 6;
-    s.smart_deep_margin       = 7;
+    s.smart.complex_threshold = 6;
+    s.smart.deep_margin       = 7;
     agentty::persistence::save_settings(s);
 
     const Settings back = agentty::persistence::load_settings();
-    CHECK(back.smart_complex_threshold == 6);
-    CHECK(back.smart_deep_margin == 7);
+    CHECK(back.smart.complex_threshold == 6);
+    CHECK(back.smart.deep_margin == 7);
     // A row left alone is not written, and comes back as the shipped default.
-    CHECK(back.smart_bias_clamp == tun::kBiasClampDefault);
+    CHECK(back.smart.bias_clamp == tun::kBiasClampDefault);
 }
 
 TEST_CASE("smart tuning: the Retrieval pane does not carry the routing rows") {
@@ -198,9 +206,9 @@ TEST_CASE("smart tuning: the rows live in the SMART MODE pane") {
 
     sf::Inputs in;
     in.enabled = true;
-    in.settings.smart_complex_threshold = 5;
-    in.settings.smart_deep_margin       = 6;
-    in.settings.smart_bias_clamp        = 4;
+    in.smart.complex_threshold = 5;
+    in.smart.deep_margin       = 6;
+    in.smart.bias_clamp        = 4;
 
     const auto basic = sf::build_form(in);
     in.advanced = true;
@@ -280,6 +288,76 @@ TEST_CASE("smart tuning: the pane advertises the key that reveals them") {
     CHECK(adv.note.find("hide") != std::string::npos);
 }
 
+TEST_CASE("smart tuning: an existing settings.json still loads its pins") {
+    // The in-memory shape changed from eleven flat fields to one RoleConfig.
+    // The FILE format did not — and this is what proves it, because the cost of
+    // being wrong is a user's pinned models silently reverting to auto on
+    // upgrade, which they would discover as "why is it using the wrong model".
+    //
+    // Written as raw JSON on purpose: round-tripping through save() would pass
+    // even if both sides changed together, which is exactly the bug.
+    const auto dir = isolate_config_dir();
+    clear_env();
+
+    {
+        std::ofstream f{dir / "settings.json"};
+        f << R"({
+          "smart": {
+            "enabled": true,
+            "strategic_model": "claude-opus-4-5",
+            "strategic_effort": "high",
+            "strategic_provider": "anthropic",
+            "impl_model": "claude-sonnet-4-5",
+            "utility_model": "claude-haiku-4-5",
+            "complex_threshold": 6,
+            "route_internal": true,
+            "learn_routing": false
+          }
+        })";
+    }
+
+    const Settings s = agentty::persistence::load_settings();
+
+    CHECK(s.smart.enabled);
+    // A pin is model + effort + provider, and `set` is what makes resolve_role
+    // honour it. Losing any one of those is the silent-revert bug.
+    CHECK(s.smart.strategic.set);
+    CHECK(s.smart.strategic.model == "claude-opus-4-5");
+    CHECK(s.smart.strategic.provider == "anthropic");
+    // A slot with a model but no explicit effort/provider still counts as
+    // pinned — settings written before those fields existed must keep working.
+    CHECK(s.smart.implementation.set);
+    CHECK(s.smart.implementation.model == "claude-sonnet-4-5");
+    CHECK(s.smart.implementation.provider.empty());
+    CHECK(s.smart.utility.set);
+    // The tuning row rides in the same object.
+    CHECK(s.smart.complex_threshold == 6);
+    // Keys from deleted layers are ignored, not fatal.
+}
+
+TEST_CASE("smart tuning: a pinned slot survives a save/load round trip") {
+    isolate_config_dir();
+    clear_env();
+
+    Settings s;
+    s.smart.enabled = true;
+    s.smart.strategic = agentty::smart::SlotOverride{
+        .model = "gpt-5", .effort = agentty::Effort::High,
+        .set = true, .provider = "openai"};
+    s.smart.deep_margin = 7;
+    agentty::persistence::save_settings(s);
+
+    const Settings back = agentty::persistence::load_settings();
+    CHECK(back.smart.enabled);
+    CHECK(back.smart.strategic.set);
+    CHECK(back.smart.strategic.model == "gpt-5");
+    CHECK(back.smart.strategic.effort == agentty::Effort::High);
+    CHECK(back.smart.strategic.provider == "openai");
+    CHECK(back.smart.deep_margin == 7);
+    // Untouched slots stay unpinned rather than becoming empty pins.
+    CHECK_FALSE(back.smart.utility.set);
+}
+
 TEST_CASE("smart tuning: apply_tuning is the one resolution rule") {
     // Startup and the settings-pane save both resolve env-over-stored into
     // RoleConfig. They call the SAME function, because a rule written out at
@@ -295,7 +373,8 @@ TEST_CASE("smart tuning: apply_tuning is the one resolution rule") {
     clear_env();
     {
         sm::RoleConfig c;
-        sm::apply_tuning(c, /*deep=*/6, /*bias=*/3, /*cut=*/7);
+        c.deep_margin = 6; c.bias_clamp = 3; c.complex_threshold = 7;
+        sm::apply_tuning(c);
         CHECK(c.deep_margin == 6);
         CHECK(c.bias_clamp == 3);
         CHECK(c.complex_threshold == 7);
@@ -306,7 +385,8 @@ TEST_CASE("smart tuning: apply_tuning is the one resolution rule") {
     {
         setenv("AGENTTY_SMART_COMPLEX_THRESHOLD", "2", 1);
         sm::RoleConfig c;
-        sm::apply_tuning(c, 6, 3, 7);
+        c.deep_margin = 6; c.bias_clamp = 3; c.complex_threshold = 7;
+        sm::apply_tuning(c);
         CHECK(c.complex_threshold == 2);   // env wins
         CHECK(c.deep_margin == 6);         // others untouched
         clear_env();
@@ -320,29 +400,29 @@ TEST_CASE("smart tuning: an env var overrides the stored value") {
     clear_env();
 
     Settings s;
-    s.smart_complex_threshold = 6;
-    s.smart_deep_margin       = 7;
+    s.smart.complex_threshold = 6;
+    s.smart.deep_margin       = 7;
     agentty::persistence::save_settings(s);
 
     // The override the locked settings row advertises.
     setenv("AGENTTY_SMART_COMPLEX_THRESHOLD", "2", 1);
     const Settings with_env = agentty::persistence::load_settings();
-    CHECK(with_env.smart_complex_threshold == 2);
-    CHECK(with_env.smart_deep_margin == 7);      // untouched rows unaffected
+    CHECK(with_env.smart.complex_threshold == 2);
+    CHECK(with_env.smart.deep_margin == 7);      // untouched rows unaffected
 
     // Clamped on the way in, exactly like a UI edit.
     setenv("AGENTTY_SMART_COMPLEX_THRESHOLD", "999", 1);
-    CHECK(agentty::persistence::load_settings().smart_complex_threshold
+    CHECK(agentty::persistence::load_settings().smart.complex_threshold
           == tun::kComplexMax);
 
     // A typo in a shell profile must not silently reset a configured value to
     // the shipped default — the least surprising response is that what the
     // user configured stands.
     setenv("AGENTTY_SMART_COMPLEX_THRESHOLD", "garbage", 1);
-    CHECK(agentty::persistence::load_settings().smart_complex_threshold == 6);
+    CHECK(agentty::persistence::load_settings().smart.complex_threshold == 6);
 
     clear_env();
-    CHECK(agentty::persistence::load_settings().smart_complex_threshold == 6);
+    CHECK(agentty::persistence::load_settings().smart.complex_threshold == 6);
 }
 
 TEST_CASE("smart tuning: an env var applies to a config with no smart block") {
@@ -355,7 +435,7 @@ TEST_CASE("smart tuning: an env var applies to a config with no smart block") {
     agentty::persistence::save_settings(Settings{});   // nothing to persist
 
     setenv("AGENTTY_SMART_DEEP_MARGIN", "6", 1);
-    CHECK(agentty::persistence::load_settings().smart_deep_margin == 6);
+    CHECK(agentty::persistence::load_settings().smart.deep_margin == 6);
     clear_env();
 }
 #endif

@@ -145,41 +145,21 @@ std::pair<Model, maya::Cmd<Msg>> init() {
     // retry loop only ever pays its one-time cost once per model, ever.
     set_learned_effort_sets(settings.learned_effort_sets);
 
-    // Smart Mode: rehydrate role config from settings. A slot counts as
-    // "set" once the user pinned a model for it.
-    m.d.smart.enabled = settings.smart_enabled;
+    // Smart Mode: the persisted config IS the runtime config — one type, no
+    // mapping. Everything the old rehydration did by hand (three slots × three
+    // fields, then the numeric policy, then a push to the subagent router) is
+    // either already in the struct or done by apply_smart's fan-out.
+    m.d.smart = settings.smart;
     // Session pin: AGENTTY_SMART_MODE overrides the persisted master switch
     // for THIS process (scripted runs, benchmarks, bisecting).
     // persist_settings skips the field while pinned, so the user's saved
     // preference survives the session untouched.
     if (auto ov = smart::tuning::enabled_override())
         m.d.smart.enabled = *ov;
-    auto load_slot = [](smart::SlotOverride& slot,
-                        const std::string& model, const std::string& eff,
-                        const std::string& provider) {
-        if (!model.empty()) {
-            slot.model    = model;
-            slot.effort   = effort_from_wire(eff);
-            slot.set      = true;
-            // "" for settings written before pins were provider-scoped —
-            // resolve_role treats unknown provenance as "honour everywhere",
-            // so an upgrading user sees no behaviour change.
-            slot.provider = provider;
-        }
-    };
-    load_slot(m.d.smart.strategic,      settings.smart_strategic_model, settings.smart_strategic_effort, settings.smart_strategic_provider);
-    load_slot(m.d.smart.implementation, settings.smart_impl_model,      settings.smart_impl_effort,      settings.smart_impl_provider);
-    load_slot(m.d.smart.utility,        settings.smart_utility_model,   settings.smart_utility_effort,   settings.smart_utility_provider);
+    // Env overrides for the numeric policy, resolved once here so the
+    // classifier reads a plain int rather than calling getenv() per turn.
+    settings::registry::apply_env(m.d.smart);
 
-    // Numeric routing policy: env override wins, else the persisted setting.
-    // RESOLVED ONCE, here, so the classifier and the effort scaler read a
-    // plain int rather than calling getenv() per turn — and so a value the
-    // user changed in the settings UI is actually the value that routes. The
-    // settings pane applies the same function on save, so a change takes
-    // effect immediately rather than at the next restart.
-    smart::apply_tuning(m.d.smart, settings.smart_deep_margin,
-                        settings.smart_bias_clamp,
-                        settings.smart_complex_threshold);
     // Push the rehydrated config down to the subagent router NOW.
     //
     // `task` runs on a worker thread with no access to this Model, so the
@@ -189,13 +169,9 @@ std::pair<Model, maya::Cmd<Msg>> init() {
     // something pushes the real one down, every delegation resolves as if
     // Smart Mode were off, silently ignoring the user's pins.
     //
-    // The two paths that used to do it are both conditional: persist_settings
-    // (only if you EDIT Smart Mode this session) and the ModelsLoaded reducer
-    // arm (only on a SUCCESSFUL catalog fetch — it early-returns on a stale
-    // provider id, a fetch error, and an empty list). A user with pins saved
-    // from a previous session whose fetch fails therefore delegates on the
-    // auto-router's pick, which on Copilot can be a Responses-only
-    // `gpt-5.x-codex` id that 400s on the Chat endpoint. Unconditional here.
+    // Unconditional here: the paths that used to do it were both conditional,
+    // so a user with pins from a previous session whose catalog fetch failed
+    // delegated on the auto-router's pick instead.
     tools::subagent::set_smart(m.d.smart);
     // The provider those pins are scoped to. Without it a pin rehydrated from
     // settings would be honoured under whatever provider happens to be active

@@ -692,22 +692,14 @@ void persist_settings(const Model& m) {
     if (!m.d.model_id.empty())
         s.provider_models[active_provider_id()] = m.d.model_id.value;
     s.effort = std::string{effort_wire(m.d.effort)};
-    // Smart Mode: enabled flag + any pinned slots (empty model = auto).
-    // While the AGENTTY_SMART_MODE/_ENABLED session pin is active, the
-    // in-memory flag is the ENV's value, not the user's choice — keep the
-    // persisted preference untouched so the pin never leaks into config.
-    if (!smart::tuning::enabled_override())
-        s.smart_enabled      = m.d.smart.enabled;
-    s.smart_strategic_model  = m.d.smart.strategic.model;
-    s.smart_strategic_effort = std::string{effort_wire(m.d.smart.strategic.effort)};
-    s.smart_impl_model       = m.d.smart.implementation.model;
-    s.smart_impl_effort      = std::string{effort_wire(m.d.smart.implementation.effort)};
-    s.smart_utility_model    = m.d.smart.utility.model;
-    s.smart_utility_effort   = std::string{effort_wire(m.d.smart.utility.effort)};
-    // Which provider each pin belongs to (see SlotOverride::provider).
-    s.smart_strategic_provider = m.d.smart.strategic.provider;
-    s.smart_impl_provider      = m.d.smart.implementation.provider;
-    s.smart_utility_provider   = m.d.smart.utility.provider;
+    // Smart Mode: the whole config, one assignment. While the
+    // AGENTTY_SMART_MODE session pin is active the in-memory `enabled` flag is
+    // the ENV's value, not the user's choice — so the persisted preference is
+    // kept as it was, and the pin never leaks into config.
+    const bool keep_enabled = smart::tuning::enabled_override().has_value();
+    const bool was_enabled  = s.smart.enabled;
+    s.smart = m.d.smart;
+    if (keep_enabled) s.smart.enabled = was_enabled;
     deps().save_settings(s);
     // Keep the subagent role-router (Layer 3b) in step with any Smart Mode
     // change the user just made in the overlay.

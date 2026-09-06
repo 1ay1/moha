@@ -74,7 +74,7 @@ form::Form build_smart_form(const Model& m, bool advanced) {
     // the settings registry — value, range, label, help, env lock and
     // provenance all come from the row. Nothing to mirror here.
     in.advanced = advanced;
-    in.settings = deps().load_settings();
+    in.smart = m.d.smart;
     return smart_form::build_form(in);
 }
 
@@ -201,21 +201,17 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             // pin is enforced by the form rather than by a toast after the
             // fact — the row renders read-only and names the variable.
             if (applied.changed && !role) {
-                // A tuning row — write it back through the registry, which is
-                // also what clamps it, then re-resolve so the classifier uses
-                // the new value on the NEXT turn rather than the next launch.
+                // A tuning row — edit the config and hand it to apply_smart,
+                // which persists it, installs it on the UI thread and pushes
+                // it to the subagent router. The registry clamps on the way in.
                 if (const auto* d = settings::registry::find(row_id)) {
-                    auto s = deps().load_settings();
+                    smart::RoleConfig cfg = m.d.smart;
                     if (const auto* f = o->form.find(row_id))
                         if (const auto* num =
                                 std::get_if<form::field::Number>(&f->value))
                             (void)settings::registry::set(
-                                s, *d, std::to_string(num->value));
-                    deps().save_settings(s);
-                    smart::apply_tuning(m.d.smart, s.smart_deep_margin,
-                                        s.smart_bias_clamp,
-                                        s.smart_complex_threshold);
-                    tools::subagent::set_smart(m.d.smart);
+                                cfg, *d, std::to_string(num->value));
+                    apply_smart(m, std::move(cfg));
                     const int cursor = o->form.cursor;
                     o->form = build_smart_form(m, o->advanced);
                     o->form.cursor = cursor;
@@ -971,6 +967,28 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return {std::move(m), std::move(toast)};
         },
     }, mm);
+}
+
+void apply_smart(Model& m, smart::RoleConfig cfg) {
+    // Env overrides win over anything a pane or a config file can say, and
+    // they win HERE so every holder below sees the same resolved value —
+    // rather than each one re-reading the environment and possibly disagreeing.
+    settings::registry::apply_env(cfg);
+
+    // 1. Persist. Load-modify-save so a concurrent change to an unrelated
+    //    setting is not clobbered by writing a stale whole-Settings.
+    auto s = deps().load_settings();
+    s.smart = cfg;
+    deps().save_settings(s);
+
+    // 2. The UI thread's copy — what the classifier and the effort scaler read
+    //    on the next turn.
+    m.d.smart = std::move(cfg);
+
+    // 3. The subagent router's copy. `task` runs on a worker with no Model, so
+    //    it genuinely needs its own snapshot; this is the push that keeps it
+    //    from routing on a policy the user already changed.
+    tools::subagent::set_smart(m.d.smart);
 }
 
 } // namespace agentty::app::detail

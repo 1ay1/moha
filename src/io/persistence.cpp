@@ -1357,32 +1357,49 @@ store::Settings load_settings() {
         }
         if (j.contains("smart") && j["smart"].is_object()) {
             const auto& sm = j["smart"];
-            s.smart_enabled          = sm.value("enabled", false);
+            s.smart.enabled = sm.value("enabled", false);
             // The seven sub-layer flags (route_internal, orchestrate,
             // route_subagents, learn_routing, outcome_feedback, speculative,
             // recall_plans) are no longer read. Keys left in an existing
             // settings.json are ignored — three folded into the master switch,
             // four deleted with the self-supervised layers. No migration
             // needed: an unknown key was always tolerated.
-            s.smart_strategic_model  = sm.value("strategic_model", "");
-            s.smart_strategic_effort = sm.value("strategic_effort", "");
-            s.smart_impl_model       = sm.value("impl_model", "");
-            s.smart_impl_effort      = sm.value("impl_effort", "");
-            s.smart_utility_model    = sm.value("utility_model", "");
-            s.smart_utility_effort   = sm.value("utility_effort", "");
-            // Missing (settings written before pins were provider-scoped) ⇒
-            // "" = unknown provenance, honoured under every provider. Same
-            // behaviour as before the field existed.
-            s.smart_strategic_provider = sm.value("strategic_provider", "");
-            s.smart_impl_provider      = sm.value("impl_provider", "");
-            s.smart_utility_provider   = sm.value("utility_provider", "");
+
+            // Slots read straight into the domain type. The FLAT wire keys are
+            // unchanged, so a settings.json written by an older build loads
+            // with its pins intact — the shape changed in memory, not on disk.
+            //
+            // A pin is `set` when it names a model, which is the same rule the
+            // old three-field mapping applied; keeping it here means there is
+            // one place that decides what a pinned slot IS.
+            const auto slot = [&](const char* model_key, const char* eff_key,
+                                  const char* prov_key) {
+                smart::SlotOverride o;
+                o.model = sm.value(model_key, "");
+                if (!o.model.empty()) {
+                    o.effort = effort_from_wire(sm.value(eff_key, ""));
+                    o.set    = true;
+                    // Missing (settings written before pins were
+                    // provider-scoped) ⇒ "" = unknown provenance, honoured
+                    // under every provider. Same behaviour as before the
+                    // field existed.
+                    o.provider = sm.value(prov_key, "");
+                }
+                return o;
+            };
+            s.smart.strategic =
+                slot("strategic_model", "strategic_effort", "strategic_provider");
+            s.smart.implementation =
+                slot("impl_model", "impl_effort", "impl_provider");
+            s.smart.utility =
+                slot("utility_model", "utility_effort", "utility_provider");
 
             // Numeric routing policy, read by WALKING the registry — which
             // is what clamps each value to its row's range on the way in, so
             // a hand-edited settings.json cannot put the config into a state
             // the UI could never produce. An absent key keeps the default.
             for (const auto& d : settings::registry::kSettings) {
-                if (d.owner() != settings::registry::Owner::Settings) continue;
+                if (d.owner() != settings::registry::Owner::Smart) continue;
                 const auto dot = d.id.find('.');
                 const std::string key{d.id.substr(dot + 1)};
                 if (!sm.contains(key)) continue;
@@ -1393,7 +1410,7 @@ store::Settings load_settings() {
                 else if (v.is_number())         as_text = std::to_string(v.get<double>());
                 else if (v.is_string())         as_text = v.get<std::string>();
                 else continue;
-                (void)settings::registry::set(s, d, as_text);
+                (void)settings::registry::set(s.smart, d, as_text);
             }
         }
         // Environment overrides, applied by WALKING the registry. This is what
@@ -1405,7 +1422,7 @@ store::Settings load_settings() {
         // config until the user changes something. Applied after the JSON so
         // an export beats a stored value — the layering the locked row in the
         // settings UI advertises.
-        settings::registry::apply_env(s);
+        settings::registry::apply_env(s.smart);
     } catch (const std::exception& e) {
         util::dbglog("persistence.load_settings", e.what());
     } catch (...) {
@@ -1538,40 +1555,47 @@ void save_settings(const store::Settings& s) {
     // stays clean.
     const bool smart_tuned = [&] {
         for (const auto& d : settings::registry::kSettings)
-            if (d.owner() == settings::registry::Owner::Settings
-                && !settings::registry::is_default(s, d)) return true;
+            if (d.owner() == settings::registry::Owner::Smart
+                && !settings::registry::is_default(s.smart, d)) return true;
         return false;
     }();
-    if (s.smart_enabled || !s.smart_strategic_model.empty()
-        || !s.smart_impl_model.empty() || !s.smart_utility_model.empty()
-        || smart_tuned) {
+    if (s.smart.enabled || s.smart.strategic.set || s.smart.implementation.set
+        || s.smart.utility.set || smart_tuned) {
         nlohmann::json sm;
-        sm["enabled"] = s.smart_enabled;
-        if (!s.smart_strategic_model.empty())  sm["strategic_model"]  = s.smart_strategic_model;
-        if (!s.smart_strategic_effort.empty()) sm["strategic_effort"] = s.smart_strategic_effort;
-        if (!s.smart_impl_model.empty())       sm["impl_model"]       = s.smart_impl_model;
-        if (!s.smart_impl_effort.empty())      sm["impl_effort"]      = s.smart_impl_effort;
-        if (!s.smart_utility_model.empty())    sm["utility_model"]    = s.smart_utility_model;
-        if (!s.smart_utility_effort.empty())   sm["utility_effort"]   = s.smart_utility_effort;
-        // Provider provenance per pin. A model id is only meaningful to the
-        // endpoint that serves it, so resolve_role replays a pin ONLY under
-        // the provider it was made on; without this the pin would be re-armed
-        // against whatever provider happens to be active next launch.
-        // Absent (old settings) reads back as "" = honour everywhere.
-        if (!s.smart_strategic_provider.empty()) sm["strategic_provider"] = s.smart_strategic_provider;
-        if (!s.smart_impl_provider.empty())      sm["impl_provider"]      = s.smart_impl_provider;
-        if (!s.smart_utility_provider.empty())   sm["utility_provider"]   = s.smart_utility_provider;
+        sm["enabled"] = s.smart.enabled;
+
+        // Slots written FLAT, the wire format older builds already read — the
+        // in-memory shape changed, the file did not. Provider provenance rides
+        // with each pin: a model id is only meaningful to the endpoint that
+        // serves it, so resolve_role replays a pin ONLY under the provider it
+        // was made on. Absent (old settings) reads back as "" = honour
+        // everywhere.
+        const auto put_slot = [&](const smart::SlotOverride& o,
+                                  const char* model_key, const char* eff_key,
+                                  const char* prov_key) {
+            if (o.model.empty()) return;
+            sm[model_key] = o.model;
+            if (const auto e = effort_wire(o.effort); !e.empty())
+                sm[eff_key] = std::string{e};
+            if (!o.provider.empty()) sm[prov_key] = o.provider;
+        };
+        put_slot(s.smart.strategic, "strategic_model", "strategic_effort",
+                 "strategic_provider");
+        put_slot(s.smart.implementation, "impl_model", "impl_effort",
+                 "impl_provider");
+        put_slot(s.smart.utility, "utility_model", "utility_effort",
+                 "utility_provider");
 
         // Numeric routing policy, written by WALKING the registry — the same
         // discipline the rag block uses. Only non-default rows are emitted,
         // so settings.json stays readable and a shipped-default change still
         // reaches users who never touched the knob.
         for (const auto& d : settings::registry::kSettings) {
-            if (d.owner() != settings::registry::Owner::Settings) continue;
-            if (settings::registry::is_default(s, d)) continue;
+            if (d.owner() != settings::registry::Owner::Smart) continue;
+            if (settings::registry::is_default(s.smart, d)) continue;
             const auto dot = d.id.find('.');
             const std::string key{d.id.substr(dot + 1)};
-            const std::string val = settings::registry::get(s, d);
+            const std::string val = settings::registry::get(s.smart, d);
             switch (d.type) {
                 case settings::registry::Type::Bool: sm[key] = (val == "true"); break;
                 case settings::registry::Type::Int:

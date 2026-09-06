@@ -62,7 +62,7 @@ struct Inputs {
     // state out of this — which is why the three ints and three lock strings
     // that used to sit here are gone: every one of them was a copy of
     // something the table already knew.
-    store::Settings settings{};
+    smart::RoleConfig smart{};
 
     // Reveal the advanced rows (`a`).
     bool advanced = false;

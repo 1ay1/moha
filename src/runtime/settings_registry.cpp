@@ -98,7 +98,7 @@ std::string get(const store::RagConfig& c, const SettingDef& d) {
     return get_impl(c, d);
 }
 
-std::string get(const store::Settings& s, const SettingDef& d) {
+std::string get(const smart::RoleConfig& s, const SettingDef& d) {
     return get_impl(s, d);
 }
 
@@ -201,7 +201,7 @@ bool set(store::RagConfig& c, const SettingDef& d, std::string_view value) {
     return set_impl(c, d, value);
 }
 
-bool set(store::Settings& s, const SettingDef& d, std::string_view value) {
+bool set(smart::RoleConfig& s, const SettingDef& d, std::string_view value) {
     return set_impl(s, d, value);
 }
 
@@ -211,8 +211,8 @@ bool is_default(const store::RagConfig& c, const SettingDef& d) {
     return is_default_impl(c, defaults(), d);
 }
 
-bool is_default(const store::Settings& s, const SettingDef& d) {
-    static const store::Settings kDefaults{};
+bool is_default(const smart::RoleConfig& s, const SettingDef& d) {
+    static const smart::RoleConfig kDefaults{};
     return is_default_impl(s, kDefaults, d);
 }
 
@@ -220,15 +220,15 @@ void reset(store::RagConfig& c, const SettingDef& d) {
     reset_impl(c, defaults(), d);
 }
 
-void reset(store::Settings& s, const SettingDef& d) {
-    static const store::Settings kDefaults{};
+void reset(smart::RoleConfig& s, const SettingDef& d) {
+    static const smart::RoleConfig kDefaults{};
     reset_impl(s, kDefaults, d);
 }
 
 // ── Environment ─────────────────────────────────────────────
 
 void apply_env(store::RagConfig& c) { apply_env_impl(c); }
-void apply_env(store::Settings& s) { apply_env_impl(s); }
+void apply_env(smart::RoleConfig& s) { apply_env_impl(s); }
 
 std::string env_override(const SettingDef& d) {
     if (d.env.empty()) return {};

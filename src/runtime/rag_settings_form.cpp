@@ -225,10 +225,11 @@ void apply_form_to_settings(const form::Form& f, store::Settings& settings) {
         }, row->value);
     };
 
-    for (const auto& d : reg::kSettings) {
+    // Only the Rag-owned rows. The Smart Mode rows are rendered and written by
+    // the Smart Mode pane, which owns that config — this pane never held them,
+    // so there is nothing here to keep in step.
+    for (const auto& d : reg::kSettings)
         if (d.owner() == reg::Owner::Rag) write(d, settings.rag);
-        else                              write(d, settings);
-    }
 }
 
 } // namespace agentty::rag_settings

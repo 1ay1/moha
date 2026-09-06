@@ -165,24 +165,17 @@ struct RoleConfig {
 };
 
 // Resolve the numeric routing policy: an env override wins, else the persisted
-// value the caller passes in. ONE function because there are two callers —
-// startup and the settings-pane save — and a rule spelled out at both is how
-// the pane ends up applying something different from what a restart would.
+// value already in `c`. Applied in place, so the struct that comes off disk
+// becomes the struct the router uses without a second shape.
 //
-// Takes the three stored ints rather than a store::Settings on purpose: this
-// is domain code, and reaching for the persistence type here would invert the
-// layering to save the caller three field accesses.
-//
-// settings_registry::apply_env already clamped the stored values to each row's
-// range on load, and the *_env() readers clamp too, so nothing here can be out
-// of range.
-inline void apply_tuning(RoleConfig& c, int stored_deep_margin,
-                         int stored_bias_clamp,
-                         int stored_complex_threshold) noexcept {
-    c.deep_margin       = tuning::deep_margin_env().value_or(stored_deep_margin);
-    c.bias_clamp        = tuning::bias_clamp_env().value_or(stored_bias_clamp);
+// settings_registry::apply_env(RoleConfig&) does exactly this by walking the
+// table, and is what callers should use. This exists for the three knobs the
+// domain also exposes as bare accessors.
+inline void apply_tuning(RoleConfig& c) noexcept {
+    c.deep_margin       = tuning::deep_margin_env().value_or(c.deep_margin);
+    c.bias_clamp        = tuning::bias_clamp_env().value_or(c.bias_clamp);
     c.complex_threshold =
-        tuning::complex_threshold_env().value_or(stored_complex_threshold);
+        tuning::complex_threshold_env().value_or(c.complex_threshold);
 }
 
 // Layer gates. Each is the master switch minus a developer escape hatch

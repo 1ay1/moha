@@ -66,8 +66,8 @@ form::Form build_form(const Inputs& in) {
     // three ranges retyped out of the table that already declared them, plus a
     // second implementation of the env-lock rule. Everything the registry
     // exists to prevent.
-    settings::registry::add_rows(b, in.settings,
-                                 settings::registry::Owner::Settings,
+    settings::registry::add_rows(b, in.smart,
+                                 settings::registry::Owner::Smart,
                                  in.advanced, first, last_group);
 
     // The affordance has to be ON SCREEN. Advanced rows are hidden by default,

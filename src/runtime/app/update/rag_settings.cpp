@@ -384,16 +384,6 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             deps().save_settings(s);
             tools::rag_apply_settings(s.rag);
 
-            // LIVE-apply the routing policy too. Saving persisted it, but the
-            // classifier reads m.d.smart — without this the pane would show a
-            // value the next turn did not use, and the change would appear to
-            // do nothing until restart. Same function startup calls, so the
-            // two can never disagree.
-            smart::apply_tuning(m.d.smart, s.smart_deep_margin,
-                                s.smart_bias_clamp, s.smart_complex_threshold);
-            // The subagent router holds its own copy on a worker thread.
-            tools::subagent::set_smart(m.d.smart);
-
             const std::string label = eb::describe(f->cfg);
             return {std::move(m),
                     set_status_toast(m, "Embeddings: " + label + note,

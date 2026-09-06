@@ -81,16 +81,15 @@ enum class Type : std::uint8_t { Bool, Real, Int, Enum };
 // WHICH config struct a row binds to.
 //
 // The table started life RAG-only and every accessor took a RagConfig. Smart
-// Mode's numeric policy has exactly the same problem RAG's did — knobs that
-// existed only as environment variables, so undiscoverable, session-only and
-// unvalidated — and deserves exactly the same solution. But its values live on
-// store::Settings, not inside RagConfig.
+// Mode's numeric policy has the same problem RAG's did — knobs that existed
+// only as environment variables, so undiscoverable, session-only and
+// unvalidated — and deserves the same solution.
 //
-// So a row names its owner. This is not type erasure: `Owner` is what keeps
-// the walkers TOTAL. Each walker visits only the rows it can reach, and a row
-// whose slot disagrees with its owner fails a static_assert below rather than
-// writing through the wrong member at runtime.
-enum class Owner : std::uint8_t { Rag, Settings };
+// Both owners are DOMAIN types that store::Settings composes, so a row binds
+// to the thing the runtime actually reads. That is what makes a UI edit take
+// effect: the pane writes the same struct the router holds, with no shape to
+// convert between and no fan-out step to forget.
+enum class Owner : std::uint8_t { Rag, Smart };
 
 // Pointer-to-member into the persisted config. The row's read/write binding.
 // One alternative per (type, owner) pair; `Owner` says which half is live.
@@ -100,11 +99,11 @@ using Slot = std::variant<
     float         store::RagConfig::*,
     double        store::RagConfig::*,
     std::string   store::RagConfig::*,
-    bool          store::Settings::*,
-    int           store::Settings::*,
-    float         store::Settings::*,
-    double        store::Settings::*,
-    std::string   store::Settings::*>;
+    bool          smart::RoleConfig::*,
+    int           smart::RoleConfig::*,
+    float         smart::RoleConfig::*,
+    double        smart::RoleConfig::*,
+    std::string   smart::RoleConfig::*>;
 
 struct SettingDef {
     std::string_view id;      // settings.json key AND form field id ("rag.mmr")
@@ -140,7 +139,7 @@ struct SettingDef {
                        || std::is_same_v<M, std::string store::RagConfig::*>)
                 return Owner::Rag;
             else
-                return Owner::Settings;
+                return Owner::Smart;
         }, slot);
     }
 };
@@ -252,17 +251,17 @@ inline constexpr std::array kSettings = std::to_array<SettingDef>({
      "Complexity cut",
      "feature score at which a turn routes as Complex; lower spends more",
      Group::Routing, Tier::Advanced, Type::Int,
-     &store::Settings::smart_complex_threshold,
+     &smart::RoleConfig::complex_threshold,
      smart::tuning::kComplexMin, smart::tuning::kComplexMax, 1},
     {"smart.deep_margin", "AGENTTY_SMART_DEEP_MARGIN", "Deep-band margin",
      "how far into a tier a turn must sit to earn the extra effort step",
      Group::Routing, Tier::Advanced, Type::Int,
-     &store::Settings::smart_deep_margin,
+     &smart::RoleConfig::deep_margin,
      smart::tuning::kDeepMarginMin, smart::tuning::kDeepMarginMax, 1},
     {"smart.bias_clamp", "AGENTTY_SMART_BIAS_CLAMP", "Self-correction cap",
      "how far this session's own corrections may drift effort from baseline",
      Group::Routing, Tier::Advanced, Type::Int,
-     &store::Settings::smart_bias_clamp,
+     &smart::RoleConfig::bias_clamp,
      smart::tuning::kBiasClampMin, smart::tuning::kBiasClampMax, 1},
 });
 
@@ -321,24 +320,24 @@ consteval bool slots_match_types() {
         switch (s.type) {
             case Type::Bool:
                 if (!std::holds_alternative<bool store::RagConfig::*>(s.slot)
-                 && !std::holds_alternative<bool store::Settings::*>(s.slot))
+                 && !std::holds_alternative<bool smart::RoleConfig::*>(s.slot))
                     return false;
                 break;
             case Type::Real:
                 if (!std::holds_alternative<float store::RagConfig::*>(s.slot)
                  && !std::holds_alternative<double store::RagConfig::*>(s.slot)
-                 && !std::holds_alternative<float store::Settings::*>(s.slot)
-                 && !std::holds_alternative<double store::Settings::*>(s.slot))
+                 && !std::holds_alternative<float smart::RoleConfig::*>(s.slot)
+                 && !std::holds_alternative<double smart::RoleConfig::*>(s.slot))
                     return false;
                 break;
             case Type::Int:
                 if (!std::holds_alternative<int store::RagConfig::*>(s.slot)
-                 && !std::holds_alternative<int store::Settings::*>(s.slot))
+                 && !std::holds_alternative<int smart::RoleConfig::*>(s.slot))
                     return false;
                 break;
             case Type::Enum:
                 if (!std::holds_alternative<std::string store::RagConfig::*>(s.slot)
-                 && !std::holds_alternative<std::string store::Settings::*>(s.slot))
+                 && !std::holds_alternative<std::string smart::RoleConfig::*>(s.slot))
                     return false;
                 break;
         }
@@ -358,7 +357,7 @@ consteval bool ids_namespaced() {
         const bool smart = s.id.starts_with("smart.");
         if (!rag && !smart) return false;
         if (rag   && s.owner() != Owner::Rag)      return false;
-        if (smart && s.owner() != Owner::Settings) return false;
+        if (smart && s.owner() != Owner::Smart)    return false;
     }
     return true;
 }
@@ -403,22 +402,22 @@ static_assert(smart_rows_match_tuning(),
 
 // Apply environment overrides on top of `c`. Clamps to each row's range.
 void apply_env(store::RagConfig& c);
-void apply_env(store::Settings& s);
+void apply_env(smart::RoleConfig& c);
 
 // Read/write a row's value as a string — the shape `agentty config get/set`
 // and the JSON walkers both want. Returns false for an unknown id or a value
 // the row cannot hold.
 [[nodiscard]] std::string get(const store::RagConfig& c, const SettingDef& d);
-[[nodiscard]] std::string get(const store::Settings& s, const SettingDef& d);
+[[nodiscard]] std::string get(const smart::RoleConfig& c, const SettingDef& d);
 [[nodiscard]] bool        set(store::RagConfig& c, const SettingDef& d,
                               std::string_view value);
-[[nodiscard]] bool        set(store::Settings& s, const SettingDef& d,
+[[nodiscard]] bool        set(smart::RoleConfig& c, const SettingDef& d,
                               std::string_view value);
 
 // True when the row still holds its shipped default — used to keep
 // settings.json clean (only non-default rows are written).
 [[nodiscard]] bool is_default(const store::RagConfig& c, const SettingDef& d);
-[[nodiscard]] bool is_default(const store::Settings& s, const SettingDef& d);
+[[nodiscard]] bool is_default(const smart::RoleConfig& c, const SettingDef& d);
 
 // The env var that is OVERRIDING this row right now, or "" when none is set.
 // A row under an override renders LOCKED and names the variable, instead of
@@ -427,7 +426,7 @@ void apply_env(store::Settings& s);
 
 // Restore a row to its shipped default.
 void reset(store::RagConfig& c, const SettingDef& d);
-void reset(store::Settings& s, const SettingDef& d);
+void reset(smart::RoleConfig& c, const SettingDef& d);
 
 // ── Rows ───────────────────────────────────────────────────
 //
