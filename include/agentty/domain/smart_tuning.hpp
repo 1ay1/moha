@@ -54,22 +54,69 @@ inline int env_int(const char* var, int dflt, int lo, int hi) noexcept {
     return dflt;
 }
 
+// The same read, but able to say "unset". A knob that is ALSO persisted needs
+// the distinction: env-unset must fall through to the stored value, whereas
+// env_int() would substitute the shipped default and quietly override it.
+// A malformed value reads as unset — the least surprising response to a typo
+// in a shell profile is for the configured value to stand.
+inline std::optional<int> env_int_opt(const char* var, int lo, int hi) noexcept {
+    if (const char* v = std::getenv(var); v && v[0]) {
+        try { return std::clamp(std::stoi(v), lo, hi); } catch (...) {}
+    }
+    return std::nullopt;
+}
+
 } // namespace detail
 
+// ── The shipped values, named ───────────────────────────────────
+// These are the ONE source of truth for the defaults and the enforced ranges.
+// They were literals inside each accessor, which was fine while env was the
+// only entry point — but the settings registry now carries the same three
+// knobs as persisted rows with their own bounds, and two hand-copied numbers
+// that must agree is precisely the drift the registry exists to prevent.
+// settings_registry.hpp static_asserts its rows against these.
+inline constexpr int kDeepMarginDefault = 3, kDeepMarginMin = 1, kDeepMarginMax = 8;
+inline constexpr int kBiasClampDefault  = 2, kBiasClampMin  = 1, kBiasClampMax  = 4;
+inline constexpr int kComplexDefault    = 3, kComplexMin    = 1, kComplexMax    = 8;
+
+// ── Env accessors ───────────────────────────────────────────────
+// A NON-EMPTY env value wins over the persisted setting and locks the row in
+// the UI (see settings_registry::env_override). `nullopt` means "unset", which
+// is what lets the caller fall back to the stored value rather than to a
+// default that would silently override it.
+[[nodiscard]] inline std::optional<int> deep_margin_env() noexcept {
+    return detail::env_int_opt("AGENTTY_SMART_DEEP_MARGIN",
+                               kDeepMarginMin, kDeepMarginMax);
+}
+[[nodiscard]] inline std::optional<int> bias_clamp_env() noexcept {
+    return detail::env_int_opt("AGENTTY_SMART_BIAS_CLAMP",
+                               kBiasClampMin, kBiasClampMax);
+}
+[[nodiscard]] inline std::optional<int> complex_threshold_env() noexcept {
+    return detail::env_int_opt("AGENTTY_SMART_COMPLEX_THRESHOLD",
+                               kComplexMin, kComplexMax);
+}
+
 // Margin at which continuous effort scaling adds the deep-band extra step.
+//
+// These three keep their zero-argument form for callers with no config in
+// hand, but they are no longer the primary path: the values are PERSISTED
+// now, and a caller holding a store::Settings should pass it (see the
+// `*_of(settings)` overloads below) so a UI edit is honoured. Bare calls
+// still see env overrides and otherwise the shipped default.
 [[nodiscard]] inline int deep_margin() noexcept {
-    return detail::env_int("AGENTTY_SMART_DEEP_MARGIN", 3, 1, 8);
+    return deep_margin_env().value_or(kDeepMarginDefault);
 }
 
 // Symmetric clamp (±N) on the session cascade effort bias.
 [[nodiscard]] inline int bias_clamp() noexcept {
-    return detail::env_int("AGENTTY_SMART_BIAS_CLAMP", 2, 1, 4);
+    return bias_clamp_env().value_or(kBiasClampDefault);
 }
 
 // Feature-score at/above which a turn is Complex. The Standard band is the two
 // score points below it; Simple is everything at or below that.
 [[nodiscard]] inline int complex_threshold() noexcept {
-    return detail::env_int("AGENTTY_SMART_COMPLEX_THRESHOLD", 3, 1, 8);
+    return complex_threshold_env().value_or(kComplexDefault);
 }
 
 // Session override for the Smart Mode master switch. nullopt = no override

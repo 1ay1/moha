@@ -616,17 +616,23 @@ std::optional<Message> build_smart_routing_card(const Model& m) {
             break;
         }
     const smart::ComplexityScore cx_text =
-        smart::classify_score_with_context(newest_user, m.s.smart_turn_complexity);
+        smart::classify_score_with_context(newest_user, m.s.smart_turn_complexity,
+                                           m.d.smart.complex_threshold);
     // THE composed classifier — same call as launch_stream so card == wire.
+    // That equality now includes the TUNING: a card classified at the default
+    // threshold while the wire used the user's would show a route the request
+    // never took.
     const smart::ComplexityScore cx = smart::classify_turn(
-        newest_user, m.s.smart_turn_complexity, nu_attach_bytes, nu_images);
+        newest_user, m.s.smart_turn_complexity, nu_attach_bytes, nu_images,
+        m.d.smart.complex_threshold);
     const auto caps = resolved_caps(prof.model);
     // Session cascade bias only. The per-workspace LEARNED prior (a Beta-
     // smoothed regret rate keyed by turn signature) was deleted with the rest
     // of the self-supervised layers: it mutated routing from persisted state
     // that was never measured against the fixed policy.
     const int bias = m.s.smart_effort_bias;
-    const Effort scaled = smart::effort_for_score(prof.effort, cx, caps, bias);
+    const Effort scaled = smart::effort_for_score(prof.effort, cx, caps, bias,
+                                                  m.d.smart.deep_margin);
 
     // Effort PROVENANCE — make the adaptive decision legible: base effort, the
     // complexity step, and the blended correction that moved it (shown as the
@@ -815,7 +821,8 @@ Cmd<Msg> launch_stream(Model& m) {
         // composed classifier, shared with build_smart_routing_card so the
         // 🧠 card can never disagree with the wire.
         const smart::ComplexityScore turn_cx = smart::classify_turn(
-            newest_user, m.s.smart_turn_complexity, nu_attach_bytes, nu_images);
+            newest_user, m.s.smart_turn_complexity, nu_attach_bytes, nu_images,
+            m.d.smart.complex_threshold);
         turn_complexity = turn_cx.tier;
         const auto caps = resolved_caps(strategic_profile.model);
         // Session cascade bias only. The per-workspace learned prior, the
@@ -823,7 +830,8 @@ Cmd<Msg> launch_stream(Model& m) {
         // with the self-supervised layers — see RoleConfig's comment.
         strategic_profile.effort =
             smart::effort_for_score(strategic_profile.effort, turn_cx,
-                                    caps, m.s.smart_effort_bias);
+                                    caps, m.s.smart_effort_bias,
+                                    m.d.smart.deep_margin);
         // Stash for the cascade feedback at finalize_turn.
         m.s.smart_turn_complexity = turn_complexity;
     }

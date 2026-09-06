@@ -170,6 +170,20 @@ std::pair<Model, maya::Cmd<Msg>> init() {
     load_slot(m.d.smart.strategic,      settings.smart_strategic_model, settings.smart_strategic_effort, settings.smart_strategic_provider);
     load_slot(m.d.smart.implementation, settings.smart_impl_model,      settings.smart_impl_effort,      settings.smart_impl_provider);
     load_slot(m.d.smart.utility,        settings.smart_utility_model,   settings.smart_utility_effort,   settings.smart_utility_provider);
+
+    // Numeric routing policy: env override wins, else the persisted setting.
+    // RESOLVED ONCE, here, so the classifier and the effort scaler read a
+    // plain int rather than calling getenv() per turn — and so a value the
+    // user changed in the settings UI is actually the value that routes.
+    // settings_registry::apply_env has already clamped the stored fields to
+    // each row's range, so no clamp is needed a second time.
+    m.d.smart.deep_margin =
+        smart::tuning::deep_margin_env().value_or(settings.smart_deep_margin);
+    m.d.smart.bias_clamp =
+        smart::tuning::bias_clamp_env().value_or(settings.smart_bias_clamp);
+    m.d.smart.complex_threshold =
+        smart::tuning::complex_threshold_env().value_or(
+            settings.smart_complex_threshold);
     // Push the rehydrated config down to the subagent router NOW.
     //
     // `task` runs on a worker thread with no access to this Model, so the

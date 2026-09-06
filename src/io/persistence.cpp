@@ -1376,7 +1376,36 @@ store::Settings load_settings() {
             s.smart_strategic_provider = sm.value("strategic_provider", "");
             s.smart_impl_provider      = sm.value("impl_provider", "");
             s.smart_utility_provider   = sm.value("utility_provider", "");
+
+            // Numeric routing policy, read by WALKING the registry — which
+            // is what clamps each value to its row's range on the way in, so
+            // a hand-edited settings.json cannot put the config into a state
+            // the UI could never produce. An absent key keeps the default.
+            for (const auto& d : settings::registry::kSettings) {
+                if (d.owner() != settings::registry::Owner::Settings) continue;
+                const auto dot = d.id.find('.');
+                const std::string key{d.id.substr(dot + 1)};
+                if (!sm.contains(key)) continue;
+                const auto& v = sm[key];
+                std::string as_text;
+                if      (v.is_boolean())        as_text = v.get<bool>() ? "true" : "false";
+                else if (v.is_number_integer()) as_text = std::to_string(v.get<long long>());
+                else if (v.is_number())         as_text = std::to_string(v.get<double>());
+                else if (v.is_string())         as_text = v.get<std::string>();
+                else continue;
+                (void)settings::registry::set(s, d, as_text);
+            }
         }
+        // Environment overrides, applied by WALKING the registry. This is what
+        // makes a row's env alias real for every Settings-owned knob at once,
+        // and it clamps to each row's range on the way in.
+        //
+        // OUTSIDE the `smart` block on purpose: an export must take effect on
+        // a config that has never had that section written, which is every
+        // config until the user changes something. Applied after the JSON so
+        // an export beats a stored value — the layering the locked row in the
+        // settings UI advertises.
+        settings::registry::apply_env(s);
     } catch (const std::exception& e) {
         util::dbglog("persistence.load_settings", e.what());
     } catch (...) {
@@ -1504,10 +1533,18 @@ void save_settings(const store::Settings& s) {
             if (c.embed_dim != 0)                r["embed_dim"]            = c.embed_dim;
         }
     }
-    // Smart Mode: persist only when meaningfully configured (enabled, or any
-    // slot pinned) so a fresh config stays clean.
+    // Smart Mode: persist only when meaningfully configured (enabled, any
+    // slot pinned, or a tuning row moved off its default) so a fresh config
+    // stays clean.
+    const bool smart_tuned = [&] {
+        for (const auto& d : settings::registry::kSettings)
+            if (d.owner() == settings::registry::Owner::Settings
+                && !settings::registry::is_default(s, d)) return true;
+        return false;
+    }();
     if (s.smart_enabled || !s.smart_strategic_model.empty()
-        || !s.smart_impl_model.empty() || !s.smart_utility_model.empty()) {
+        || !s.smart_impl_model.empty() || !s.smart_utility_model.empty()
+        || smart_tuned) {
         nlohmann::json sm;
         sm["enabled"] = s.smart_enabled;
         if (!s.smart_strategic_model.empty())  sm["strategic_model"]  = s.smart_strategic_model;
@@ -1524,6 +1561,26 @@ void save_settings(const store::Settings& s) {
         if (!s.smart_strategic_provider.empty()) sm["strategic_provider"] = s.smart_strategic_provider;
         if (!s.smart_impl_provider.empty())      sm["impl_provider"]      = s.smart_impl_provider;
         if (!s.smart_utility_provider.empty())   sm["utility_provider"]   = s.smart_utility_provider;
+
+        // Numeric routing policy, written by WALKING the registry — the same
+        // discipline the rag block uses. Only non-default rows are emitted,
+        // so settings.json stays readable and a shipped-default change still
+        // reaches users who never touched the knob.
+        for (const auto& d : settings::registry::kSettings) {
+            if (d.owner() != settings::registry::Owner::Settings) continue;
+            if (settings::registry::is_default(s, d)) continue;
+            const auto dot = d.id.find('.');
+            const std::string key{d.id.substr(dot + 1)};
+            const std::string val = settings::registry::get(s, d);
+            switch (d.type) {
+                case settings::registry::Type::Bool: sm[key] = (val == "true"); break;
+                case settings::registry::Type::Int:
+                    sm[key] = std::atoi(val.c_str()); break;
+                case settings::registry::Type::Real:
+                    sm[key] = std::atof(val.c_str()); break;
+                case settings::registry::Type::Enum: sm[key] = val; break;
+            }
+        }
         j["smart"] = std::move(sm);
     }
     // A failed settings write silently discards the user's provider keys,

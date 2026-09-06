@@ -187,7 +187,7 @@ int code_density_tenths(std::string_view s) noexcept {
 
 } // namespace
 
-ComplexityScore classify_score(std::string_view text) noexcept {
+ComplexityScore classify_score(std::string_view text, int complex_min) noexcept {
     // Trim.
     std::size_t b = 0, e = text.size();
     while (b < e && std::isspace((unsigned char)text[b])) ++b;
@@ -259,10 +259,12 @@ ComplexityScore classify_score(std::string_view text) noexcept {
     score += lex;
 
     // ── Threshold into tiers, with margin to the nearest boundary. The Complex
-    //    cut is user-tunable (AGENTTY_SMART_COMPLEX_THRESHOLD): Standard is the
-    //    band just below it, Simple everything at or under that. Ties break
-    //    upward via the boundary placement. ────────────────────────────────
-    const int kComplexMin  = tuning::complex_threshold();   // >= this ⇒ Complex
+    //    cut is user-tunable (settings row "smart.complex_threshold", or
+    //    AGENTTY_SMART_COMPLEX_THRESHOLD): Standard is the band just below it,
+    //    Simple everything at or under that. Ties break upward via the
+    //    boundary placement. Passed in rather than read from the environment
+    //    here — see the declaration. ──────────────────────────────────────
+    const int kComplexMin  = complex_min;                  // >= this ⇒ Complex
     const int kSimpleMax   = kComplexMin - 3;               // <= this ⇒ Simple
                                                             // (Standard is the
                                                             //  2-wide band between)

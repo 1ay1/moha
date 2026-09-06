@@ -94,7 +94,7 @@ inline constexpr const char* kFieldTest      = "test";
 // `advanced` reveals the rows whose effect a user cannot easily judge.
 [[nodiscard]] form::Form build_form(const rag::embed::EmbedConfig& c,
                                     store::RagMode mode,
-                                    const store::RagConfig& rag = {},
+                                    const store::Settings& settings = {},
                                     bool advanced = false);
 
 // Read the rows back into a config (the inverse of build_form).
@@ -107,7 +107,7 @@ inline constexpr const char* kFieldTest      = "test";
 
 // Read the registry-generated rows back into a RagConfig. Walks the same
 // table build_form walked, so a row cannot be written that was never read.
-void apply_form_to_rag(const form::Form& f, store::RagConfig& rag);
+void apply_form_to_settings(const form::Form& f, store::Settings& settings);
 
 struct Closed {};
 struct Open {

@@ -48,59 +48,92 @@ const store::RagConfig& defaults() {
 }
 
 // One place that knows how to reach a row's storage. Every accessor below
-// funnels through these, so a Slot alternative added later fails to compile
-// in exactly one function per direction rather than scattering.
-template <class Visit>
-auto with_slot(const SettingDef& d, Visit&& v) {
-    return std::visit(std::forward<Visit>(v), d.slot);
+// funnels through this, so a Slot alternative added later fails to compile in
+// exactly one place rather than scattering.
+//
+// Generic over the OWNING STRUCT. A row binds to exactly one, so half the
+// variant's alternatives do not apply to any given `C`; those are SKIPPED, not
+// an error — `apply_env(Settings&)` walking the whole table and passing over
+// every rag.* row is the intended behaviour. Returns whether the row was ours,
+// so a caller that needs to know can answer honestly rather than hand back a
+// default that reads like real data.
+template <class C, class Visit>
+bool with_slot(C& c, const SettingDef& d, Visit&& v) {
+    return std::visit([&](auto member) -> bool {
+        if constexpr (requires { c.*member; }) {
+            v(c.*member);
+            return true;
+        } else {
+            return false;
+        }
+    }, d.slot);
 }
 
 } // namespace
 
 // ── Read ─────────────────────────────────────────────────────────────────
 
-std::string get(const store::RagConfig& c, const SettingDef& d) {
-    return with_slot(d, [&](auto member) -> std::string {
-        using M = std::decay_t<decltype(c.*member)>;
+namespace {
+
+template <class C>
+std::string get_impl(const C& c, const SettingDef& d) {
+    std::string out;
+    (void)with_slot(c, d, [&](const auto& value) {
+        using M = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<M, bool>)
-            return (c.*member) ? "true" : "false";
+            out = value ? "true" : "false";
         else if constexpr (std::is_same_v<M, int>)
-            return std::to_string(c.*member);
+            out = std::to_string(value);
         else if constexpr (std::is_same_v<M, float> || std::is_same_v<M, double>)
-            return fmt_real(static_cast<double>(c.*member));
+            out = fmt_real(static_cast<double>(value));
         else
-            return c.*member;   // std::string (Enum)
+            out = value;   // std::string (Enum)
     });
+    return out;
+}
+
+} // namespace
+
+std::string get(const store::RagConfig& c, const SettingDef& d) {
+    return get_impl(c, d);
+}
+
+std::string get(const store::Settings& s, const SettingDef& d) {
+    return get_impl(s, d);
 }
 
 // ── Write ────────────────────────────────────────────────────────────────
 
-bool set(store::RagConfig& c, const SettingDef& d, std::string_view value) {
-    return with_slot(d, [&](auto member) -> bool {
-        using M = std::decay_t<decltype(c.*member)>;
+namespace {
+
+template <class C>
+bool set_impl(C& c, const SettingDef& d, std::string_view value) {
+    bool ok = false;
+    const bool reached = with_slot(c, d, [&](auto& field) {
+        using M = std::decay_t<decltype(field)>;
 
         if constexpr (std::is_same_v<M, bool>) {
             bool b{};
-            if (!parse_bool(value, b)) return false;
-            c.*member = b;
-            return true;
+            if (!parse_bool(value, b)) return;
+            field = b;
+            ok = true;
         }
         else if constexpr (std::is_same_v<M, int>) {
             try {
                 const long long n = std::stoll(std::string{value});
                 // Clamped, never rejected-then-forgotten: the config must not
                 // be able to HOLD an out-of-range value.
-                c.*member = static_cast<int>(
+                field = static_cast<int>(
                     std::clamp<double>(static_cast<double>(n), d.min, d.max));
-                return true;
-            } catch (...) { return false; }
+                ok = true;
+            } catch (...) {}
         }
         else if constexpr (std::is_same_v<M, float> || std::is_same_v<M, double>) {
             try {
                 const double x = std::stod(std::string{value});
-                c.*member = static_cast<M>(std::clamp(x, d.min, d.max));
-                return true;
-            } catch (...) { return false; }
+                field = static_cast<M>(std::clamp(x, d.min, d.max));
+                ok = true;
+            } catch (...) {}
         }
         else {
             // Enum: the value must be one of the declared options, or a typo
@@ -111,41 +144,96 @@ bool set(store::RagConfig& c, const SettingDef& d, std::string_view value) {
             while (!opts.empty()) {
                 const auto bar = opts.find('|');
                 const auto one = opts.substr(0, bar);
-                if (lower(one) == want) { c.*member = std::string{one}; return true; }
+                if (lower(one) == want) { field = std::string{one}; ok = true; return; }
                 if (bar == std::string_view::npos) break;
                 opts.remove_prefix(bar + 1);
             }
-            return false;
         }
     });
+    return reached && ok;
 }
 
-// ── Defaults ─────────────────────────────────────────────────────────────
+template <class C>
+bool is_default_impl(const C& c, const C& dflt, const SettingDef& d) {
+    bool same = true;
+    (void)with_slot(c, d, [&](const auto& field) {
+        // Reach the SAME member on the defaults instance. with_slot resolves
+        // the pointer against whichever object it is handed, so this is the
+        // one comparison rather than a second switch on type.
+        (void)with_slot(dflt, d, [&](const auto& other) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(field)>,
+                                         std::decay_t<decltype(other)>>)
+                same = (field == other);
+        });
+    });
+    return same;
+}
 
-bool is_default(const store::RagConfig& c, const SettingDef& d) {
-    const auto& dflt = defaults();
-    return with_slot(d, [&](auto member) {
-        return (c.*member) == (dflt.*member);
+template <class C>
+void reset_impl(C& c, const C& dflt, const SettingDef& d) {
+    (void)with_slot(c, d, [&](auto& field) {
+        (void)with_slot(dflt, d, [&](const auto& other) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(field)>,
+                                         std::decay_t<decltype(other)>>)
+                field = other;
+        });
     });
 }
 
-void reset(store::RagConfig& c, const SettingDef& d) {
-    const auto& dflt = defaults();
-    with_slot(d, [&](auto member) { c.*member = dflt.*member; });
-}
-
-// ── Environment ──────────────────────────────────────────────────────────
-
-void apply_env(store::RagConfig& c) {
+template <class C>
+void apply_env_impl(C& c) {
     for (const auto& d : kSettings) {
         if (d.env.empty()) continue;
         const char* raw = std::getenv(std::string{d.env}.c_str());
         if (!raw || !raw[0]) continue;
         // A malformed env value is IGNORED, not fatal and not silently
         // coerced: the shipped default stands, which is the least surprising
-        // behaviour for a typo in a shell profile.
-        (void)set(c, d, raw);
+        // behaviour for a typo in a shell profile. A row belonging to the
+        // OTHER config struct is skipped by with_slot, so each overload
+        // applies exactly the rows it owns.
+        (void)set_impl(c, d, raw);
     }
+}
+
+} // namespace
+
+bool set(store::RagConfig& c, const SettingDef& d, std::string_view value) {
+    return set_impl(c, d, value);
+}
+
+bool set(store::Settings& s, const SettingDef& d, std::string_view value) {
+    return set_impl(s, d, value);
+}
+
+// ── Defaults ─────────────────────────────────────────────────
+
+bool is_default(const store::RagConfig& c, const SettingDef& d) {
+    return is_default_impl(c, defaults(), d);
+}
+
+bool is_default(const store::Settings& s, const SettingDef& d) {
+    static const store::Settings kDefaults{};
+    return is_default_impl(s, kDefaults, d);
+}
+
+void reset(store::RagConfig& c, const SettingDef& d) {
+    reset_impl(c, defaults(), d);
+}
+
+void reset(store::Settings& s, const SettingDef& d) {
+    static const store::Settings kDefaults{};
+    reset_impl(s, kDefaults, d);
+}
+
+// ── Environment ─────────────────────────────────────────────
+
+void apply_env(store::RagConfig& c) { apply_env_impl(c); }
+void apply_env(store::Settings& s) { apply_env_impl(s); }
+
+std::string env_override(const SettingDef& d) {
+    if (d.env.empty()) return {};
+    const char* raw = std::getenv(std::string{d.env}.c_str());
+    return (raw && raw[0]) ? std::string{d.env} : std::string{};
 }
 
 } // namespace agentty::settings::registry

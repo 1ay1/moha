@@ -43,14 +43,20 @@ namespace {
 // individual setting — the table is the source of truth and this is a walk.
 // That is what makes "adding a knob is adding a row" true rather than
 // aspirational.
-void add_registry_rows(form::Builder& b, const store::RagConfig& rag,
-                       bool advanced) {
+//
+// Generic over the OWNING config struct so one walk serves both halves of the
+// table — the RAG rows read from a RagConfig, the Smart Mode routing rows from
+// a store::Settings. `owner` selects which rows this pass is responsible for;
+// the rest belong to the other call and are skipped.
+template <class C>
+void add_registry_rows(form::Builder& b, const C& cfg,
+                       settings::registry::Owner owner, bool advanced,
+                       bool& first, settings::registry::Group& last_group) {
     namespace reg = settings::registry;
 
-    auto last_group = reg::Group::Sources;
-    bool first = true;
-
     for (const auto& d : reg::kSettings) {
+        if (d.owner() != owner) continue;
+
         // Advanced rows are hidden, not disabled: a knob whose effect a user
         // cannot judge is noise on the main screen, but it still has to be
         // reachable (^A) rather than env-only.
@@ -71,19 +77,19 @@ void add_registry_rows(form::Builder& b, const store::RagConfig& rag,
 
         switch (d.type) {
             case reg::Type::Bool: {
-                const bool on = reg::get(rag, d) == "true";
+                const bool on = reg::get(cfg, d) == "true";
                 b.toggle(id, label, on, help);
                 break;
             }
             case reg::Type::Real: {
                 double v = 0.0;
-                try { v = std::stod(reg::get(rag, d)); } catch (...) { v = d.min; }
+                try { v = std::stod(reg::get(cfg, d)); } catch (...) { v = d.min; }
                 b.slider(id, label, v, d.min, d.max, d.step, help);
                 break;
             }
             case reg::Type::Int: {
                 long long v = 0;
-                try { v = std::stoll(reg::get(rag, d)); } catch (...) { v = 0; }
+                try { v = std::stoll(reg::get(cfg, d)); } catch (...) { v = 0; }
                 b.number(id, label, v, static_cast<std::int64_t>(d.min),
                          static_cast<std::int64_t>(d.max), help);
                 break;
@@ -97,21 +103,42 @@ void add_registry_rows(form::Builder& b, const store::RagConfig& rag,
                     if (bar == std::string_view::npos) break;
                     rest.remove_prefix(bar + 1);
                 }
-                b.choice(id, label, opts, {}, reg::get(rag, d), help);
+                b.choice(id, label, opts, {}, reg::get(cfg, d), help);
                 break;
             }
         }
 
+        // An env var overriding this row makes it READ-ONLY and names the
+        // variable. The row would otherwise look editable and silently lose
+        // the edit on the next read — layered config's worst failure, and the
+        // reason `origin` exists at all.
+        if (const std::string env = reg::env_override(d); !env.empty()) {
+            b.origin("env: " + env);
+            b.lock("env: " + env);
+        }
         // Provenance: a row still on its shipped value says so, which is the
         // difference between "I never touched this" and "I set it to that".
-        if (reg::is_default(rag, d)) b.origin("default");
+        else if (reg::is_default(cfg, d)) b.origin("default");
     }
+}
+
+// Both halves of the table, in table order, with the group headers running
+// continuously across the boundary. One call so no build path can pick up the
+// RAG rows and forget the routing ones.
+void add_all_registry_rows(form::Builder& b, const store::Settings& settings,
+                           bool advanced) {
+    namespace reg = agentty::settings::registry;
+    auto last_group = reg::Group::Sources;
+    bool first = true;
+    add_registry_rows(b, settings.rag, reg::Owner::Rag,      advanced, first, last_group);
+    add_registry_rows(b, settings,     reg::Owner::Settings, advanced, first, last_group);
 }
 
 } // namespace
 
 form::Form build_form(const eb::EmbedConfig& c, store::RagMode mode,
-                      const store::RagConfig& rag, bool advanced) {
+                      const store::Settings& settings, bool advanced) {
+    const store::RagConfig& rag = settings.rag;
     form::Builder b{" Retrieval "};
     b.subtitle(eb::describe(c));
 
@@ -158,13 +185,13 @@ form::Form build_form(const eb::EmbedConfig& c, store::RagMode mode,
         b.lock("auto-detected");
         b.action(kFieldTest, "Test connection",
                  "check whether Auto can reach a local Ollama right now");
-        add_registry_rows(b, rag, advanced);
+        add_all_registry_rows(b, settings, advanced);
         return b.build();
     }
     if (c.backend == eb::Backend::Disabled) {
         b.text(kFieldModel, "Retrieval", "keyword only (BM25)");
         b.lock("embeddings off");
-        add_registry_rows(b, rag, advanced);
+        add_all_registry_rows(b, settings, advanced);
         return b.build();
     }
 
@@ -206,7 +233,7 @@ form::Form build_form(const eb::EmbedConfig& c, store::RagMode mode,
     b.action(kFieldTest, "Test connection",
              "embed a probe string and measure the vector");
 
-    add_registry_rows(b, rag, advanced);
+    add_all_registry_rows(b, settings, advanced);
     return b.build();
 }
 
@@ -253,27 +280,33 @@ store::RagMode mode_from_form(const form::Form& f, store::RagMode fallback) {
     return fallback;
 }
 
-void apply_form_to_rag(const form::Form& f, store::RagConfig& rag) {
+void apply_form_to_settings(const form::Form& f, store::Settings& settings) {
     namespace reg = settings::registry;
 
     // Walks the SAME table build_form walked, so a row cannot be written that
     // was never read, and a knob added to the table is picked up by both
-    // directions at once.
-    for (const auto& d : reg::kSettings) {
+    // directions at once. Each row is written through its OWN config struct;
+    // a locked row (an env override) is skipped, so a shell export is never
+    // silently overwritten by the value the UI happened to be showing.
+    const auto write = [&](const auto& d, auto& target) {
         const auto* row = f.find(d.id);
-        if (!row || row->locked) continue;
-
+        if (!row || row->locked) return;
         std::visit([&](const auto& v) {
             using T = std::decay_t<decltype(v)>;
             if constexpr (std::is_same_v<T, form::field::Toggle>)
-                (void)reg::set(rag, d, v.on ? "true" : "false");
+                (void)reg::set(target, d, v.on ? "true" : "false");
             else if constexpr (std::is_same_v<T, form::field::Slider>)
-                (void)reg::set(rag, d, std::to_string(v.value));
+                (void)reg::set(target, d, std::to_string(v.value));
             else if constexpr (std::is_same_v<T, form::field::Number>)
-                (void)reg::set(rag, d, std::to_string(v.value));
+                (void)reg::set(target, d, std::to_string(v.value));
             else if constexpr (std::is_same_v<T, form::field::Choice>)
-                (void)reg::set(rag, d, std::string{v.id()});
+                (void)reg::set(target, d, std::string{v.id()});
         }, row->value);
+    };
+
+    for (const auto& d : reg::kSettings) {
+        if (d.owner() == reg::Owner::Rag) write(d, settings.rag);
+        else                              write(d, settings);
     }
 }
 

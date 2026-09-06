@@ -55,8 +55,8 @@ int main(int argc, char** argv) {
     c.model = "nomic-embed-text";
 
     const bool advanced = (arg == "--advanced" || arg == "--scroll");
-    agentty::store::RagConfig rag;
-    auto form = rs::build_form(c, agentty::store::RagMode::On, rag, advanced);
+    agentty::store::Settings settings;
+    auto form = rs::build_form(c, agentty::store::RagMode::On, settings, advanced);
     form.subtitle = eb::describe(c);
     form.note     = "unsaved \xe2\x80\x94 ^T test, ^S save";
     form.cursor   = 0;

@@ -206,6 +206,22 @@ struct Settings {
     std::string          smart_impl_provider;
     std::string          smart_utility_provider;
 
+    // Numeric routing policy — the same story as RagConfig's tuning block
+    // above. These were reachable only through AGENTTY_SMART_* environment
+    // variables, so they were undiscoverable (you had to read
+    // domain/smart_tuning.hpp to learn they existed), session-only, and
+    // unvalidated. They are persisted now because the settings registry gives
+    // them rows, enforced ranges and provenance; the env names still work and
+    // LOCK the row when set, so a shell export is visible rather than silently
+    // swallowing an edit.
+    //
+    // The shipped values live in smart::tuning as kDefault* and are mirrored
+    // here; a static_assert in settings_registry.hpp pins the two together so
+    // they cannot drift.
+    int                  smart_deep_margin       = 3;   // 1..8
+    int                  smart_bias_clamp        = 2;   // 1..4
+    int                  smart_complex_threshold = 3;   // 1..8
+
     // Show the persistent "N changes" review strip after the agent edits
     // files (the banner above the composer). OFF by default — edits apply
     // quietly; turn it on (Ctrl+K → "Changes strip") for the always-on review

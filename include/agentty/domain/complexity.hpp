@@ -19,6 +19,8 @@
 #include <string>
 #include <string_view>
 
+#include "agentty/domain/smart_tuning.hpp"   // kComplexDefault
+
 namespace agentty::smart {
 
 enum class Complexity : std::uint8_t {
@@ -65,7 +67,14 @@ struct ComplexityScore {
     int        score  = 0;   // additive feature score
     int        margin = 0;   // distance to the nearest tier boundary
 };
-[[nodiscard]] ComplexityScore classify_score(std::string_view text) noexcept;
+// The Complex cut is user-tunable, so it is a PARAMETER rather than a getenv()
+// read inside the classifier: a value read from the environment down here
+// could not see a threshold the user set in the settings UI. The default keeps
+// every existing caller — including the whole test suite — unchanged; the
+// routing path passes `m.d.smart.complex_threshold`.
+[[nodiscard]] ComplexityScore classify_score(
+        std::string_view text,
+        int complex_min = tuning::kComplexDefault) noexcept;
 
 // Context-aware classification. classify_complexity is turn-local, so a short
 // follow-up ("now do the same for the other module", "and the tests?") after a
@@ -97,8 +106,9 @@ struct ComplexityScore {
 // "deep in" — an inherited turn shouldn't get the deep-band extra step it never
 // earned on its own text.
 [[nodiscard]] inline ComplexityScore classify_score_with_context(
-        std::string_view text, Complexity prev) noexcept {
-    ComplexityScore s = classify_score(text);
+        std::string_view text, Complexity prev,
+        int complex_min = tuning::kComplexDefault) noexcept {
+    ComplexityScore s = classify_score(text, complex_min);
     const Complexity lifted = classify_with_context(text, prev);
     if (lifted == s.tier) return s;            // no inheritance change
     s.tier   = lifted;
@@ -177,8 +187,9 @@ struct ComplexityScore {
 //      the one direction that's always wrong.
 [[nodiscard]] inline ComplexityScore classify_turn(
         std::string_view text, Complexity prev,
-        std::size_t attachment_bytes, int images) noexcept {
-    ComplexityScore s = classify_score_with_context(text, prev);
+        std::size_t attachment_bytes, int images,
+        int complex_min = tuning::kComplexDefault) noexcept {
+    ComplexityScore s = classify_score_with_context(text, prev, complex_min);
     if (s.tier == Complexity::Trivial
         && static_cast<int>(prev) >= static_cast<int>(Complexity::Standard)
         && is_continuation_cue(text)) {

@@ -120,6 +120,23 @@ struct RoleConfig {
     SlotOverride implementation;
     SlotOverride utility;
 
+    // Numeric routing policy, RESOLVED (env override, else the persisted
+    // setting, else the shipped default) when settings are loaded.
+    //
+    // These live here rather than being read from the environment at the point
+    // of use because they are now user-configurable: a getenv() buried in the
+    // classifier cannot see a value the user set in the settings UI, and
+    // threading the whole store::Settings into pure domain code to reach three
+    // ints would be worse. RoleConfig is already "the user's Smart Mode
+    // configuration", already in Model::Domain, and already in scope at every
+    // site that wants these — so it is where they belong.
+    //
+    // Defaults mirror smart::tuning::kDefault*; see settings_registry.hpp for
+    // the static_assert that keeps the two in step.
+    int deep_margin       = tuning::kDeepMarginDefault;
+    int bias_clamp        = tuning::kBiasClampDefault;
+    int complex_threshold = tuning::kComplexDefault;
+
     // Whether a given layer is active right now. All three are simply the
     // master switch (kept as named accessors so call sites read as intent
     // — "is orchestration on" — rather than a bare bool, and so an env
@@ -275,14 +292,19 @@ namespace detail {
 // `deep` is the margin at which the band is considered saturated.
 [[nodiscard]] inline Effort effort_for_score(
         Effort base, const ComplexityScore& cx, const ModelCapabilities& caps,
-        int bias = 0) {
+        int bias = 0, int deep = tuning::kDeepMarginDefault) {
     using E = Effort;
     // Same single primitive as effort_for_complexity — identical output at the
     // tier boundary is a property of sharing the stepper, not a coincidence.
     auto step = [&](E e, int n) { return detail::effort_step(e, n, caps); };
     if (cx.tier == Complexity::Trivial) return E::None;
 
-    const int kDeep = tuning::deep_margin();   // saturation margin (env-tunable)
+    // The saturation margin is a PARAMETER, not a getenv() read. It is user
+    // configurable now, and a value read from the environment here could not
+    // see a setting the user changed in the UI. Callers holding a RoleConfig
+    // pass `smart.deep_margin`; the default keeps every other caller —
+    // including the tests — compiling and behaving exactly as before.
+    const int kDeep = deep;
     int extra = 0;
     if (cx.tier == Complexity::Complex && cx.margin >= kDeep) extra = +1;
     else if (cx.tier == Complexity::Simple && cx.margin >= kDeep) extra = -1;

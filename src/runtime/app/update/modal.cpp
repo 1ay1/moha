@@ -422,7 +422,7 @@ Step submit_message(Model m) {
     // useful half — it decays every turn, is clamped, and dies with the
     // process.
     if (m.d.smart.orchestration() && smart::is_routing_correction(user.text)) {
-        const int clamp = smart::tuning::bias_clamp();
+        const int clamp = m.d.smart.bias_clamp;
         if (m.s.smart_effort_bias < clamp) ++m.s.smart_effort_bias;
     }
 

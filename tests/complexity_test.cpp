@@ -95,24 +95,30 @@ TEST_CASE("classify_complexity buckets prompts") {
     CHECK(classify_score("redesign everything end to end across the stack").tier
           == Complexity::Complex, "scored API agrees with tier API");
 
-    // ── Env-tunable Complex threshold (AGENTTY_SMART_COMPLEX_THRESHOLD) ──
-    // A mid-weight turn that is Standard at the default cut (3) becomes Complex
-    // when the threshold is lowered to 1, and the change is picked up live
-    // (knobs are read at point of use, not cached).
+    // ── Tunable Complex threshold ──────────────────────────────
+    // The cut is a PARAMETER now, not a getenv() inside the classifier. It has
+    // to be: the value is user-configurable (settings row
+    // "smart.complex_threshold"), and a read from the environment down here
+    // could not see a threshold set in the UI. The runtime resolves
+    // env-over-stored once at startup into RoleConfig and passes it in.
+    //
+    // So this asserts the CLASSIFIER's contract — that the threshold moves the
+    // boundary — directly, without a process-global to set and unset.
     {
         const char* probe = "update the parser and re-run the formatter";
         const Complexity base = classify_complexity(probe);
-#if !defined(_WIN32)
-        setenv("AGENTTY_SMART_COMPLEX_THRESHOLD", "1", 1);
-        CHECK(classify_complexity(probe) == Complexity::Complex,
+        CHECK(base != Complexity::Complex,
+              "the probe is below the Complex cut at the shipped default");
+
+        // Lowering the cut escalates a borderline turn...
+        CHECK(classify_score(probe, /*complex_min=*/1).tier == Complexity::Complex,
               "lowering the threshold escalates a borderline turn");
-        setenv("AGENTTY_SMART_COMPLEX_THRESHOLD", "8", 1);
-        CHECK(classify_complexity("redesign the auth module") != Complexity::Complex
-              || true, "raising the threshold de-escalates (best-effort)");
-        unsetenv("AGENTTY_SMART_COMPLEX_THRESHOLD");
-        CHECK(classify_complexity(probe) == base,
-              "unsetting the knob restores the default classification");
-#endif
+        // ...and the default parameter reproduces the shipped behaviour.
+        CHECK(classify_score(probe).tier == base,
+              "the default parameter is the shipped classification");
+        // Raising it far past the probe's score cannot leave it Complex.
+        CHECK(classify_score(probe, /*complex_min=*/8).tier != Complexity::Complex,
+              "raising the threshold de-escalates");
     }
 
     // ── is_routing_correction: the outcome-learning regret signal ─────────

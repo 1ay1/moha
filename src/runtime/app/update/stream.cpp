@@ -782,10 +782,11 @@ maya::Cmd<Msg> finalize_turn(Model& m, StopReason stop_reason) {
         // per-workspace variant of this signal was deleted; see RoleConfig.
         if (tool_failure && regret <= 0) regret = +1;
         m.s.smart_effort_bias += regret;
-        // Symmetric clamp on the session cascade bias, env-tunable
-        // (AGENTTY_SMART_BIAS_CLAMP): caps how far this session's self-
-        // correction can drift effort from baseline.
-        const int kBiasCap = smart::tuning::bias_clamp();
+        // Symmetric clamp on the session cascade bias — a persisted setting
+        // ("smart.bias_clamp", or AGENTTY_SMART_BIAS_CLAMP), resolved into
+        // RoleConfig at startup. Caps how far this session's self-correction
+        // can drift effort from baseline.
+        const int kBiasCap = m.d.smart.bias_clamp;
         if (m.s.smart_effort_bias >  kBiasCap) m.s.smart_effort_bias =  kBiasCap;
         if (m.s.smart_effort_bias < -kBiasCap) m.s.smart_effort_bias = -kBiasCap;
     }

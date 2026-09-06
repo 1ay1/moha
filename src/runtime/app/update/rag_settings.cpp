@@ -87,7 +87,7 @@ void resync_rows(rs::EmbedForm& f, store::RagMode mode) {
     f.cfg = rs::config_from_form(f.cfg, f.form);
 
     const bool was_dirty = f.form.dirty;
-    f.form = rs::build_form(f.cfg, mode, deps().load_settings().rag);
+    f.form = rs::build_form(f.cfg, mode, deps().load_settings());
     f.form.dirty = was_dirty;
     for (std::size_t i = 0; i < f.form.fields.size(); ++i)
         if (f.form.fields[i].id == focused_id) {
@@ -153,7 +153,7 @@ void refresh_status(rs::EmbedForm& f) {
 [[nodiscard]] rs::EmbedForm make_embed_form(store::RagMode mode) {
     rs::EmbedForm f;
     f.cfg  = current_embed_config();
-    f.form = rs::build_form(f.cfg, mode, deps().load_settings().rag);
+    f.form = rs::build_form(f.cfg, mode, deps().load_settings());
     const auto st = tools::rag_embed_status();
     using S = tools::RagEmbedStatus::State;
     if (st.state == S::Ready)
@@ -357,7 +357,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             write_embed_into(s.rag, f->cfg);
             // The pipeline knobs, read back through the same table that
             // generated their rows.
-            rs::apply_form_to_rag(f->form, s.rag);
+            rs::apply_form_to_settings(f->form, s);
             deps().save_settings(s);
             tools::rag_apply_settings(s.rag);
 
@@ -370,7 +370,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             if (auto* o = m.ui.overlay.get<ov::RagSettings>()) {
                 auto& f = o->embed;
                 f.cfg   = current_embed_config();
-                f.form  = rs::build_form(f.cfg, o->cursor, deps().load_settings().rag);
+                f.form  = rs::build_form(f.cfg, o->cursor, deps().load_settings());
                 f.probe = rs::EmbedForm::Idle{};
                 refresh_status(f);
             }

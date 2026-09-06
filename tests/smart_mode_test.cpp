@@ -271,6 +271,116 @@ TEST_CASE("smart_mode") {
         reset();
     }
 
+    // ── Numeric routing policy: env over stored, both clamped ───────────
+    // These three were env-ONLY, which made them undiscoverable and reset
+    // every shell. They are persisted settings now, and the env vars became
+    // session OVERRIDES rather than the only way in. Three properties:
+    //
+    //   1. unset env ⇒ nullopt, so the caller falls through to the stored
+    //      value. env_int() would have substituted the default here and
+    //      silently overridden whatever the user configured — which is the
+    //      whole reason for the _env()/optional split.
+    //   2. a set env value wins, clamped to the row's range.
+    //   3. a malformed value reads as unset, so a typo in a shell profile
+    //      leaves the configured value standing rather than resetting it.
+    {
+        auto reset = [] {
+            unsetenv("AGENTTY_SMART_DEEP_MARGIN");
+            unsetenv("AGENTTY_SMART_BIAS_CLAMP");
+            unsetenv("AGENTTY_SMART_COMPLEX_THRESHOLD");
+        };
+        reset();
+        CHECK(!sm::tuning::deep_margin_env().has_value(),
+              "tuning: unset ⇒ no override, the stored value governs");
+        CHECK(!sm::tuning::bias_clamp_env().has_value(),
+              "tuning: unset ⇒ no override (bias clamp)");
+        CHECK(!sm::tuning::complex_threshold_env().has_value(),
+              "tuning: unset ⇒ no override (complex threshold)");
+
+        setenv("AGENTTY_SMART_DEEP_MARGIN", "5", 1);
+        CHECK(sm::tuning::deep_margin_env() == std::optional<int>{5},
+              "tuning: a set value is read");
+
+        // Out of range is CLAMPED, never rejected-then-forgotten: the config
+        // must not be able to hold a value the UI could not produce.
+        setenv("AGENTTY_SMART_DEEP_MARGIN", "999", 1);
+        CHECK(sm::tuning::deep_margin_env()
+                  == std::optional<int>{sm::tuning::kDeepMarginMax},
+              "tuning: above range clamps to the max");
+        setenv("AGENTTY_SMART_DEEP_MARGIN", "-7", 1);
+        CHECK(sm::tuning::deep_margin_env()
+                  == std::optional<int>{sm::tuning::kDeepMarginMin},
+              "tuning: below range clamps to the min");
+
+        setenv("AGENTTY_SMART_DEEP_MARGIN", "not-a-number", 1);
+        CHECK(!sm::tuning::deep_margin_env().has_value(),
+              "tuning: a malformed value reads as unset, not as a reset");
+
+        // The bare accessors still work for callers with no config in hand,
+        // and agree with the named defaults.
+        reset();
+        CHECK(sm::tuning::deep_margin()       == sm::tuning::kDeepMarginDefault,
+              "tuning: bare accessor is the shipped default when unset");
+        CHECK(sm::tuning::bias_clamp()        == sm::tuning::kBiasClampDefault,
+              "tuning: bare accessor (bias clamp)");
+        CHECK(sm::tuning::complex_threshold() == sm::tuning::kComplexDefault,
+              "tuning: bare accessor (complex threshold)");
+        reset();
+    }
+
+    // ── RoleConfig carries the resolved policy ────────────────────────
+    // The domain reads these from config, not from getenv — which is what lets
+    // a value set in the settings UI actually route. Defaults must match
+    // tuning's, or a fresh Model would route differently from a bare call.
+    {
+        const sm::RoleConfig fresh;
+        CHECK(fresh.deep_margin       == sm::tuning::kDeepMarginDefault,
+              "RoleConfig: deep_margin defaults to the shipped value");
+        CHECK(fresh.bias_clamp        == sm::tuning::kBiasClampDefault,
+              "RoleConfig: bias_clamp defaults to the shipped value");
+        CHECK(fresh.complex_threshold == sm::tuning::kComplexDefault,
+              "RoleConfig: complex_threshold defaults to the shipped value");
+    }
+
+    // ── The tuning parameters actually MOVE the routing decision ─────────
+    // A setting that persists, renders and round-trips but changes nothing is
+    // worse than no setting at all. Both knobs are asserted on the WIRE path
+    // (classify_turn / effort_for_score), which is the pair launch_stream and
+    // build_smart_routing_card both call — so "card == wire" now covers the
+    // tuning too. A card classified at the shipped default while the wire used
+    // the user's threshold would advertise a route the request never took.
+    {
+        const auto gpt = ModelCapabilities::from_id("gpt-5");
+        const char* probe = "update the parser and re-run the formatter";
+
+        // complex_threshold moves the tier boundary. Asserted on
+        // classify_score, which is where the cut is APPLIED — classify_turn
+        // layers momentum, a continuation lift and a correction floor on top,
+        // and for this probe those pin the result to Standard whatever the cut
+        // is. That is correct product behaviour (a follow-up should not swing
+        // tiers because a threshold moved) and the wrong lens for this
+        // property. classify_turn threads the parameter down to the same call,
+        // so covering the base covers both.
+        const auto at_default = sm::classify_score(probe, sm::tuning::kComplexDefault);
+        const auto at_low     = sm::classify_score(probe, /*complex_min=*/1);
+        CHECK(at_low.tier == sm::Complexity::Complex,
+              "WIRE: a lower cut escalates a borderline turn");
+        CHECK(at_default.tier != at_low.tier,
+              "WIRE: the threshold parameter is not ignored");
+        CHECK(sm::classify_score(probe).tier == at_default.tier,
+              "WIRE: the default parameter is the shipped classification");
+
+        // deep_margin decides whether a deep band earns the extra step. A
+        // Complex turn with margin 4 is "deep" at margin 3 and not at 8.
+        const sm::ComplexityScore deep{sm::Complexity::Complex, 12, 4};
+        const Effort with_small = sm::effort_for_score(Effort::Low, deep, gpt, 0,
+                                                       /*deep=*/3);
+        const Effort with_large = sm::effort_for_score(Effort::Low, deep, gpt, 0,
+                                                       /*deep=*/8);
+        CHECK(static_cast<int>(with_small) > static_cast<int>(with_large),
+              "WIRE: a smaller deep-band margin buys the extra effort step");
+    }
+
     // 10. THE EFFORT LADDER IS PER-MODEL, NOT GLOBAL.
     //
     //     Regression for a silent, severe bug: the complexity scalers stepped
