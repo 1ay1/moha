@@ -7,6 +7,9 @@
 #include <maya/style/color.hpp>
 #include <maya/style/style.hpp>
 
+#include "agentty/runtime/command_palette.hpp"   // PaletteContext, Command
+#include "agentty/runtime/model.hpp"            // Model
+
 namespace agentty::ui {
 
 // ── Semantic palette (named ANSI only — terminal theme wins) ──────────────
@@ -86,5 +89,22 @@ inline maya::Style fg_dim(maya::Color c) {
         : maya::Style{}.with_fg(c).with_dim();
 }
 inline maya::Style fg_italic(maya::Color c)     { return maya::Style{}.with_fg(c).with_italic(); }
+
+// ── Palette row visibility ─────────────────────────────────────
+//
+// Rows are GATED — Review/Accept-all need pending changes, Run-code-block a
+// fenced reply, Update a release — and THREE places must agree on which are
+// visible: the VIEW that renders the list, the REDUCER that resolves a cursor
+// to a command, and back_to() restoring a cursor after Esc. When they
+// disagree the palette shows one list while the cursor indexes another, so
+// Enter fires a neighbour and Esc restores the wrong row.
+//
+// It was written out twice — in palette.cpp and in nav_pickers.cpp — each
+// commented "the SAME predicate" as the other. One definition makes that
+// comment true rather than aspirational.
+//
+// Lives here rather than beside the command table because it needs the Model,
+// and command_palette.hpp is deliberately Model-free.
+[[nodiscard]] PaletteContext palette_context(const Model& m);
 
 } // namespace agentty::ui

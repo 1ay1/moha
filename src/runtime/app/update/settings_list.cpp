@@ -222,20 +222,22 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
                     // instead of dispatching Open* — those arms mean "opened
                     // from the thread" and set the origin accordingly.
                     const auto cat = o->concern;
+                    const int  idx = o->index;   // the row we descended FROM
                     m.ui.overlay.close<ov::SettingsList>();
                     auto st = agentty::app::update(std::move(m),
                                                    Msg{OpenRagSettings{}});
                     if (auto* r = st.first.ui.overlay.get<ov::RagSettings>())
-                        r->from = ui::settings_origin::SettingsList{cat};
+                        r->from = ui::settings_origin::SettingsList{cat, idx};
                     return st;
                 }
                 case se::Action::OpenSmart: {
                     const auto cat = o->concern;
+                    const int  idx = o->index;   // the row we descended FROM
                     m.ui.overlay.close<ov::SettingsList>();
                     auto st = agentty::app::update(std::move(m),
                                                    Msg{OpenSmartMode{}});
                     if (auto* s = st.first.ui.overlay.get<ov::SmartMode>())
-                        s->from = ui::settings_origin::SettingsList{cat};
+                        s->from = ui::settings_origin::SettingsList{cat, idx};
                     return st;
                 }
                 case se::Action::RemovePlugin: {

@@ -21,6 +21,7 @@
 #include "agentty/runtime/settings_categories.hpp"
 #include "agentty/runtime/settings_items.hpp"   // items_for, Action
 #include "agentty/runtime/settings_origin.hpp"
+#include "agentty/runtime/view/palette.hpp"   // ui::palette_context
 
 #include <string>
 #include <vector>
@@ -110,8 +111,12 @@ TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
 
         m = press_escape(std::move(m));
         REQUIRE(m.ui.overlay.is<ov::CommandPalette>());
+        // Against the LIVE context, which is what the reopened palette filters
+        // by. A default-constructed context describes a different list (it
+        // claims pending changes, a code block and an update are all present),
+        // so comparing against that asserts a row position the user never sees.
         CHECK(m.ui.overlay.get<ov::CommandPalette>()->index
-              == palette_index_of(Command::SmartMode));
+              == palette_index_of(Command::SmartMode, ui::palette_context(m)));
     }
     {
         Model m = run_from_palette(Model{}, "retrieval", Command::OpenRagSettings);
@@ -120,7 +125,8 @@ TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
         m = press_escape(std::move(m));
         REQUIRE(m.ui.overlay.is<ov::CommandPalette>());
         CHECK(m.ui.overlay.get<ov::CommandPalette>()->index
-              == palette_index_of(Command::OpenRagSettings));
+              == palette_index_of(Command::OpenRagSettings,
+                                  ui::palette_context(m)));
     }
 }
 
@@ -131,7 +137,7 @@ TEST_CASE("settings nav: settings list → pane → Esc returns to the list") {
     // as a stack would not expect.
     install_stub_deps();
 
-    const auto descend_and_escape = [](Command row) {
+    const auto descend = [](Command row) {
         Model m;
         m = app::update(std::move(m),
                         Msg{OpenSettingsList{settings::Category::General}}).first;
@@ -151,26 +157,31 @@ TEST_CASE("settings nav: settings list → pane → Esc returns to the list") {
                            == settings::Action::OpenSmart))
                 idx = i;
         REQUIRE(idx >= 0);
+        // A row that is not the first, or "remembered the row" and "reset to
+        // the top" would be the same assertion.
+        REQUIRE(idx > 0);
         m.ui.overlay.get<ov::SettingsList>()->index = idx;
         m = app::update(std::move(m), Msg{SettingsListActivate{}}).first;
-        return m;
+        return std::pair{std::move(m), idx};
     };
 
     {
-        Model m = descend_and_escape(Command::SmartMode);
+        auto [m, idx] = descend(Command::SmartMode);
         REQUIRE(m.ui.overlay.is<ov::SmartMode>());
         m = press_escape(std::move(m));
         REQUIRE(m.ui.overlay.is<ov::SettingsList>());
         CHECK(m.ui.overlay.get<ov::SettingsList>()->concern
               == settings::Category::General);
+        CHECK(m.ui.overlay.get<ov::SettingsList>()->index == idx);
     }
     {
-        Model m = descend_and_escape(Command::OpenRagSettings);
+        auto [m, idx] = descend(Command::OpenRagSettings);
         REQUIRE(m.ui.overlay.is<ov::RagSettings>());
         m = press_escape(std::move(m));
         REQUIRE(m.ui.overlay.is<ov::SettingsList>());
         CHECK(m.ui.overlay.get<ov::SettingsList>()->concern
               == settings::Category::General);
+        CHECK(m.ui.overlay.get<ov::SettingsList>()->index == idx);
     }
 }
 

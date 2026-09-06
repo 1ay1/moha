@@ -7,6 +7,7 @@
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/app/cmd_factory.hpp"
+#include "agentty/runtime/view/palette.hpp"   // ui::palette_context
 
 #include <algorithm>
 #include <utility>
@@ -29,21 +30,7 @@ using maya::overload;
 // so conditionally-dead rows (Accept-all with no diff, Run-code-block with no
 // fenced reply, Update with no release) never render. One place, consulted by
 // every filtered_commands() call in this reducer + the view.
-[[nodiscard]] inline PaletteContext palette_ctx(const Model& m) {
-    PaletteContext ctx;
-    ctx.update_available    = !m.s.update_latest.empty();
-    ctx.has_pending_changes = !m.d.pending_changes.empty();
-    ctx.has_code_block      = [&] {
-        for (auto it = m.d.current.messages.rbegin();
-             it != m.d.current.messages.rend(); ++it) {
-            if (it->role != Role::Assistant || it->text.empty()) continue;
-            if (!code_block_picker::extract_code_blocks(it->text).empty())
-                return true;
-        }
-        return false;
-    }();
-    return ctx;
-}
+// Defined in meta.cpp (declared in internal.hpp) so the view shares it.
 
 // ── Command dispatch driver ───────────────────────────────────────────────
 // Each palette Command declares ITS OWN behaviour in one place: the registry
@@ -198,7 +185,7 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             // Without the upper bound the cursor used to walk off-screen
             // and Enter would silently fall through to the no-match path.
             int sz = static_cast<int>(filtered_commands(
-                o->query, palette_ctx(m)).size());
+                o->query, ui::palette_context(m)).size());
             if (sz <= 0) { o->index = 0; return done(std::move(m)); }
             o->index = std::clamp(o->index + e.delta, 0, sz - 1);
             return done(std::move(m));
@@ -210,7 +197,7 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             // the view rendered. The previous design switched on the raw
             // o->index against the unfiltered enum, which silently fired
             // the wrong command whenever any query was active.
-            auto matches = filtered_commands(o->query, palette_ctx(m));
+            auto matches = filtered_commands(o->query, ui::palette_context(m));
             m.ui.overlay.close<ov::CommandPalette>();
             if (matches.empty()
                 || o->index < 0

@@ -240,13 +240,27 @@ struct Open {
 
 using CommandPaletteState = std::variant<palette::Closed, palette::Open>;
 
-// Index of `cmd` in the blank-query palette list (which is exactly
-// kCommands order). Used to re-open the palette focused on the row the
-// user last selected, e.g. after Esc-ing back out of a settings picker.
-// Returns 0 if not found (defensive; every Command is in kCommands).
-[[nodiscard]] inline int palette_index_of(Command cmd) noexcept {
-    for (int i = 0; i < static_cast<int>(kCommands.size()); ++i)
-        if (kCommands[static_cast<std::size_t>(i)].id == cmd) return i;
+// Index of `cmd` in the palette list AS RENDERED for `ctx`. Used to re-open
+// the palette focused on the row the user last selected, e.g. after Esc-ing
+// back out of a settings picker.
+//
+// The context matters: rows are GATED (Review/Accept-all need pending changes,
+// Run-code-block needs a fenced reply, Update needs an available update), so
+// the rendered list is shorter than kCommands and every index after a hidden
+// row shifts. Restoring a cursor computed against the unfiltered table lands
+// on a neighbour — which reads as "Esc moved my selection", the opposite of
+// coming back where you left.
+//
+// Returns 0 if not visible (defensive; a row the user just used is visible by
+// construction).
+[[nodiscard]] inline int palette_index_of(Command cmd,
+                                          PaletteContext ctx = {}) noexcept {
+    int i = 0;
+    for (const auto& c : kCommands) {
+        if (!command_visible(c, ctx)) continue;
+        if (c.id == cmd) return i;
+        ++i;
+    }
     return 0;
 }
 

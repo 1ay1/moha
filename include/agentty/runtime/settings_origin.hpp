@@ -43,9 +43,18 @@ struct Thread {};
 // next time.
 struct Palette { Command row = Command::OpenRagSettings; };
 
-// Opened from the settings list. Esc reopens that list on the SAME category —
-// General, Plugins, … — rather than its default.
-struct SettingsList { settings::Category category = settings::Category::General; };
+// Opened from the settings list. Esc reopens that list on the SAME category
+// AND the SAME row — the row you activated, not the top.
+//
+// The row is carried for the same reason Palette carries one: coming back to
+// the right LIST but the wrong PLACE in it is still losing the user's place.
+// A settings list is a menu you walk down; returning to its first entry after
+// every excursion makes configuring two adjacent things needlessly tedious,
+// which is the tedium the stack was supposed to remove.
+struct SettingsList {
+    settings::Category category = settings::Category::General;
+    int                row      = 0;
+};
 
 using Origin = std::variant<Thread, Palette, SettingsList>;
 

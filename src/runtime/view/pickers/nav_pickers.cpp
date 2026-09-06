@@ -106,19 +106,10 @@ Element command_palette(const Model& m) {
     auto* o = m.ui.overlay.get<ov::CommandPalette>();
     if (!o) return nothing();
 
-    // Live visibility context — the SAME predicate the reducer uses, so a row
-    // the dispatcher would reject never renders (no dead Accept-all).
-    PaletteContext pctx;
-    pctx.update_available    = !m.s.update_latest.empty();
-    pctx.has_pending_changes = !m.d.pending_changes.empty();
-    pctx.has_code_block      = [&] {
-        for (auto it = m.d.current.messages.rbegin();
-             it != m.d.current.messages.rend(); ++it)
-            if (it->role == Role::Assistant && !it->text.empty()
-                && !code_block_picker::extract_code_blocks(it->text).empty())
-                return true;
-        return false;
-    }();
+    // Live visibility context — literally the same function the reducer uses,
+    // so a row the dispatcher would reject never renders (no dead Accept-all)
+    // and the cursor the view shows indexes the list the reducer resolves.
+    const PaletteContext pctx = ui::palette_context(m);
     auto scored = match_commands(o->query, pctx);
     std::vector<const CommandDef*> matches;
     matches.reserve(scored.size());
@@ -396,6 +387,26 @@ Element symbol_palette(const Model& m) {
     }
 
     return Panel{std::move(cfg)}.build();
+}
+
+// The ONE row-visibility predicate. Declared in view/palette.hpp; called by
+// this view to render the list, by the palette reducer to resolve a cursor to
+// a command, and by back_to() to restore a cursor after Esc. Those three must
+// index the same list — see the header for what goes wrong when they do not.
+PaletteContext palette_context(const Model& m) {
+    PaletteContext ctx;
+    ctx.update_available    = !m.s.update_latest.empty();
+    ctx.has_pending_changes = !m.d.pending_changes.empty();
+    ctx.has_code_block      = [&] {
+        for (auto it = m.d.current.messages.rbegin();
+             it != m.d.current.messages.rend(); ++it) {
+            if (it->role != Role::Assistant || it->text.empty()) continue;
+            if (!code_block_picker::extract_code_blocks(it->text).empty())
+                return true;
+        }
+        return false;
+    }();
+    return ctx;
 }
 
 } // namespace agentty::ui

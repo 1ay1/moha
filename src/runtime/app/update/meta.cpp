@@ -22,6 +22,7 @@
 #include "agentty/runtime/mem.hpp"
 #include "agentty/runtime/settings_registry.hpp"   // tuning row write-back
 #include "agentty/runtime/view/helpers.hpp"   // ui::profile_label
+#include "agentty/runtime/view/palette.hpp"   // ui::palette_context
 #include "agentty/store/store.hpp"
 #include "agentty/tool/subagent.hpp"   // set_smart: the task router's own copy
 #include "agentty/workspace/checkpoint.hpp"
@@ -1006,10 +1007,14 @@ void back_to(Model& m, const ui::settings_origin::Origin& from) {
             // so Esc means "done", and the overlay slot is already empty.
         },
         [&](const so::Palette& p) {
-            m.ui.overlay = ov::CommandPalette{{"", palette_index_of(p.row)}};
+            // The live context, not a default one: the palette filters rows by
+            // it, so a cursor computed against the wrong context lands on a
+            // neighbouring command.
+            m.ui.overlay = ov::CommandPalette{
+                {"", palette_index_of(p.row, ui::palette_context(m))}};
         },
         [&](const so::SettingsList& s) {
-            m.ui.overlay = ov::SettingsList{{s.category, 0}};
+            m.ui.overlay = ov::SettingsList{{s.category, s.row}};
         },
     }, from);
 }
