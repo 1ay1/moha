@@ -31,13 +31,12 @@ inline constexpr const char* kFieldEnabled  = "enabled";
 inline constexpr const char* kFieldStrategic = "strategic";
 inline constexpr const char* kFieldImpl      = "implementation";
 inline constexpr const char* kFieldUtility   = "utility";
-// The advanced routing-policy rows are REGISTRY rows, not hand-written ones:
-// their ids are the registry ids, so a pane writes an edit back by looking the
-// row up in the table rather than naming each knob. Kept as named constants
-// because the reducer and the tests refer to them.
-inline constexpr const char* kFieldComplexCut = "smart.complex_threshold";
-inline constexpr const char* kFieldDeepMargin = "smart.deep_margin";
-inline constexpr const char* kFieldBiasClamp  = "smart.bias_clamp";
+
+// The advanced routing-policy rows have NO constants here on purpose. They are
+// registry rows: their ids live in settings_registry.hpp's table and are
+// reached through registry::find / the Owner::Settings walk. A second
+// spelling of "smart.complex_threshold" in this header would be a string that
+// has to agree with the table and cannot be checked against it.
 
 // The resolved display label for one role, plus whether it was pinned. The
 // pane computes these (resolution needs the catalogue and the active

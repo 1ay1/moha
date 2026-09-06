@@ -47,6 +47,14 @@ namespace reg = agentty::settings::registry;
 namespace tun = agentty::smart::tuning;
 using agentty::store::Settings;
 
+// The routing rows, named ONCE. Tests reach them through the registry ids —
+// the same strings the table declares and the panes look up — so a rename
+// shows up here as a failed find() rather than as a test quietly checking a
+// row that no longer exists.
+constexpr const char* kCut  = "smart.complex_threshold";
+constexpr const char* kDeep = "smart.deep_margin";
+constexpr const char* kBias = "smart.bias_clamp";
+
 long long now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch()).count();
@@ -88,7 +96,7 @@ void clear_env() {
 TEST_CASE("smart tuning: rows bind to the config struct that owns them") {
     Settings s;
 
-    const auto* cut = reg::find("smart.complex_threshold");
+    const auto* cut = reg::find(kCut);
     REQUIRE(cut != nullptr);
     CHECK(cut->owner() == reg::Owner::Settings);
     CHECK(reg::is_default(s, *cut));
@@ -125,7 +133,7 @@ TEST_CASE("smart tuning: rows bind to the config struct that owns them") {
 
 TEST_CASE("smart tuning: every entry point clamps to the row's range") {
     Settings s;
-    const auto* cut = reg::find("smart.complex_threshold");
+    const auto* cut = reg::find(kCut);
     REQUIRE(cut != nullptr);
 
     // Clamped, never rejected-then-forgotten: a hand-edited settings.json must
@@ -169,8 +177,7 @@ TEST_CASE("smart tuning: the Retrieval pane does not carry the routing rows") {
     for (bool advanced : {false, true}) {
         const auto f = rs::build_form(cfg, agentty::store::RagMode::On, s,
                                       advanced);
-        for (const char* id : {"smart.complex_threshold", "smart.deep_margin",
-                               "smart.bias_clamp"})
+        for (const char* id : {kCut, kDeep, kBias})
             CHECK(f.find(id) == nullptr);
         // The Retrieval rows are still there — this is not "the walk broke".
         CHECK(f.find("rag.mmr") != nullptr);
@@ -199,8 +206,7 @@ TEST_CASE("smart tuning: the rows live in the SMART MODE pane") {
     in.advanced = true;
     const auto adv = sf::build_form(in);
 
-    for (const char* id : {sf::kFieldComplexCut, sf::kFieldDeepMargin,
-                           sf::kFieldBiasClamp}) {
+    for (const char* id : {kCut, kDeep, kBias}) {
         CHECK(basic.find(id) == nullptr);
         CHECK(adv.find(id) != nullptr);
     }
@@ -208,7 +214,7 @@ TEST_CASE("smart tuning: the rows live in the SMART MODE pane") {
     // Real editable Number rows showing the CONFIGURED value, carrying the
     // registry's range — all of it projected from the table, none of it
     // retyped into the pane.
-    const auto* cut = adv.find(sf::kFieldComplexCut);
+    const auto* cut = adv.find(kCut);
     REQUIRE(cut != nullptr);
     CHECK_FALSE(cut->locked);
     CHECK(cut->label == "Complexity cut");     // the registry's label
@@ -236,13 +242,13 @@ TEST_CASE("smart tuning: an env override locks the row in the pane") {
     in.advanced = true;
     const auto f = sf::build_form(in);
 
-    const auto* row = f.find(sf::kFieldComplexCut);
+    const auto* row = f.find(kCut);
     REQUIRE(row != nullptr);
     CHECK(row->locked);
     CHECK(row->origin == "env: AGENTTY_SMART_COMPLEX_THRESHOLD");
 
     // The rows NOT overridden stay editable — the lock is per row, not a mode.
-    const auto* other = f.find(sf::kFieldDeepMargin);
+    const auto* other = f.find(kDeep);
     REQUIRE(other != nullptr);
     CHECK_FALSE(other->locked);
 
