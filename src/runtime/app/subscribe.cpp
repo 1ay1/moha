@@ -289,13 +289,8 @@ template <class Wrap>
 // — typing ^A into an endpoint should not reshuffle the pane underneath.
 std::optional<Msg> on_rag_settings(const FormFocus& f, const KeyEvent& ev) {
     if (f.open && !f.editing)
-        if (const auto* ck = std::get_if<CharKey>(&ev.key)) {
-            const char32_t c = ck->codepoint;
-            // 0x01 is what legacy terminals send for ^A, the same way ^C
-            // arrives as 0x03 above.
-            if (c == 0x01 || (ev.mods.ctrl && (c == U'a' || c == U'A')))
-                return Msg{RagSettingsAdvanced{}};
-        }
+        if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U'a')
+            return Msg{RagSettingsAdvanced{}};
     return on_form(f, ev, [](form::keys::Action a) { return Msg{RagEmbedKey{a}}; });
 }
 
@@ -465,6 +460,12 @@ std::optional<Msg> on_smart_mode(const FormFocus& f, const KeyEvent& ev) {
     // pane-specific (the form layer has no concept of an open chord).
     if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U's')
         return Msg{CloseSmartMode{}};
+    // ^A reveals the advanced routing-policy rows. Checked before the form
+    // claims the key because it changes which rows EXIST rather than acting on
+    // one; suppressed while editing so it stays literal in a text field.
+    if (!f.editing)
+        if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U'a')
+            return Msg{SmartModeAdvanced{}};
     return on_form(f, ev, [](form::keys::Action a) { return Msg{SmartModeKey{a}}; });
 }
 

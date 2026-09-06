@@ -25,6 +25,7 @@
 #include "agentty/io/persistence.hpp"
 #include "agentty/runtime/rag_settings.hpp"
 #include "agentty/runtime/settings_registry.hpp"
+#include "agentty/runtime/smart_form.hpp"
 #include "agentty/store/store.hpp"
 
 #include <atomic>
@@ -157,39 +158,72 @@ TEST_CASE("smart tuning: a configured value survives save and load") {
     CHECK(back.smart_bias_clamp == tun::kBiasClampDefault);
 }
 
-TEST_CASE("smart tuning: the rows are REACHABLE from the settings pane") {
-    // The rows existed, persisted, clamped and round-tripped — and were
-    // invisible. Every build_form call site omitted `advanced`, which defaults
-    // to false, and all three routing rows are Tier::Advanced. So the feature
-    // shipped complete and unreachable: exactly the "undiscoverable" failure
-    // it was written to fix, one layer up.
-    //
-    // Asserted on the FORM, which is what the pane renders: absent by default
-    // (thirty sliders is its own kind of unusable), present once ^A is on.
+TEST_CASE("smart tuning: the Retrieval pane does not carry the routing rows") {
+    // They were briefly put here — the pane that happened to already walk the
+    // registry — which made them reachable and unfindable at the same time.
+    // A knob belongs beside the thing it governs; these govern Smart Mode.
     namespace rs = agentty::rag_settings;
     agentty::rag::embed::EmbedConfig cfg;
     const Settings s;
 
-    const auto basic = rs::build_form(cfg, agentty::store::RagMode::On, s,
-                                      /*advanced=*/false);
-    const auto adv   = rs::build_form(cfg, agentty::store::RagMode::On, s,
-                                      /*advanced=*/true);
+    for (bool advanced : {false, true}) {
+        const auto f = rs::build_form(cfg, agentty::store::RagMode::On, s,
+                                      advanced);
+        for (const char* id : {"smart.complex_threshold", "smart.deep_margin",
+                               "smart.bias_clamp"})
+            CHECK(f.find(id) == nullptr);
+        // The Retrieval rows are still there — this is not "the walk broke".
+        CHECK(f.find("rag.mmr") != nullptr);
+    }
+}
 
-    for (const char* id : {"smart.complex_threshold", "smart.deep_margin",
-                           "smart.bias_clamp"}) {
+TEST_CASE("smart tuning: the rows live in the SMART MODE pane") {
+    // Where a setting lives is part of whether it works. These knobs decide how
+    // Smart Mode routes, so they belong beside the switch that turns routing on
+    // and the slots it fills — a user asking "how eagerly does it escalate?"
+    // opens ^S, not the Retrieval pane. Putting them under Retrieval made them
+    // technically reachable and practically invisible, which is the same
+    // failure as leaving them in an env var.
+    //
+    // Advanced-gated: four rows that matter should not compete with three that
+    // mostly should not be touched.
+    namespace sf = agentty::smart_form;
+
+    sf::Inputs in;
+    in.enabled           = true;
+    in.complex_threshold = 5;
+    in.deep_margin       = 6;
+    in.bias_clamp        = 4;
+
+    const auto basic = sf::build_form(in);
+    in.advanced = true;
+    const auto adv = sf::build_form(in);
+
+    for (const char* id : {sf::kFieldComplexCut, sf::kFieldDeepMargin,
+                           sf::kFieldBiasClamp}) {
         CHECK(basic.find(id) == nullptr);
         CHECK(adv.find(id) != nullptr);
     }
 
-    // And they are real, editable Number rows carrying the registry's range —
-    // not locked placeholders.
-    const auto* cut = adv.find("smart.complex_threshold");
+    // Real editable Number rows showing the CONFIGURED value, carrying the
+    // registry's range.
+    const auto* cut = adv.find(sf::kFieldComplexCut);
     REQUIRE(cut != nullptr);
     CHECK_FALSE(cut->locked);
     const auto* num = std::get_if<agentty::form::field::Number>(&cut->value);
     REQUIRE(num != nullptr);
+    CHECK(num->value == 5);
     CHECK(num->min == tun::kComplexMin);
     CHECK(num->max == tun::kComplexMax);
+
+    // An env override LOCKS the row and names the variable, rather than
+    // letting it look editable and silently lose the edit.
+    in.complex_threshold_lock = "env: AGENTTY_SMART_COMPLEX_THRESHOLD";
+    const auto locked = sf::build_form(in);
+    const auto* row = locked.find(sf::kFieldComplexCut);
+    REQUIRE(row != nullptr);
+    CHECK(row->locked);
+    CHECK(row->origin == "env: AGENTTY_SMART_COMPLEX_THRESHOLD");
 }
 
 TEST_CASE("smart tuning: apply_tuning is the one resolution rule") {

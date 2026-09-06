@@ -6,6 +6,8 @@
 
 #include "agentty/runtime/smart_form.hpp"
 
+#include "agentty/runtime/settings_registry.hpp"   // row ranges
+
 namespace agentty::smart_form {
 
 namespace {
@@ -48,6 +50,45 @@ form::Form build_form(const Inputs& in) {
     add_slot(b, kFieldUtility, "Utility", in.utility,
              "summaries, titles, cheap mechanical work");
     if (!live) b.lock("Smart Mode off");
+
+    // ── Advanced: the numeric policy ────────────────────────────────
+    // Hidden behind ^A. These decide HOW Smart Mode routes, so they belong
+    // beside the switch that turns routing on — but they are the kind of knob
+    // a user cannot judge at a glance, and four rows that matter should not
+    // compete with three that mostly should not be touched.
+    //
+    // Ranges come from the settings registry, which is also what clamps them
+    // on the way in, so the row and the store agree by construction.
+    if (in.advanced) {
+        namespace reg = settings::registry;
+        b.header("Routing policy");
+
+        const auto row = [&](const char* id, std::string label,
+                             int value, std::string help,
+                             const std::string& lock) {
+            const auto* d = reg::find(id);
+            if (!d) return;              // unreachable: ids are registry ids
+            b.number(id, std::move(label), value,
+                     static_cast<std::int64_t>(d->min),
+                     static_cast<std::int64_t>(d->max), std::move(help));
+            if (!lock.empty()) {
+                b.lock(lock);
+                b.origin(lock);
+            } else if (!live) {
+                b.lock("Smart Mode off");
+            }
+        };
+
+        row(kFieldComplexCut, "Complexity cut", in.complex_threshold,
+            "score at which a turn routes as Complex; lower spends more",
+            in.complex_threshold_lock);
+        row(kFieldDeepMargin, "Deep-band margin", in.deep_margin,
+            "how far into a tier a turn must sit to earn the extra effort step",
+            in.deep_margin_lock);
+        row(kFieldBiasClamp, "Self-correction cap", in.bias_clamp,
+            "how far this session's own corrections may drift effort",
+            in.bias_clamp_lock);
+    }
 
     return b.build();
 }

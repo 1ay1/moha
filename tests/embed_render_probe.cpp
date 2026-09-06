@@ -26,12 +26,14 @@ int main(int argc, char** argv) {
     const std::string arg = argc > 1 ? argv[1] : "";
 
     // Smart Mode, for eyeballing the shared form layer on a second pane.
-    if (arg == "--smart") {
+    // --smart-advanced also shows the routing-policy rows (^A in the app).
+    if (arg == "--smart" || arg == "--smart-advanced") {
         sf::Inputs in;
         in.enabled        = true;
         in.strategic      = {"Claude Opus 4.5", true};
         in.implementation = {"Claude Sonnet 4.5", false};
         in.utility        = {"Claude Haiku 4.5", false};
+        in.advanced       = (arg == "--smart-advanced");
         auto f = sf::build_form(in);
         const auto out = maya::render_to_string_ansi(
             maya::Panel{agentty::ui::form_config(f, agentty::ui::success)}.build(), 84);

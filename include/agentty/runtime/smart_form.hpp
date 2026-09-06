@@ -30,6 +30,12 @@ inline constexpr const char* kFieldEnabled  = "enabled";
 inline constexpr const char* kFieldStrategic = "strategic";
 inline constexpr const char* kFieldImpl      = "implementation";
 inline constexpr const char* kFieldUtility   = "utility";
+// The advanced tuning rows. Ids match the settings-registry row ids exactly,
+// so the reducer writes them back by walking the table rather than naming
+// each one — the row IS the binding.
+inline constexpr const char* kFieldComplexCut = "smart.complex_threshold";
+inline constexpr const char* kFieldDeepMargin = "smart.deep_margin";
+inline constexpr const char* kFieldBiasClamp  = "smart.bias_clamp";
 
 // The resolved display label for one role, plus whether it was pinned. The
 // pane computes these (resolution needs the catalogue and the active
@@ -49,6 +55,25 @@ struct Inputs {
     SlotView strategic;
     SlotView implementation;
     SlotView utility;
+
+    // Numeric routing policy. These belong HERE, next to the switch and the
+    // slots they govern — they are how Smart Mode decides, and a user looking
+    // for "how eagerly does it escalate" looks at the Smart Mode pane, not at
+    // Retrieval. Advanced: the values are meaningful but not self-explanatory,
+    // so they sit behind ^A rather than crowding the four rows that matter.
+    int complex_threshold = 3;
+    int deep_margin       = 3;
+    int bias_clamp        = 2;
+
+    // Non-empty ⇒ an AGENTTY_SMART_* export is overriding that row, which
+    // renders read-only naming the variable. Same rule as enabled_lock: a row
+    // that looks editable and silently loses the edit is the worst outcome.
+    std::string complex_threshold_lock;
+    std::string deep_margin_lock;
+    std::string bias_clamp_lock;
+
+    // Reveal the advanced rows (^A).
+    bool advanced = false;
 };
 
 // Build the pane. Pure — unit-testable with no catalogue and no terminal.

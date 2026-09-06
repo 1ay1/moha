@@ -351,7 +351,7 @@ Step meta_update          (Model m, msg::MetaMsg           mm);
 // Build the Smart Mode pane from the live model + catalogue (meta.cpp).
 // Shared with picker.cpp, which reopens the pane after a slot assignment —
 // one builder means the reopened pane cannot differ from the original.
-[[nodiscard]] form::Form build_smart_form(const Model& m);
+[[nodiscard]] form::Form build_smart_form(const Model& m, bool advanced = false);
 
 // ── Row estimation (frozen.cpp) ──────────────────────────────────────────
 //

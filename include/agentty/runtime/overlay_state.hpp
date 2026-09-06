@@ -79,6 +79,11 @@ struct ThreadList      : pick::OpenAt {};
 // config surface — and an out-of-range cursor is not representable.
 struct SmartMode {
     agentty::form::Form form;
+    // Show the advanced routing-policy rows (^A). View state, not config — it
+    // dies with the overlay and is not persisted. Held HERE because every
+    // rebuild (a slot assignment reopens the pane) must preserve it, or the
+    // rows would vanish the moment the user pinned a model.
+    bool advanced = false;
 };
 struct CommandPalette  : agentty::palette::Open {};
 struct Mention         : agentty::mention::Open {};

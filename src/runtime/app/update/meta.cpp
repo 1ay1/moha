@@ -20,8 +20,10 @@
 #include "agentty/provider/selection.hpp"   // provider::active (stall watchdog)
 #include "agentty/runtime/composer_attachment.hpp"
 #include "agentty/runtime/mem.hpp"
+#include "agentty/runtime/settings_registry.hpp"   // tuning row write-back
 #include "agentty/runtime/view/helpers.hpp"   // ui::profile_label
 #include "agentty/store/store.hpp"
+#include "agentty/tool/subagent.hpp"   // set_smart: the task router's own copy
 #include "agentty/workspace/checkpoint.hpp"
 #include "agentty/runtime/smart_form.hpp"
 #include "agentty/runtime/app/settings_cache.hpp"
@@ -43,7 +45,7 @@ using maya::Cmd;
 //
 // Shared with picker.cpp, which reopens the pane after a slot assignment: one
 // builder means the reopened pane cannot differ from the original.
-form::Form build_smart_form(const Model& m) {
+form::Form build_smart_form(const Model& m, bool advanced) {
     const auto& sm = m.d.smart;
     const std::string parent = m.d.model_id.value;
 
@@ -67,6 +69,21 @@ form::Form build_smart_form(const Model& m) {
     in.strategic      = slot(smart::ModelRole::Strategic);
     in.implementation = slot(smart::ModelRole::Implementation);
     in.utility        = slot(smart::ModelRole::Utility);
+
+    // The numeric policy, read from the RESOLVED config the router is
+    // actually using — not from settings.json, which an env override may be
+    // shadowing. The row shows what routes; the lock says why it cannot be
+    // edited when an export owns it.
+    in.advanced          = advanced;
+    in.complex_threshold = sm.complex_threshold;
+    in.deep_margin       = sm.deep_margin;
+    in.bias_clamp        = sm.bias_clamp;
+    if (smart::tuning::complex_threshold_env())
+        in.complex_threshold_lock = "env: AGENTTY_SMART_COMPLEX_THRESHOLD";
+    if (smart::tuning::deep_margin_env())
+        in.deep_margin_lock = "env: AGENTTY_SMART_DEEP_MARGIN";
+    if (smart::tuning::bias_clamp_env())
+        in.bias_clamp_lock = "env: AGENTTY_SMART_BIAS_CLAMP";
     return smart_form::build_form(in);
 }
 
@@ -155,6 +172,19 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             m.ui.overlay = ov::SmartMode{build_smart_form(m)};
             return done(std::move(m));
         },
+        [&](SmartModeAdvanced) -> Step {
+            // Reveal/hide the routing-policy rows. The row SET changes, so the
+            // form is rebuilt; the cursor is kept and clamped, since hiding
+            // rows can leave it past the end.
+            auto* o = m.ui.overlay.get<ov::SmartMode>();
+            if (!o) return done(std::move(m));
+            o->advanced = !o->advanced;
+            const int cursor = o->form.cursor;
+            o->form = build_smart_form(m, o->advanced);
+            const int n = static_cast<int>(o->form.fields.size());
+            o->form.cursor = n > 0 ? std::min(cursor, n - 1) : 0;
+            return done(std::move(m));
+        },
         [&](CloseSmartMode) -> Step {
             m.ui.overlay.close<ov::SmartMode>();
             return done(std::move(m));
@@ -180,12 +210,33 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             // pin is enforced by the form rather than by a toast after the
             // fact — the row renders read-only and names the variable.
             if (applied.changed && !role) {
+                // A tuning row — write it back through the registry, which is
+                // also what clamps it, then re-resolve so the classifier uses
+                // the new value on the NEXT turn rather than the next launch.
+                if (const auto* d = settings::registry::find(row_id)) {
+                    auto s = deps().load_settings();
+                    if (const auto* f = o->form.find(row_id))
+                        if (const auto* num =
+                                std::get_if<form::field::Number>(&f->value))
+                            (void)settings::registry::set(
+                                s, *d, std::to_string(num->value));
+                    deps().save_settings(s);
+                    smart::apply_tuning(m.d.smart, s.smart_deep_margin,
+                                        s.smart_bias_clamp,
+                                        s.smart_complex_threshold);
+                    tools::subagent::set_smart(m.d.smart);
+                    const int cursor = o->form.cursor;
+                    o->form = build_smart_form(m, o->advanced);
+                    o->form.cursor = cursor;
+                    return done(std::move(m));
+                }
+
                 m.d.smart.enabled = smart_form::enabled_from_form(o->form,
                                                                  m.d.smart.enabled);
                 persist_settings(m);
                 // The slots' locked state depends on the switch, so rebuild.
                 const int cursor = o->form.cursor;
-                o->form = build_smart_form(m);
+                o->form = build_smart_form(m, o->advanced);
                 o->form.cursor = cursor;
                 return {std::move(m), set_status_toast(m,
                     m.d.smart.enabled ? "Smart Mode on" : "Smart Mode off")};

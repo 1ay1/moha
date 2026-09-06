@@ -613,6 +613,9 @@ struct UpdateTodos { std::vector<TodoItem> items; };
 struct OpenSmartMode {};
 struct CloseSmartMode {};
 struct SmartModeKey { form::keys::Action action; };
+// Reveal/hide the advanced routing-policy rows (^A). View state on the
+// overlay; the pane rebuilds. Not persisted.
+struct SmartModeAdvanced {};
 struct SmartModeClearSlot {};     // 'x' on a slot row: reset it to auto
 
 // ── In-app login modal ───────────────────────────────────────────────────
@@ -1057,7 +1060,7 @@ using MetaMsg = std::variant<
     CompactContext, CycleProfile, RestoreCheckpoint, CheckpointRestored,
     ScrollThread, ToggleRetrievedExpanded,
     TerminalFocus,
-    OpenSmartMode, CloseSmartMode, SmartModeKey,
+    OpenSmartMode, CloseSmartMode, SmartModeKey, SmartModeAdvanced,
     SmartModeClearSlot,
     Tick, Quit, NoOp, ClearStatus, RedrawScreen,
     UpdateCheckDone, UpdateApplied>;

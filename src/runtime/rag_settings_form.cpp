@@ -123,15 +123,19 @@ void add_registry_rows(form::Builder& b, const C& cfg,
 }
 
 // Both halves of the table, in table order, with the group headers running
-// continuously across the boundary. One call so no build path can pick up the
-// RAG rows and forget the routing ones.
+// continuously across the boundary.
+//
+// The Settings-owned rows are the SMART MODE routing policy, and they render
+// in the Smart Mode pane (^S → ^A) next to the switch and slots they govern —
+// not here. A knob shown in the wrong pane is findable only by accident, which
+// is the same failure as leaving it in an env var. This pane is Retrieval, so
+// it walks the Retrieval rows.
 void add_all_registry_rows(form::Builder& b, const store::Settings& settings,
                            bool advanced) {
     namespace reg = agentty::settings::registry;
     auto last_group = reg::Group::Sources;
     bool first = true;
-    add_registry_rows(b, settings.rag, reg::Owner::Rag,      advanced, first, last_group);
-    add_registry_rows(b, settings,     reg::Owner::Settings, advanced, first, last_group);
+    add_registry_rows(b, settings.rag, reg::Owner::Rag, advanced, first, last_group);
 }
 
 } // namespace
