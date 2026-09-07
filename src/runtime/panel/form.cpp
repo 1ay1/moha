@@ -314,6 +314,44 @@ void move(Form& f, int delta) {
     }
 }
 
+void move_edge(Form& f, bool last) {
+    // Home/End: the first/last non-header field. A plain scan, not move()—
+    // the walk must not WRAP (End from the last row stays put rather than
+    // sweeping around to the top).
+    if (f.choosing()) return;
+    const int n = static_cast<int>(f.fields.size());
+    if (last) {
+        for (int i = n - 1; i >= 0; --i)
+            if (!f.fields[static_cast<std::size_t>(i)].is_header()) {
+                f.cursor = i;
+                return;
+            }
+    } else {
+        for (int i = 0; i < n; ++i)
+            if (!f.fields[static_cast<std::size_t>(i)].is_header()) {
+                f.cursor = i;
+                return;
+            }
+    }
+}
+
+void move_page(Form& f, int delta) {
+    // PgUp/PgDn: stride WITHOUT wrapping — a page-move that teleports from
+    // the bottom back to the top is disorienting, so the walk clamps at the
+    // edges (landing on the last non-header field it passed).
+    if (f.choosing() || f.fields.empty()) return;
+    const int n    = static_cast<int>(f.fields.size());
+    const int step = delta >= 0 ? 1 : -1;
+    int remaining  = std::abs(delta);
+    int best       = f.cursor;
+    for (int i = f.cursor + step; i >= 0 && i < n && remaining > 0; i += step) {
+        if (f.fields[static_cast<std::size_t>(i)].is_header()) continue;
+        best = i;
+        --remaining;
+    }
+    f.cursor = best;
+}
+
 Activated activate(Form& f) {
     Field* row = f.focused();
     if (!row || row->locked) return Activated::Nothing;

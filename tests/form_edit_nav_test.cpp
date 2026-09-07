@@ -242,6 +242,41 @@ int main() {
         }
     }
 
+    // ── Home/End/PgDn: jump keys work while browsing, and clamp. ────
+    {
+        auto* r = m.ui.panel.get<pn::Rag>();
+        if (!r) { std::fprintf(stderr, "no rag pane for jump test\n"); return 1; }
+        auto key = [&](maya::SpecialKey k) {
+            if (auto a = form::keys::translate(r->embed.form, maya::KeyEvent{k})) {
+                m = step(std::move(m), Msg{RagEmbedKey{*a}}, "jump key");
+                r = m.ui.panel.get<pn::Rag>();
+            }
+        };
+        key(K::End);
+        const int at_end = r->embed.form.cursor;
+        key(K::Down);   // wrap-guard: End then Down wraps to top by move();
+        key(K::End);    // back to the end
+        if (r->embed.form.cursor != at_end) {
+            std::fprintf(stderr, "FAIL: End not idempotent (%d vs %d)\n",
+                         r->embed.form.cursor, at_end);
+            return 1;
+        }
+        key(K::PageDown);   // at the end: must CLAMP, not wrap
+        if (r->embed.form.cursor != at_end) {
+            std::fprintf(stderr, "FAIL: PgDn at the end wrapped (%d vs %d)\n",
+                         r->embed.form.cursor, at_end);
+            return 1;
+        }
+        key(K::Home);
+        const int at_home = r->embed.form.cursor;
+        if (at_home >= at_end) {
+            std::fprintf(stderr, "FAIL: Home did not go above End (%d vs %d)\n",
+                         at_home, at_end);
+            return 1;
+        }
+        std::fprintf(stderr, "jumps: home=%d end=%d ok\n", at_home, at_end);
+    }
+
     std::fprintf(stderr, "ALL OK\n");
     return 0;
 }

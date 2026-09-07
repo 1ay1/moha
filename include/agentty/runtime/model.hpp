@@ -610,6 +610,7 @@ struct Model {
         mutable maya::ScrollState fork_scroll              = routed_scroll();
         mutable maya::ScrollState todo_scroll             = routed_scroll();
         mutable maya::ScrollState tool_viewer_scroll      = routed_scroll();
+        mutable maya::ScrollState account_list_scroll     = routed_scroll();
     };
 
     Domain      d;

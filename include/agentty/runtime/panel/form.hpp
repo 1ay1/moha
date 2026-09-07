@@ -421,6 +421,10 @@ void adjust(FieldValue& v, int dir);
 // Move the row cursor (wraps). No-op while a dropdown is open — that mode
 // owns the highlight.
 void move(Form& f, int delta);
+// Home/End: jump to the first/last non-header field WITHOUT wrapping.
+void move_edge(Form& f, bool last);
+// PgUp/PgDn: header-skipping stride that CLAMPS at the edges (no wrap).
+void move_page(Form& f, int delta);
 
 // Enter on the focused row: engage a text field, open a Choice's dropdown,
 // flip a Toggle, hand a Pick off to its picker, or report that an Action

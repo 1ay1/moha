@@ -80,14 +80,18 @@ std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev)
         return Action{Intent::None};
     }
 
-    // ── Browsing ─────────────────────────────────────────────────────────
+    // ── Browsing ─────────────────────────────────────────────────────
     if (sk) switch (*sk) {
-        case SpecialKey::Escape: return Action{Intent::Close};
-        case SpecialKey::Enter:  return Action{Intent::Activate};
-        case SpecialKey::Up:     return Action{Intent::MovePrev};
-        case SpecialKey::Down:   return Action{Intent::MoveNext};
-        case SpecialKey::Left:   return Action{Intent::AdjustDown};
-        case SpecialKey::Right:  return Action{Intent::AdjustUp};
+        case SpecialKey::Escape:   return Action{Intent::Close};
+        case SpecialKey::Enter:    return Action{Intent::Activate};
+        case SpecialKey::Up:       return Action{Intent::MovePrev};
+        case SpecialKey::Down:     return Action{Intent::MoveNext};
+        case SpecialKey::Left:     return Action{Intent::AdjustDown};
+        case SpecialKey::Right:    return Action{Intent::AdjustUp};
+        case SpecialKey::Home:     return Action{Intent::MoveFirst};
+        case SpecialKey::End:      return Action{Intent::MoveLast};
+        case SpecialKey::PageUp:   return Action{Intent::MovePageUp};
+        case SpecialKey::PageDown: return Action{Intent::MovePageDown};
         default: break;
     }
     if (ch && ch->ctrl) {
@@ -121,6 +125,20 @@ Applied apply(Form& f, Action a) {
             if (f.editing()) (void)escape(f);
             move(f, a.intent == Intent::MovePrev ? -1 : +1);
             break;
+
+        case Intent::MoveFirst: if (f.editing()) (void)escape(f);
+                                 move_edge(f, /*last=*/false); break;
+        case Intent::MoveLast:  if (f.editing()) (void)escape(f);
+                                 move_edge(f, /*last=*/true);  break;
+        // Viewport-sized strides. The form does not know the viewport (a
+        // widget concern), so a fixed stride matching the default
+        // panel_viewport_h keeps PgUp/PgDn meaningful without a layout
+        // back-channel; move_page CLAMPS at the edges (no wrap) and skips
+        // headers.
+        case Intent::MovePageUp:   if (f.editing()) (void)escape(f);
+                                   move_page(f, -10); break;
+        case Intent::MovePageDown: if (f.editing()) (void)escape(f);
+                                   move_page(f, +10); break;
 
         case Intent::AdjustDown:
         case Intent::AdjustUp:

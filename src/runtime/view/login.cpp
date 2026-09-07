@@ -431,11 +431,16 @@ Element panel_custom_host(const login::CustomHostInput& s) {
 //   trailing"press d again to confirm" while armed — SECONDARY, so the
 //           label survives narrow terminals
 //   + Add another account… rides as the last item, dim until selected
-Element panel_account_list(const login::AccountList& s) {
+Element panel_account_list(const login::AccountList& s,
+                           maya::ScrollState* scroll) {
     maya::Panel::Config cfg;
     cfg.title     = " " + s.provider_label + " accounts ";
     cfg.accent    = accent;
     cfg.min_width = 48;
+    // Scroll like every list panel: many accounts on one provider must
+    // window inside the modal, not grow it past the terminal edge.
+    cfg.scroll     = scroll;
+    cfg.viewport_h = 14;
     const int n = static_cast<int>(s.rows.size());
     cfg.selected  = std::min(s.cursor, n);   // last item = add-new
 
@@ -485,7 +490,7 @@ Element panel_account_list(const login::AccountList& s) {
 Element login_modal(const Model& m) {
     if (!login::is_open(m.ui.login)) return nothing();
 
-    Element body = std::visit([](const auto& s) -> Element {
+    Element body = std::visit([&m](const auto& s) -> Element {
         using T = std::decay_t<decltype(s)>;
         if constexpr (std::same_as<T, login::Closed>) {
             return nothing();
@@ -506,7 +511,7 @@ Element login_modal(const Model& m) {
         } else if constexpr (std::same_as<T, login::HostProbing>) {
             return panel_host_probing(s);
         } else if constexpr (std::same_as<T, login::AccountList>) {
-            return panel_account_list(s);
+            return panel_account_list(s, &m.ui.account_list_scroll);
         } else if constexpr (std::same_as<T, login::Failed>) {
             return panel_picking("", true, s.message);
         }

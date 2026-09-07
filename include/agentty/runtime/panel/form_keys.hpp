@@ -34,6 +34,8 @@ enum class Intent : std::uint8_t {
     None,
     // Browsing
     MovePrev, MoveNext,
+    MoveFirst, MoveLast,       // Home/End — jump to the first/last field
+    MovePageUp, MovePageDown,  // PgUp/PgDn — viewport-sized strides
     AdjustDown, AdjustUp,      // ←/→ on a Toggle/Choice/Number/Slider
     Activate,                  // Enter
     ResetField,                // x
