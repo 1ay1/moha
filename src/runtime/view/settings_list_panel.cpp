@@ -19,7 +19,9 @@
 #include "agentty/runtime/panel/settings/items.hpp"
 
 #include <maya/widget/panel.hpp>
+#include <maya/widget/panel/caret.hpp>
 
+#include <algorithm>
 #include <string>
 
 namespace pn = agentty::ui::panel;
@@ -101,19 +103,27 @@ Element settings_list_picker(const Model& m) {
     cfg.scroll     = nullptr;
     cfg.selected   = adding ? -1 : o->index;
 
-    // ── Header ───────────────────────────────────────────────────
+    // ── Header ─────────────────────────────────────────────────
     if (adding) {
         // The live add prompt. Make it visually own the pane: a bright
-        // prompt line with a solid block cursor, the format hint above it
-        // dim. cfg.selected == -1 already removes the list highlight, so
-        // the eye lands here.
+        // prompt line with a REAL caret, the format hint above it dim.
+        // cfg.selected == -1 already removes the list highlight, so the
+        // eye lands here.
+        //
+        // with_caret, not a glyph appended at the end: the caret renders
+        // AT o->cursor (←/→ work mid-string), and a long pasted command
+        // line windows under it (‹/› markers) instead of walking off the
+        // right edge — same machinery as every panel text field.
         cfg.header.push_back(h(
             text("  "), text(add_prompt(o->concern), fg_dim(muted))
         ).build());
         cfg.header.push_back(h(
             text("  \xe2\x9c\x8e  ", fg_of(highlight)),         // ✎ pencil
-            text(o->input.empty() ? std::string{} : o->input, fg_bold(fg)),
-            text("\xe2\x96\x88", fg_of(highlight))              // █ solid cursor
+            text(maya::panel::detail::with_caret(
+                     o->input,
+                     static_cast<std::size_t>(std::max(0, o->cursor)),
+                     panel_detail::panel_terminal_cols() - 12),
+                 fg_bold(fg))
         ).build());
     } else {
         cfg.header.push_back(h(
@@ -175,14 +185,16 @@ Element settings_list_picker(const Model& m) {
         cfg.items.push_back(std::move(row));
     }
 
-    // ── Footer ───────────────────────────────────────────────────
-    cfg.footer.push_back(text(""));
+    // ── Footer ─────────────────────────────────────────────────
     if (adding) {
-        cfg.footer.push_back(h(
-            text("  \xe2\x86\xb5 ", fg_of(highlight)), text("create   ", fg_dim(muted)),
-            text("esc ", fg_of(fg)), text("cancel", fg_dim(muted))
-        ).build());
+        // Mode hint in the note line — the same slot the panel's derived
+        // editing hint uses, so the add prompt reads like every other
+        // editing mode (armed-delete gets the same treatment below).
+        cfg.note = "typing \xc2\xb7 \xe2\x86\xb5 create \xc2\xb7 esc cancel";
+    } else if (!o->confirm_remove.empty()) {
+        cfg.note = "d confirm remove \xc2\xb7 any other key cancels";
     } else {
+        cfg.footer.push_back(text(""));
         // Action hint for the focused row, then keys (+ `a add`).
         std::string act_hint;
         if (o->index >= 0 && o->index < static_cast<int>(rows.size()))

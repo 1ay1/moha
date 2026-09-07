@@ -73,6 +73,11 @@ Element thread_list(const Model& m) {
                 + std::to_string(m.d.threads.size()),
             fg_dim(muted)));
     }
+    // Armed delete is a MODE: hint it in the note line, exactly like the
+    // account list and the settings add-prompt, so every two-step confirm
+    // in the app reads the same way.
+    if (!picker->confirm_remove.empty())
+        cfg.note = "d confirm delete \xc2\xb7 any other key cancels";
     cfg.footer.push_back(key_hints({
         {"\xe2\x86\x91\xe2\x86\x93", "move", 5},        // ↑↓
         {"PgUp/PgDn", "page", 2},
