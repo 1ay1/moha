@@ -147,29 +147,49 @@ Applied apply(Form& f, Action a) {
         case Intent::Save:  out.save  = true; break;
         case Intent::Close: out.close = escape(f); break;
 
+        // ── Editing-only intents ──────────────────────────────────
+        // Guarded by the TRUE focus, not the caller's belief. subscribe.cpp
+        // translates a whole input batch against ONE FormFocus snapshot
+        // (rebuilt only after the batch drains), so a paste of "abc\ndef"
+        // translates d/e/f as Insert even though the \n already left the
+        // field — without this guard those characters mutate a row the
+        // user is no longer editing. The reducer is the only layer that
+        // sees the real mode; intent from a stale snapshot dies here.
         case Intent::Insert:
-            if (row && row->editable()) { insert(row->value, a.ch); out.changed = true; }
+            if (f.editing() && row && row->editable()) {
+                insert(row->value, a.ch);
+                out.changed = true;
+            }
             break;
         case Intent::Backspace:
-            if (row && row->editable()) { backspace(row->value); out.changed = true; }
+            if (f.editing() && row && row->editable()) {
+                backspace(row->value);
+                out.changed = true;
+            }
             break;
         case Intent::DeleteForward:
-            if (row && row->editable()) { delete_forward(row->value); out.changed = true; }
+            if (f.editing() && row && row->editable()) {
+                delete_forward(row->value);
+                out.changed = true;
+            }
             break;
         case Intent::CaretLeft:
-            if (row) move_cursor(row->value, -1);
+            if (f.editing() && row) move_cursor(row->value, -1);
             break;
         case Intent::CaretRight:
-            if (row) move_cursor(row->value, +1);
+            if (f.editing() && row) move_cursor(row->value, +1);
             break;
         case Intent::CaretHome:
-            if (row) cursor_home(row->value);
+            if (f.editing() && row) cursor_home(row->value);
             break;
         case Intent::CaretEnd:
-            if (row) cursor_end(row->value);
+            if (f.editing() && row) cursor_end(row->value);
             break;
         case Intent::ClearField:
-            if (row && row->editable()) { clear(row->value); out.changed = true; }
+            if (f.editing() && row && row->editable()) {
+                clear(row->value);
+                out.changed = true;
+            }
             break;
         case Intent::LeaveField:
             (void)escape(f);

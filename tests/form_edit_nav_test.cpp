@@ -178,6 +178,70 @@ int main() {
         render_once(m, "rag after down");
     }
 
+    // ── Stale-snapshot batch: subscribe.cpp translates a whole input
+    // batch (a paste) against ONE FormFocus snapshot. Simulate the tail
+    // of "x\nzz": the Enter leaves the field, but the following chars
+    // still arrive as Insert intents. They must NOT mutate the row. ──
+    {
+        auto* r = m.ui.panel.get<pn::Rag>();
+        if (!r) { std::fprintf(stderr, "no rag pane for race test\n"); return 1; }
+        // Walk until the cursor is on a text-like row (previous sections
+        // left it wherever their walk ended — possibly a Toggle, whose
+        // Enter would FLIP it instead of editing).
+        for (int i = 0; i < 20; ++i) {
+            const auto* fr = r->embed.form.focused();
+            if (fr && fr->is_text_like() && !fr->locked) break;
+            if (auto down = form::keys::translate(r->embed.form, maya::KeyEvent{K::Down})) {
+                m = step(std::move(m), Msg{RagEmbedKey{*down}}, "race: seek text row");
+                r = m.ui.panel.get<pn::Rag>();
+            }
+        }
+        // Start editing the focused text row, insert 'x', then Enter (leave).
+        if (auto enter = form::keys::translate(r->embed.form, maya::KeyEvent{K::Enter}))
+            m = step(std::move(m), Msg{RagEmbedKey{*enter}}, "race: start edit");
+        r = m.ui.panel.get<pn::Rag>();
+        // Snapshot taken HERE (editing=true) — like subscribe.cpp's capture.
+        const bool snap_editing  = r->embed.form.editing();
+        const bool snap_choosing = r->embed.form.choosing();
+        auto tr = [&](maya::KeyEvent ev) {
+            return form::keys::translate(snap_editing, snap_choosing, ev);
+        };
+        auto text_of = [](const agentty::form::Field* fld) -> std::string {
+            if (!fld) return {};
+            if (const auto* t = std::get_if<agentty::form::field::Text>(&fld->value))
+                return t->value;
+            if (const auto* p = std::get_if<agentty::form::field::Path>(&fld->value))
+                return p->value;
+            return {};
+        };
+        if (auto a = tr(maya::KeyEvent{maya::CharKey{U'x'}}))
+            m = step(std::move(m), Msg{RagEmbedKey{*a}}, "race: insert x");
+        if (auto a = tr(maya::KeyEvent{K::Enter}))
+            m = step(std::move(m), Msg{RagEmbedKey{*a}}, "race: enter (leaves)");
+        // Value AFTER the edit ended:
+        r = m.ui.panel.get<pn::Rag>();
+        const auto val_after_leave = text_of(r->embed.form.focused());
+        // Sanity: the in-edit insert must have LANDED, or this test is
+        // checking nothing. (Catches the probe reading the wrong variant.)
+        if (val_after_leave.find('x') == std::string::npos) {
+            std::fprintf(stderr, "FAIL: setup insert never landed (val='%s')\n",
+                         val_after_leave.c_str());
+            return 1;
+        }
+        // The paste tail: still translated with the STALE snapshot.
+        if (auto a = tr(maya::KeyEvent{maya::CharKey{U'z'}}))
+            m = step(std::move(m), Msg{RagEmbedKey{*a}}, "race: stale insert z");
+        r = m.ui.panel.get<pn::Rag>();
+        const auto val_now = text_of(r->embed.form.focused());
+        std::fprintf(stderr, "race: '%s' -> '%s' (editing=%d)\n",
+                     val_after_leave.c_str(), val_now.c_str(),
+                     r->embed.form.editing() ? 1 : 0);
+        if (val_now != val_after_leave) {
+            std::fprintf(stderr, "FAIL: stale Insert mutated a left field\n");
+            return 1;
+        }
+    }
+
     std::fprintf(stderr, "ALL OK\n");
     return 0;
 }
