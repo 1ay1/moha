@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <variant>
 
-#include "agentty/runtime/settings_categories.hpp"   // settings::Category
+#include "agentty/runtime/panel/settings/categories.hpp"   // settings::Category
 
 namespace agentty {
 

@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "agentty/rag/embed_backend.hpp"
-#include "agentty/runtime/form.hpp"
+#include "agentty/runtime/panel/form.hpp"
 #include "agentty/runtime/settings_registry.hpp"
 #include "agentty/store/store.hpp"   // store::RagMode
 

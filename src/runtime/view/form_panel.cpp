@@ -10,7 +10,7 @@
 // never as its value. maya::panel::Secret has no field that could hold the
 // plaintext, so the credential does not cross the rendering boundary at all.
 
-#include "agentty/runtime/view/form_view.hpp"
+#include "agentty/runtime/view/form_panel.hpp"
 
 #include <algorithm>
 #include <filesystem>

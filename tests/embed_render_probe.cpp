@@ -12,10 +12,10 @@
 #include <maya/app/inline.hpp>
 #include <maya/widget/panel.hpp>
 
-#include "agentty/runtime/form_keys.hpp"
-#include "agentty/runtime/rag_settings.hpp"
-#include "agentty/runtime/smart_form.hpp"
-#include "agentty/runtime/view/form_view.hpp"
+#include "agentty/runtime/panel/form_keys.hpp"
+#include "agentty/runtime/panel/rag.hpp"
+#include "agentty/runtime/panel/smart_form.hpp"
+#include "agentty/runtime/view/form_panel.hpp"
 #include "agentty/runtime/view/palette.hpp"
 
 int main(int argc, char** argv) {

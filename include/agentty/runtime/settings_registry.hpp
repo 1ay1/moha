@@ -41,7 +41,7 @@
 #include <variant>
 
 #include "agentty/domain/smart_tuning.hpp"   // shipped defaults + ranges
-#include "agentty/runtime/form.hpp"           // Builder (add_rows)
+#include "agentty/runtime/panel/form.hpp"           // Builder (add_rows)
 #include "agentty/store/store.hpp"
 
 namespace agentty::settings::registry {

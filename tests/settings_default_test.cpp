@@ -14,7 +14,7 @@
 #include "agentty/io/persistence.hpp"
 #include "agentty/store/store.hpp"
 #include "agentty/domain/profile.hpp"
-#include "agentty/runtime/settings_items.hpp"
+#include "agentty/runtime/panel/settings/items.hpp"
 
 #include <cstdint>
 #include <cstdlib>

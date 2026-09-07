@@ -11,7 +11,7 @@
 
 #include "agtest.hpp"
 
-#include "agentty/runtime/command_palette.hpp"
+#include "agentty/runtime/panel/palette.hpp"
 
 #include <array>
 #include <string_view>

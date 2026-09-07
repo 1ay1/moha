@@ -44,7 +44,7 @@
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/view/view.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 using agentty::Model;
 using agentty::Message;
@@ -511,11 +511,11 @@ static void run_walk(std::uint64_t seed, int width, int term_h) {
                 break;
             }
             case 2: {   // picker open → frames → close → frames
-                m.ui.overlay = ov::FusedPicker{{0, ""}};
+                m.ui.panel = pn::FusedPicker{{0, ""}};
                 op("picker open");
                 h.frame(m, "popen" + st);
                 if (rng.chance(50)) h.frame(m, "popen2-" + st);
-                m.ui.overlay.close<ov::FusedPicker>();
+                m.ui.panel.close<pn::FusedPicker>();
                 op("picker close");
                 h.frame(m, "pclose" + st);
                 break;
@@ -600,10 +600,10 @@ static void run_walk(std::uint64_t seed, int width, int term_h) {
                 break;
             }
             case 2: {   // picker over a live stream
-                m.ui.overlay = ov::FusedPicker{{0, ""}};
+                m.ui.panel = pn::FusedPicker{{0, ""}};
                 op("picker open (streaming)");
                 h.frame(m, "spopen" + st);
-                m.ui.overlay.close<ov::FusedPicker>();
+                m.ui.panel.close<pn::FusedPicker>();
                 op("picker close (streaming)");
                 h.frame(m, "spclose" + st);
                 break;

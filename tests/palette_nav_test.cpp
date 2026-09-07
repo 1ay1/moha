@@ -15,15 +15,15 @@
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/model.hpp"
-#include "agentty/runtime/view/pickers.hpp"
-#include "agentty/runtime/command_palette.hpp"
+#include "agentty/runtime/view/panels.hpp"
+#include "agentty/runtime/panel/palette.hpp"
 
 #include <maya/app/inline.hpp>
 
 #include <string>
 #include <vector>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 using namespace agentty;
 
 namespace {
@@ -91,7 +91,7 @@ TEST_CASE("palette nav: the cursor never lands on a section header") {
     install_stub_deps();
 
     Model m;
-    m.ui.overlay = ov::CommandPalette{{}};
+    m.ui.panel = pn::CommandPalette{{}};
     m.d.pending_changes.push_back(FileChange{});
 
     // Walk the whole list. Every stop must be a real, runnable row — the
@@ -115,7 +115,7 @@ TEST_CASE("palette nav: moving up also skips headers") {
     install_stub_deps();
 
     Model m;
-    m.ui.overlay = ov::CommandPalette{{}};
+    m.ui.panel = pn::CommandPalette{{}};
     m.d.pending_changes.push_back(FileChange{});
 
     const int rows = static_cast<int>(filtered_commands("").size());
@@ -139,8 +139,8 @@ TEST_CASE("palette nav: the cursor index addresses the header-free list") {
     install_stub_deps();
 
     Model m;
-    m.ui.overlay = ov::CommandPalette{{}};
-    auto* o = m.ui.overlay.get<ov::CommandPalette>();
+    m.ui.panel = pn::CommandPalette{{}};
+    auto* o = m.ui.panel.get<pn::CommandPalette>();
     REQUIRE(o != nullptr);
 
     const auto cmds = filtered_commands("");

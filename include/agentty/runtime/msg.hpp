@@ -37,9 +37,9 @@
 #include "agentty/provider/chatgpt/codex_oauth.hpp"
 #include "agentty/provider/copilot/copilot_oauth.hpp"
 #include "agentty/provider/kimi/kimi_oauth.hpp"
-#include "agentty/runtime/fork_picker.hpp"
-#include "agentty/runtime/form_keys.hpp"
-#include "agentty/runtime/settings_categories.hpp"
+#include "agentty/runtime/panel/fork.hpp"
+#include "agentty/runtime/panel/form_keys.hpp"
+#include "agentty/runtime/panel/settings/categories.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/tool/registry.hpp"
 
@@ -777,7 +777,7 @@ struct RagSettingsAdvanced {};
 // Which embedder retrieval uses, configured entirely in the TUI.
 //
 // There is ONE key message, not fifteen. Navigation, editing and the dropdown
-// are owned by the shared form layer (runtime/form_keys.hpp), which turns a
+// are owned by the shared form layer (runtime/panel/form_keys.hpp), which turns a
 // KeyEvent into a pane-agnostic intent; the reducer applies it and handles
 // only what is genuinely embeddings-specific. A pane that spelled out
 // Char/Backspace/CursorLeft/… messages would be re-deriving that key map, and

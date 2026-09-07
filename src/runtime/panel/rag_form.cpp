@@ -13,7 +13,7 @@
 // glyph — comes from the shared form layer and maya::Form. This file holds
 // only the knowledge that is genuinely about embeddings.
 
-#include "agentty/runtime/rag_settings.hpp"
+#include "agentty/runtime/panel/rag.hpp"
 
 #include <algorithm>
 

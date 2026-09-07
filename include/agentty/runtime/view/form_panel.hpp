@@ -13,7 +13,7 @@
 #include <maya/style/color.hpp>
 #include <maya/widget/panel.hpp>
 
-#include "agentty/runtime/form.hpp"
+#include "agentty/runtime/panel/form.hpp"
 
 namespace agentty::ui {
 

@@ -11,31 +11,31 @@
 #include <maya/widget/overlay.hpp>
 
 #include "agentty/runtime/login.hpp"
-#include "agentty/runtime/overlay.hpp"
+#include "agentty/runtime/panel/top.hpp"
 #include "agentty/runtime/view/changes_strip.hpp"
 #include "agentty/runtime/view/composer.hpp"
 #include "agentty/runtime/view/diff_review.hpp"
 #include "agentty/runtime/view/login.hpp"
-#include "agentty/runtime/view/pickers.hpp"
+#include "agentty/runtime/view/panels.hpp"
 #include "agentty/runtime/view/status_bar/status_bar.hpp"
 #include "agentty/runtime/view/thread/thread.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::ui {
 
 namespace {
 
 // Render the active overlay, if any. WHICH overlay is active is decided by
-// overlay::top() — the SAME function subscribe.cpp routes keys through, so
+// panel::top() — the SAME function subscribe.cpp routes keys through, so
 // what renders and what owns the keyboard cannot diverge (they used to be
 // two hand-ordered if-chains that DID disagree on priority). This function
 // only maps Kind → view; it holds no ordering knowledge of its own.
 // Exhaustive on Kind (-Wswitch): a new overlay without a view arm is a
 // compile warning, not an invisible modal.
 std::optional<maya::Element> pick_overlay(const Model& m) {
-    using OK = overlay::Kind;
-    switch (overlay::top(m)) {
+    using OK = panel::Kind;
+    switch (panel::top(m)) {
         case OK::Login:          return login_modal(m);
         case OK::Permission:     return std::nullopt;   // renders inline, not as an overlay
         case OK::CommandPalette: return command_palette(m);

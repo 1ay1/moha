@@ -10,7 +10,7 @@
 // list before opening the target, so Esc lost your place entirely).
 //
 // Each pane now CARRIES a snapshot of the panel it was opened over
-// (ov::From), so "return to the wrong place" stops being representable — and
+// (pn::From), so "return to the wrong place" stops being representable — and
 // the return is the FULL state, query and cursor, not a reconstruction.
 // These tests walk each entry point in and press Esc, through the real
 // app::update reducer.
@@ -19,15 +19,15 @@
 
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/app/update.hpp"
-#include "agentty/runtime/form_keys.hpp"
-#include "agentty/runtime/settings_categories.hpp"
-#include "agentty/runtime/settings_items.hpp"   // items_for, Action
+#include "agentty/runtime/panel/form_keys.hpp"
+#include "agentty/runtime/panel/settings/categories.hpp"
+#include "agentty/runtime/panel/settings/items.hpp"   // items_for, Action
 #include "agentty/runtime/view/palette.hpp"   // ui::palette_context
 
 #include <string>
 #include <vector>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 using namespace agentty;
 
@@ -58,11 +58,11 @@ void install_stub_deps() {
 // pane's async plumbing, not of the navigation being tested.
 Model press_escape(Model m) {
     const auto esc = form::keys::Action{form::keys::Intent::Close};
-    if (m.ui.overlay.is<ov::SmartMode>())
+    if (m.ui.panel.is<pn::SmartMode>())
         return app::update(std::move(m), Msg{SmartModeKey{esc}}).first;
-    if (m.ui.overlay.is<ov::RagSettings>()) {
+    if (m.ui.panel.is<pn::RagSettings>()) {
         m = app::update(std::move(m), Msg{RagEmbedKey{esc}}).first;
-        if (m.ui.overlay.is<ov::RagSettings>())
+        if (m.ui.panel.is<pn::RagSettings>())
             m = app::update(std::move(m), Msg{RagEmbedClose{}}).first;
         return m;
     }
@@ -95,10 +95,10 @@ TEST_CASE("settings nav: ^S then Esc closes to the thread") {
     install_stub_deps();
     Model m;
     m = app::update(std::move(m), Msg{OpenSmartMode{}}).first;
-    REQUIRE(m.ui.overlay.is<ov::SmartMode>());
+    REQUIRE(m.ui.panel.is<pn::SmartMode>());
 
     m = press_escape(std::move(m));
-    CHECK(m.ui.overlay.is<ov::None>());
+    CHECK(m.ui.panel.is<pn::None>());
 }
 
 TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
@@ -108,11 +108,11 @@ TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
     install_stub_deps();
     {
         Model m = run_from_palette(Model{}, "smart mode", Command::SmartMode);
-        REQUIRE(m.ui.overlay.is<ov::SmartMode>());
+        REQUIRE(m.ui.panel.is<pn::SmartMode>());
 
         m = press_escape(std::move(m));
-        REQUIRE(m.ui.overlay.is<ov::CommandPalette>());
-        const auto* p = m.ui.overlay.get<ov::CommandPalette>();
+        REQUIRE(m.ui.panel.is<pn::CommandPalette>());
+        const auto* p = m.ui.panel.get<pn::CommandPalette>();
         CHECK(p->query == "smart mode");
         // The cursor must still land on the command that was run — resolved
         // through the SAME filtered list the view renders, against the LIVE
@@ -127,11 +127,11 @@ TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
     }
     {
         Model m = run_from_palette(Model{}, "retrieval", Command::OpenRagSettings);
-        REQUIRE(m.ui.overlay.is<ov::RagSettings>());
+        REQUIRE(m.ui.panel.is<pn::RagSettings>());
 
         m = press_escape(std::move(m));
-        REQUIRE(m.ui.overlay.is<ov::CommandPalette>());
-        const auto* p = m.ui.overlay.get<ov::CommandPalette>();
+        REQUIRE(m.ui.panel.is<pn::CommandPalette>());
+        const auto* p = m.ui.panel.get<pn::CommandPalette>();
         CHECK(p->query == "retrieval");
         const auto matches = filtered_commands(p->query, ui::palette_context(m));
         REQUIRE(!matches.empty());
@@ -153,11 +153,11 @@ TEST_CASE("settings nav: settings list → pane → Esc returns to the list") {
         Model m;
         m = app::update(std::move(m),
                         Msg{OpenSettingsList{settings::Category::General}}).first;
-        REQUIRE(m.ui.overlay.is<ov::SettingsList>());
+        REQUIRE(m.ui.panel.is<pn::SettingsList>());
 
         // Walk to the row and activate it, rather than reaching into the
         // reducer — this is the path a user takes.
-        auto* o = m.ui.overlay.get<ov::SettingsList>();
+        auto* o = m.ui.panel.get<pn::SettingsList>();
         const auto rows = settings::items_for(m, o->concern);
         int idx = -1;
         for (int i = 0; i < static_cast<int>(rows.size()); ++i)
@@ -172,28 +172,28 @@ TEST_CASE("settings nav: settings list → pane → Esc returns to the list") {
         // A row that is not the first, or "remembered the row" and "reset to
         // the top" would be the same assertion.
         REQUIRE(idx > 0);
-        m.ui.overlay.get<ov::SettingsList>()->index = idx;
+        m.ui.panel.get<pn::SettingsList>()->index = idx;
         m = app::update(std::move(m), Msg{SettingsListActivate{}}).first;
         return std::pair{std::move(m), idx};
     };
 
     {
         auto [m, idx] = descend(Command::SmartMode);
-        REQUIRE(m.ui.overlay.is<ov::SmartMode>());
+        REQUIRE(m.ui.panel.is<pn::SmartMode>());
         m = press_escape(std::move(m));
-        REQUIRE(m.ui.overlay.is<ov::SettingsList>());
-        CHECK(m.ui.overlay.get<ov::SettingsList>()->concern
+        REQUIRE(m.ui.panel.is<pn::SettingsList>());
+        CHECK(m.ui.panel.get<pn::SettingsList>()->concern
               == settings::Category::General);
-        CHECK(m.ui.overlay.get<ov::SettingsList>()->index == idx);
+        CHECK(m.ui.panel.get<pn::SettingsList>()->index == idx);
     }
     {
         auto [m, idx] = descend(Command::OpenRagSettings);
-        REQUIRE(m.ui.overlay.is<ov::RagSettings>());
+        REQUIRE(m.ui.panel.is<pn::RagSettings>());
         m = press_escape(std::move(m));
-        REQUIRE(m.ui.overlay.is<ov::SettingsList>());
-        CHECK(m.ui.overlay.get<ov::SettingsList>()->concern
+        REQUIRE(m.ui.panel.is<pn::SettingsList>());
+        CHECK(m.ui.panel.get<pn::SettingsList>()->concern
               == settings::Category::General);
-        CHECK(m.ui.overlay.get<ov::SettingsList>()->index == idx);
+        CHECK(m.ui.panel.get<pn::SettingsList>()->index == idx);
     }
 }
 
@@ -204,19 +204,19 @@ TEST_CASE("settings nav: the origin survives a slot round trip") {
     // believing it was opened by ^S — and the next Esc drops to the thread.
     install_stub_deps();
     Model m = run_from_palette(Model{}, "smart mode", Command::SmartMode);
-    REQUIRE(m.ui.overlay.is<ov::SmartMode>());
+    REQUIRE(m.ui.panel.is<pn::SmartMode>());
 
     // Descend into the picker, then back out without choosing.
     m.ui.smart_assign_slot     = smart::ModelRole::Strategic;
-    m.ui.smart_assign_advanced = m.ui.overlay.get<ov::SmartMode>()->advanced;
-    m.ui.smart_assign_from     = m.ui.overlay.get<ov::SmartMode>()->from;
-    m.ui.overlay.close<ov::SmartMode>();
+    m.ui.smart_assign_advanced = m.ui.panel.get<pn::SmartMode>()->advanced;
+    m.ui.smart_assign_from     = m.ui.panel.get<pn::SmartMode>()->from;
+    m.ui.panel.close<pn::SmartMode>();
     m = app::update(std::move(m), Msg{OpenFusedPicker{}}).first;
-    REQUIRE(m.ui.overlay.is<ov::FusedPicker>());
+    REQUIRE(m.ui.panel.is<pn::FusedPicker>());
     m = app::update(std::move(m), Msg{CloseFusedPicker{}}).first;
 
     // Back on the pane — and Esc must still know it came from the palette.
-    REQUIRE(m.ui.overlay.is<ov::SmartMode>());
+    REQUIRE(m.ui.panel.is<pn::SmartMode>());
     m = press_escape(std::move(m));
-    CHECK(m.ui.overlay.is<ov::CommandPalette>());
+    CHECK(m.ui.panel.is<pn::CommandPalette>());
 }

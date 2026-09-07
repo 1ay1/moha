@@ -8,7 +8,7 @@
 // scrollbar glyph + thumb math, keep-selection-in-view auto-scroll. agentty
 // supplies only the row-level Elements and the typed cursor index.
 
-#include "pickers_prologue.hpp"
+#include "panels_prologue.hpp"
 
 namespace agentty::ui {
 
@@ -19,7 +19,7 @@ namespace agentty::ui {
 // (recent / all providers / sign in) render as is_header dividers. Selecting
 // switches provider+model atomically; a dim "sign in to X" row routes to login.
 Element fused_picker(const Model& m) {
-    auto* picker = m.ui.overlay.get<ov::FusedPicker>();
+    auto* picker = m.ui.panel.get<pn::FusedPicker>();
     if (!picker) return text("");
 
     // Read the reducer-maintained cache — never rebuild per frame.
@@ -383,7 +383,7 @@ Element fused_picker(const Model& m) {
 // (active_provider_id + reasoning_effort_footer live in pickers_common.hpp.)
 
 Element provider_picker(const Model& m) {
-    auto* picker = m.ui.overlay.get<ov::ProviderPicker>();
+    auto* picker = m.ui.panel.get<pn::ProviderPicker>();
     if (!picker) return nothing();
 
     Panel::Config cfg;

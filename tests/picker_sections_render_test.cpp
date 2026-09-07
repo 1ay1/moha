@@ -11,7 +11,7 @@
 
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/fused_models.hpp"
-#include "agentty/runtime/view/pickers.hpp"
+#include "agentty/runtime/view/panels.hpp"
 
 #include <maya/render/canvas.hpp>
 #include <maya/render/renderer.hpp>
@@ -21,7 +21,7 @@
 #include <vector>
 
 using namespace agentty;
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace {
 
@@ -84,7 +84,7 @@ Model picker_model(const std::vector<ProviderCatalog>& cats,
     in.catalogs = &cats;
     in.active   = active;
     m.d.fused_rows = ui::build_fused_rows(in);
-    m.ui.overlay = ov::FusedPicker{};
+    m.ui.panel = pn::FusedPicker{};
     return m;
 }
 
@@ -152,7 +152,7 @@ TEST_CASE("picker: the active model leads, and its row is on screen") {
     in.recents  = &recents;
     in.active   = ModelRef{"anthropic", "claude-opus-4-5"};
     m.d.fused_rows = ui::build_fused_rows(in);
-    m.ui.overlay = ov::FusedPicker{};
+    m.ui.panel = pn::FusedPicker{};
 
     const std::string screen = render_picker(m);
     INFO(screen);

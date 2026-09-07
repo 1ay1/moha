@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "agentty/runtime/settings_categories.hpp"
+#include "agentty/runtime/panel/settings/categories.hpp"
 
 namespace agentty { struct Model; }
 

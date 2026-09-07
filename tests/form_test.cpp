@@ -15,9 +15,9 @@
 
 #include <maya/app/inline.hpp>
 
-#include "agentty/runtime/form.hpp"
-#include "agentty/runtime/form_keys.hpp"
-#include "agentty/runtime/view/form_view.hpp"
+#include "agentty/runtime/panel/form.hpp"
+#include "agentty/runtime/panel/form_keys.hpp"
+#include "agentty/runtime/view/form_panel.hpp"
 
 using namespace agentty::form;
 namespace keys = agentty::form::keys;

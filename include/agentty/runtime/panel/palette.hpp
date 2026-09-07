@@ -226,7 +226,7 @@ filtered_commands(std::string_view query, bool update_available = true) {
 }
 
 // Sum-type state, same shape as the other picker variants in
-// `runtime/picker.hpp`. The query buffer + selected index live ONLY
+// `runtime/panel/common.hpp`. The query buffer + selected index live ONLY
 // inside the Open alternative — they cannot exist while the palette
 // is closed (used to be a bool + two fields where the bool gated their
 // validity by convention; now the type system enforces it).

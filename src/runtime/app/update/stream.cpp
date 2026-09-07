@@ -29,7 +29,7 @@
 #include "agentty/provider/selection.hpp"
 #include "agentty/runtime/app/cmd_factory.hpp"
 #include "agentty/runtime/app/deps.hpp"
-#include "agentty/runtime/code_block_picker.hpp"
+#include "agentty/runtime/panel/code_blocks.hpp"
 #include "agentty/runtime/mem.hpp"
 #include "agentty/runtime/view/cache.hpp"
 #include "agentty/runtime/view/helpers.hpp"

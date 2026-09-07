@@ -12,10 +12,10 @@
 
 #include <maya/core/overload.hpp>
 
-#include "agentty/runtime/picker.hpp"
+#include "agentty/runtime/panel/common.hpp"
 #include "agentty/runtime/app/deps.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::app::detail {
 
@@ -81,7 +81,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
     // confirming second ^X — a stray first press must not leave a live
     // "next ^X nukes everything" trap behind a j/k or scroll.
     if (!std::holds_alternative<RejectAllChanges>(dm))
-        if (auto* c = m.ui.overlay.get<ov::DiffReview>())
+        if (auto* c = m.ui.panel.get<pn::DiffReview>())
             c->confirm_reject_all = false;
 
     return std::visit(overload{
@@ -94,7 +94,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
                 auto cmd = set_status_toast(m, "no pending changes to review");
                 return {std::move(m), std::move(cmd)};
             }
-            m.ui.overlay = ov::DiffReview{{0, 0}};
+            m.ui.panel = pn::DiffReview{{0, 0}};
             return done(std::move(m));
         },
         [&](CloseDiffReview) -> Step {
@@ -111,7 +111,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
                 persist(fc);
             }
             m.d.pending_changes.clear();
-            m.ui.overlay.close<ov::DiffReview>();
+            m.ui.panel.close<pn::DiffReview>();
             auto cmd = set_status_toast(m,
                 reverted == 0
                     ? "review closed — all " + std::to_string(kept)
@@ -121,7 +121,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
             return {std::move(m), std::move(cmd)};
         },
         [&](DiffReviewMove& e) -> Step {
-            auto* c = m.ui.overlay.get<ov::DiffReview>();
+            auto* c = m.ui.panel.get<pn::DiffReview>();
             auto* fc = clamp_cursor(c);
             if (!fc) return done(std::move(m));
             int sz = static_cast<int>(fc->hunks.size());
@@ -131,7 +131,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
             return done(std::move(m));
         },
         [&](DiffReviewScroll& e) -> Step {
-            auto* c = m.ui.overlay.get<ov::DiffReview>();
+            auto* c = m.ui.panel.get<pn::DiffReview>();
             auto* fc = clamp_cursor(c);
             if (!fc || fc->hunks.empty()) return done(std::move(m));
             const auto& hk =
@@ -146,7 +146,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
             return done(std::move(m));
         },
         [&](DiffReviewNextFile) -> Step {
-            auto* c = m.ui.overlay.get<ov::DiffReview>();
+            auto* c = m.ui.panel.get<pn::DiffReview>();
             if (!c || m.d.pending_changes.empty()) return done(std::move(m));
             int sz = static_cast<int>(m.d.pending_changes.size());
             c->file_index = (c->file_index + 1) % sz;
@@ -155,7 +155,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
             return done(std::move(m));
         },
         [&](DiffReviewPrevFile) -> Step {
-            auto* c = m.ui.overlay.get<ov::DiffReview>();
+            auto* c = m.ui.panel.get<pn::DiffReview>();
             if (!c || m.d.pending_changes.empty()) return done(std::move(m));
             int sz = static_cast<int>(m.d.pending_changes.size());
             c->file_index = (c->file_index - 1 + sz) % sz;
@@ -164,7 +164,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
             return done(std::move(m));
         },
         [&](AcceptHunk) -> Step {
-            auto* c = m.ui.overlay.get<ov::DiffReview>();
+            auto* c = m.ui.panel.get<pn::DiffReview>();
             if (auto* fc = clamp_cursor(c)) {
                 if (!fc->hunks.empty())
                     fc->hunks[static_cast<std::size_t>(c->hunk_index)].status =
@@ -174,7 +174,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
             return done(std::move(m));
         },
         [&](RejectHunk) -> Step {
-            auto* c = m.ui.overlay.get<ov::DiffReview>();
+            auto* c = m.ui.panel.get<pn::DiffReview>();
             if (auto* fc = clamp_cursor(c)) {
                 if (!fc->hunks.empty())
                     fc->hunks[static_cast<std::size_t>(c->hunk_index)].status =
@@ -193,7 +193,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
             for (auto& fc : m.d.pending_changes)
                 for (auto& h : fc.hunks) { h.status = Hunk::Status::Accepted; ++hunks; }
             m.d.pending_changes.clear();
-            m.ui.overlay.close<ov::DiffReview>();
+            m.ui.panel.close<pn::DiffReview>();
             auto cmd = set_status_toast(m,
                 "accepted " + std::to_string(hunks)
                 + (hunks == 1 ? " hunk" : " hunks"));
@@ -208,7 +208,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
             // press arms, the second executes. A palette "Reject all" (pane
             // closed) is already a deliberate multi-step action — execute
             // immediately. Mirrors the thread picker's two-press delete.
-            if (auto* c = m.ui.overlay.get<ov::DiffReview>();
+            if (auto* c = m.ui.panel.get<pn::DiffReview>();
                 c && !c->confirm_reject_all) {
                 c->confirm_reject_all = true;
                 auto cmd = set_status_toast(m,
@@ -228,7 +228,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
                 }
             }
             m.d.pending_changes.clear();
-            m.ui.overlay.close<ov::DiffReview>();
+            m.ui.panel.close<pn::DiffReview>();
             auto cmd = set_status_toast(m,
                 "reverted " + std::to_string(hunks)
                 + (hunks == 1 ? " hunk" : " hunks")

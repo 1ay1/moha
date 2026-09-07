@@ -33,9 +33,9 @@
 
 #include <maya/core/overload.hpp>
 
-#include "agentty/runtime/fork_picker.hpp"
-#include "agentty/runtime/picker.hpp"
-#include "agentty/runtime/command_palette.hpp"
+#include "agentty/runtime/panel/fork.hpp"
+#include "agentty/runtime/panel/common.hpp"
+#include "agentty/runtime/panel/palette.hpp"
 #include "agentty/store/store.hpp"
 #include "agentty/io/persistence.hpp"
 #include "agentty/tool/util/fs_helpers.hpp"
@@ -44,7 +44,7 @@
 #include "agentty/tool/skills.hpp"
 #include "agentty/provider/selection.hpp"   // prewarm_active_provider
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::app::detail {
 
@@ -84,26 +84,26 @@ Step fork_update(Model m, msg::ForkMsg fm) {
             if (!m.s.is_idle() || m.s.compacting || m.s.thread_loading)
                 return {std::move(m),
                         set_status_toast(m, "cannot fork while the agent is working")};
-            m.ui.overlay = ov::Fork{{fp::Choice::RagPerTurn}};
-            m.ui.overlay.close<ov::CommandPalette>();
+            m.ui.panel = pn::Fork{{fp::Choice::RagPerTurn}};
+            m.ui.panel.close<pn::CommandPalette>();
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](CloseForkPicker) -> Step {
-            m.ui.overlay.close<ov::Fork>();
+            m.ui.panel.close<pn::Fork>();
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](ForkPickerMove& e) -> Step {
-            if (auto* o = m.ui.overlay.get<ov::Fork>())
+            if (auto* o = m.ui.panel.get<pn::Fork>())
                 o->choice = fp::next_choice(o->choice, e.delta);
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](ForkThread&) -> Step {
-            const auto* picked = m.ui.overlay.get<ov::Fork>();
+            const auto* picked = m.ui.panel.get<pn::Fork>();
             // No int->enum cast: the cursor already IS the choice, so a
             // reordered or resized row list cannot silently remap it.
             const fp::Choice choice = picked ? picked->choice
                                              : fp::Choice::RagOff;
-            m.ui.overlay.close<ov::Fork>();
+            m.ui.panel.close<pn::Fork>();
             if (m.d.current.messages.empty())
                 return {std::move(m), set_status_toast(m, "nothing to fork yet")};
             if (!m.s.is_idle() || m.s.compacting || m.s.thread_loading)
@@ -196,7 +196,7 @@ Step fork_update(Model m, msg::ForkMsg fm) {
             m.ui.view_cache.clear();
             m.d.current = std::move(fork);
             deps().save_thread(m.d.current);
-            m.ui.overlay.close<ov::ThreadList>();
+            m.ui.panel.close<pn::ThreadList>();
             rehydrate_frozen(m);
             m.ui.needs_warmup_render = !m.ui.frozen.empty();
             // The fork's first turn hits the network fresh — warm the socket

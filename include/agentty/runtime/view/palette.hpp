@@ -7,7 +7,7 @@
 #include <maya/style/color.hpp>
 #include <maya/style/style.hpp>
 
-#include "agentty/runtime/command_palette.hpp"   // PaletteContext, Command
+#include "agentty/runtime/panel/palette.hpp"   // PaletteContext, Command
 #include "agentty/runtime/model.hpp"            // Model
 
 namespace agentty::ui {

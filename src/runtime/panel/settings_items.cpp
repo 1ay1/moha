@@ -1,6 +1,6 @@
 // settings_items.cpp — build each category's rows live from the loaders.
 
-#include "agentty/runtime/settings_items.hpp"
+#include "agentty/runtime/panel/settings/items.hpp"
 #include "agentty/util/home_dir.hpp"
 #include "agentty/util/user_root.hpp"
 

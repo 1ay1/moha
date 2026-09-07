@@ -14,12 +14,12 @@
 
 #include <maya/core/overload.hpp>
 
-#include "agentty/runtime/picker.hpp"
+#include "agentty/runtime/panel/common.hpp"
 #include "agentty/runtime/app/deps.hpp"
-#include "agentty/runtime/code_block_picker.hpp"
+#include "agentty/runtime/panel/code_blocks.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::app::detail {
 
@@ -138,15 +138,15 @@ template <class T, class V>
 Step palette_update(Model m, msg::CommandPaletteMsg pm) {
     return std::visit(overload{
         [&](OpenCommandPalette) -> Step {
-            m.ui.overlay = ov::CommandPalette{};
+            m.ui.panel = pn::CommandPalette{};
             return done(std::move(m));
         },
         [&](CloseCommandPalette) -> Step {
-            m.ui.overlay.close<ov::CommandPalette>();
+            m.ui.panel.close<pn::CommandPalette>();
             return done(std::move(m));
         },
         [&](CommandPaletteInput& e) -> Step {
-            auto* o = m.ui.overlay.get<ov::CommandPalette>();
+            auto* o = m.ui.panel.get<pn::CommandPalette>();
             if (o && static_cast<uint32_t>(e.ch) < 0x80) {
                 o->query.push_back(static_cast<char>(e.ch));
                 // Reset cursor to the top of the (newly filtered) list so
@@ -156,7 +156,7 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             return done(std::move(m));
         },
         [&](CommandPaletteBackspace) -> Step {
-            auto* o = m.ui.overlay.get<ov::CommandPalette>();
+            auto* o = m.ui.panel.get<pn::CommandPalette>();
             if (o && !o->query.empty()) {
                 o->query.pop_back();
                 o->index = 0;
@@ -164,7 +164,7 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             return done(std::move(m));
         },
         [&](CommandPaletteMove& e) -> Step {
-            auto* o = m.ui.overlay.get<ov::CommandPalette>();
+            auto* o = m.ui.panel.get<pn::CommandPalette>();
             if (!o) return done(std::move(m));
             // Clamp against the *visible* row count, not kCommands.size().
             // Without the upper bound the cursor used to walk off-screen
@@ -176,7 +176,7 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             return done(std::move(m));
         },
         [&](CommandPaletteSelect) -> Step {
-            auto* o = m.ui.overlay.get<ov::CommandPalette>();
+            auto* o = m.ui.panel.get<pn::CommandPalette>();
             if (!o) return done(std::move(m));
             // Resolve cursor → typed Command via the SAME filtered list
             // the view rendered. The previous design switched on the raw
@@ -190,7 +190,7 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             if (matches.empty()
                 || idx < 0
                 || idx >= static_cast<int>(matches.size())) {
-                m.ui.overlay.close<ov::CommandPalette>();
+                m.ui.panel.close<pn::CommandPalette>();
                 return done(std::move(m));
             }
             const Command sel = matches[static_cast<std::size_t>(idx)]->id;
@@ -199,13 +199,13 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             // its Esc target. Generic: the registry needs no per-command
             // origin plumbing, and a command that opens nothing leaves the
             // slot None, where adopt() is a no-op.
-            auto parent = ov::From::of(ov::Snapshot{m.ui.overlay.raw()});
-            m.ui.overlay.close<ov::CommandPalette>();
+            auto parent = pn::From::of(pn::Snapshot{m.ui.panel.raw()});
+            m.ui.panel.close<pn::CommandPalette>();
             // Behaviour lives in the command registry (dispatch_command), not
             // an inline switch — one declarative table, no drift, and adding a
             // command never touches this arm.
             auto st = dispatch_command(sel, std::move(m));
-            st.first.ui.overlay.adopt(std::move(parent));
+            st.first.ui.panel.adopt(std::move(parent));
             return st;
         },
     }, pm);

@@ -7,7 +7,7 @@
 // can say "still streaming" vs "no blocks".
 #include "agtest.hpp"
 
-#include "agentty/runtime/code_block_picker.hpp"
+#include "agentty/runtime/panel/code_blocks.hpp"
 
 #include <string_view>
 

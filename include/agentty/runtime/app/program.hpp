@@ -20,7 +20,7 @@
 
 namespace agentty::app {
 
-namespace ov = agentty::ui::overlay;   // the exclusive overlay slot's alternatives
+namespace pn = agentty::ui::panel;   // the exclusive overlay slot's alternatives
 
 [[nodiscard]] std::pair<Model, maya::Cmd<Msg>> init();
 
@@ -158,17 +158,17 @@ struct AgenttyApp {
         // overlay is open (None-vs-any and picker-vs-picker); the per-
         // alternative blocks below add cursor/query movement INSIDE the
         // open overlay.
-        mix(static_cast<std::uint64_t>(m.ui.overlay.raw().index()));
-        if (auto* pp = m.ui.overlay.get<ov::ProviderPicker>()) {
+        mix(static_cast<std::uint64_t>(m.ui.panel.raw().index()));
+        if (auto* pp = m.ui.panel.get<pn::ProviderPicker>()) {
             mix(static_cast<std::uint64_t>(pp->index));
             mix_str(pp->query);
             mix_str(pp->confirm_remove);   // two-press ^D arm state
         }
-        if (auto* tl = m.ui.overlay.get<ov::ThreadList>()) {
+        if (auto* tl = m.ui.panel.get<pn::ThreadList>()) {
             mix(static_cast<std::uint64_t>(tl->index));
             mix_str(tl->confirm_remove);   // two-press delete arm state
         }
-        if (auto* sm = m.ui.overlay.get<ov::SmartMode>()) {
+        if (auto* sm = m.ui.panel.get<pn::SmartMode>()) {
             mix(static_cast<std::uint64_t>(sm->form.cursor));
             // A form row's rendered value can change without the cursor
             // moving (a slot resolves to a different model, the master switch
@@ -177,7 +177,7 @@ struct AgenttyApp {
             mix(static_cast<std::uint64_t>(sm->form.fields.size()));
             if (const auto* row = sm->form.focused()) mix_str(row->id);
         }
-        if (auto* fp = m.ui.overlay.get<ov::FusedPicker>()) {
+        if (auto* fp = m.ui.panel.get<pn::FusedPicker>()) {
             mix(static_cast<std::uint64_t>(fp->index));
             mix_str(fp->query);   // live search buffer
             // Slot-assign mode retitles the picker, rewrites the footer
@@ -207,7 +207,7 @@ struct AgenttyApp {
         for (const auto& r : m.d.fused_rows)
             mix(static_cast<std::uint64_t>((r.model.favorite ? 1u : 0u)
                                          | (r.active ? 2u : 0u)));
-        if (auto* c = m.ui.overlay.get<ov::DiffReview>()) {
+        if (auto* c = m.ui.panel.get<pn::DiffReview>()) {
             mix(static_cast<std::uint64_t>(c->file_index));
             mix(static_cast<std::uint64_t>(c->hunk_index));
             // Hunk-body scroll (^D/^U) changes which diff rows are visible;
@@ -217,15 +217,15 @@ struct AgenttyApp {
             // Armed two-press ^X swaps the footer for a warning row.
             mix(c->confirm_reject_all ? 1ULL : 0ULL);
         }
-        if (auto* o = m.ui.overlay.get<ov::CommandPalette>()) {
+        if (auto* o = m.ui.panel.get<pn::CommandPalette>()) {
             mix_str(o->query);
             mix(static_cast<std::uint64_t>(o->index));
         }
-        if (auto* o = m.ui.overlay.get<ov::Mention>()) {
+        if (auto* o = m.ui.panel.get<pn::Mention>()) {
             mix_str(o->query);
             mix(static_cast<std::uint64_t>(o->index));
         }
-        if (auto* o = m.ui.overlay.get<ov::Symbol>()) {
+        if (auto* o = m.ui.panel.get<pn::Symbol>()) {
             mix_str(o->query);
             mix(static_cast<std::uint64_t>(o->index));
         }
@@ -239,7 +239,7 @@ struct AgenttyApp {
         // or every ↑/↓/PgDn in the body is gated away until the caret
         // parity flips ~265 ms later — the "viewer movement is laggy"
         // symptom, same class as the picker-cursor bug above.
-        if (auto* o = m.ui.overlay.get<ov::ToolViewer>()) {
+        if (auto* o = m.ui.panel.get<pn::ToolViewer>()) {
             mix(static_cast<std::uint64_t>(o->index));
             mix(o->viewing ? 1ULL : 0ULL);
             mix(static_cast<std::uint64_t>(m.ui.tool_viewer_scroll.y));
@@ -252,7 +252,7 @@ struct AgenttyApp {
             mix(m.ui.tool_viewer_tail ? 1ULL : 0ULL);
         }
         // Code-block picker (and its Result card): same contract.
-        if (auto* o = m.ui.overlay.get<ov::CodeBlocks>())
+        if (auto* o = m.ui.panel.get<pn::CodeBlocks>())
             mix(static_cast<std::uint64_t>(o->index));
 
         // Checkpoint picker: open/closed + cursor + each entry's async
@@ -260,7 +260,7 @@ struct AgenttyApp {
         // stat, so it MUST advance the hash or the row's diffstat wouldn't
         // repaint when its background load lands). Same selection-driven
         // repaint contract as the other pickers above.
-        if (auto* o = m.ui.overlay.get<ov::Checkpoints>()) {
+        if (auto* o = m.ui.panel.get<pn::Checkpoints>()) {
             mix(static_cast<std::uint64_t>(o->index));
             for (const auto& e : o->entries)
                 mix(static_cast<std::uint64_t>(e.diff_state) * 131
@@ -279,7 +279,7 @@ struct AgenttyApp {
         // forever. The nonce is the ONLY backing for the reload-done
         // repaint (the connected state lives in the external MCP pool,
         // not the Model), so it MUST feed the hash.
-        if (auto* o = m.ui.overlay.get<ov::SettingsList>()) {
+        if (auto* o = m.ui.panel.get<pn::SettingsList>()) {
             mix(static_cast<std::uint64_t>(o->index));
             mix(static_cast<std::uint64_t>(o->concern));
             mix(o->input_active ? 1ULL : 0ULL);
@@ -316,12 +316,12 @@ struct AgenttyApp {
         // symptom. These three were entirely absent from the hash.
         //   • Smart Mode config overlay (Ctrl+S) — a OneAxis like the pickers.
         //   • RAG picker (Ctrl+K → RAG) — 3 rows; active marks the persisted mode.
-        if (auto* o = m.ui.overlay.get<ov::RagSettings>()) {
+        if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
             mix(static_cast<std::uint64_t>(o->cursor));
             mix(static_cast<std::uint64_t>(o->active));
         }
         //   • Fork picker (Ctrl+K → Fork thread) — 3 RAG-mode rows.
-        if (auto* o = m.ui.overlay.get<ov::Fork>())
+        if (auto* o = m.ui.panel.get<pn::Fork>())
             mix(static_cast<std::uint64_t>(o->choice));
 
         // Time-driven animation buckets. Each bucket flip forces a

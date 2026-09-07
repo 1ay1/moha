@@ -54,7 +54,7 @@ function(_agentty_test_link_full name)
         # are view-layer style constants with no runtime seam to assert
         # against, so the test reads the source. The pickers were split into
         # several files under this dir; the test concatenates them all.
-        AGENTTY_PICKERS_SRC_DIR="${CMAKE_SOURCE_DIR}/src/runtime/view/pickers"
+        AGENTTY_PICKERS_SRC_DIR="${CMAKE_SOURCE_DIR}/src/runtime/view/panels"
         AGENTTY_MCP=1)
     target_link_libraries(${name} PRIVATE
         maya::maya

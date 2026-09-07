@@ -19,13 +19,13 @@
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/app/subscribe.hpp"
-#include "agentty/runtime/nav.hpp"
-#include "agentty/runtime/smart_form.hpp"
+#include "agentty/runtime/panel/nav.hpp"
+#include "agentty/runtime/panel/smart_form.hpp"
 
 #include <string>
 #include <vector>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 using namespace agentty;
 
 namespace {
@@ -40,44 +40,44 @@ maya::KeyEvent esc() {
 // -Wswitch exhaustiveness of close_msg and the coverage of this test are
 // visibly the same list.
 struct Case {
-    ov::Kind    kind;
+    pn::Kind    kind;
     const char* name;
     void      (*open)(Model&);
 };
 
 const std::vector<Case>& cases() {
     static const std::vector<Case> v = {
-        {ov::Kind::CommandPalette, "command palette",
-         [](Model& m) { m.ui.overlay = ov::CommandPalette{{}}; }},
-        {ov::Kind::Mention, "mention palette",
-         [](Model& m) { m.ui.overlay = ov::Mention{{}}; }},
-        {ov::Kind::Symbol, "symbol palette",
-         [](Model& m) { m.ui.overlay = ov::Symbol{{}}; }},
-        {ov::Kind::CodeBlocks, "code block picker",
-         [](Model& m) { m.ui.overlay = ov::CodeBlocks{{}}; }},
-        {ov::Kind::ToolViewer, "tool output viewer",
-         [](Model& m) { m.ui.overlay = ov::ToolViewer{{}}; }},
-        {ov::Kind::Checkpoints, "checkpoint picker",
-         [](Model& m) { m.ui.overlay = ov::Checkpoints{{}}; }},
-        {ov::Kind::RagSettings, "retrieval pane",
-         [](Model& m) { m.ui.overlay = ov::RagSettings{{}}; }},
-        {ov::Kind::SettingsList, "settings list",
-         [](Model& m) { m.ui.overlay = ov::SettingsList{{}}; }},
-        {ov::Kind::Fork, "fork picker",
-         [](Model& m) { m.ui.overlay = ov::Fork{{}}; }},
-        {ov::Kind::FusedPicker, "model picker",
-         [](Model& m) { m.ui.overlay = ov::FusedPicker{{}}; }},
-        {ov::Kind::ProviderPicker, "provider picker",
-         [](Model& m) { m.ui.overlay = ov::ProviderPicker{{}}; }},
-        {ov::Kind::ThreadList, "thread list",
-         [](Model& m) { m.ui.overlay = ov::ThreadList{{}}; }},
-        {ov::Kind::SmartMode, "smart mode",
+        {pn::Kind::CommandPalette, "command palette",
+         [](Model& m) { m.ui.panel = pn::CommandPalette{{}}; }},
+        {pn::Kind::Mention, "mention palette",
+         [](Model& m) { m.ui.panel = pn::Mention{{}}; }},
+        {pn::Kind::Symbol, "symbol palette",
+         [](Model& m) { m.ui.panel = pn::Symbol{{}}; }},
+        {pn::Kind::CodeBlocks, "code block picker",
+         [](Model& m) { m.ui.panel = pn::CodeBlocks{{}}; }},
+        {pn::Kind::ToolViewer, "tool output viewer",
+         [](Model& m) { m.ui.panel = pn::ToolViewer{{}}; }},
+        {pn::Kind::Checkpoints, "checkpoint picker",
+         [](Model& m) { m.ui.panel = pn::Checkpoints{{}}; }},
+        {pn::Kind::RagSettings, "retrieval pane",
+         [](Model& m) { m.ui.panel = pn::RagSettings{{}}; }},
+        {pn::Kind::SettingsList, "settings list",
+         [](Model& m) { m.ui.panel = pn::SettingsList{{}}; }},
+        {pn::Kind::Fork, "fork picker",
+         [](Model& m) { m.ui.panel = pn::Fork{{}}; }},
+        {pn::Kind::FusedPicker, "model picker",
+         [](Model& m) { m.ui.panel = pn::FusedPicker{{}}; }},
+        {pn::Kind::ProviderPicker, "provider picker",
+         [](Model& m) { m.ui.panel = pn::ProviderPicker{{}}; }},
+        {pn::Kind::ThreadList, "thread list",
+         [](Model& m) { m.ui.panel = pn::ThreadList{{}}; }},
+        {pn::Kind::SmartMode, "smart mode",
          [](Model& m) {
              smart_form::Inputs in;
-             m.ui.overlay = ov::SmartMode{{}, smart_form::build_form(in)};
+             m.ui.panel = pn::SmartMode{{}, smart_form::build_form(in)};
          }},
-        {ov::Kind::DiffReview, "diff review",
-         [](Model& m) { m.ui.overlay = ov::DiffReview{{}}; }},
+        {pn::Kind::DiffReview, "diff review",
+         [](Model& m) { m.ui.panel = pn::DiffReview{{}}; }},
     };
     return v;
 }
@@ -113,7 +113,7 @@ TEST_CASE("escape guarantee: close_msg names a real close for every overlay") {
     // silent trap. Todo is ambient (it never swallows) and None is not an
     // overlay, so both legitimately map to NoOp.
     for (const auto& c : cases()) {
-        const auto msg = ov::close_msg(c.kind);
+        const auto msg = pn::close_msg(c.kind);
         CHECK(!std::holds_alternative<msg::MetaMsg>(msg)
                   || !std::holds_alternative<NoOp>(std::get<msg::MetaMsg>(msg)),
               (std::string{"close_msg is not a NoOp for "} + c.name).c_str());
@@ -128,11 +128,11 @@ TEST_CASE("escape guarantee: Esc closes every overlay") {
     for (const auto& c : cases()) {
         Model m;
         c.open(m);
-        CHECK(ov::kind_of(m.ui.overlay) == c.kind,
+        CHECK(pn::kind_of(m.ui.panel) == c.kind,
               (std::string{"opened "} + c.name).c_str());
 
-        auto [after, cmd] = app::update(std::move(m), ov::close_msg(c.kind));
-        CHECK(ov::kind_of(after.ui.overlay) != c.kind,
+        auto [after, cmd] = app::update(std::move(m), pn::close_msg(c.kind));
+        CHECK(pn::kind_of(after.ui.panel) != c.kind,
               (std::string{"Esc closes "} + c.name).c_str());
     }
 }
@@ -147,12 +147,12 @@ TEST_CASE("escape guarantee: a handler that answers nothing still cannot trap") 
     // close_msg(kind), which the case above proves actually closes.
     for (const auto& c : cases()) {
         const std::optional<Msg> declined = std::nullopt;   // handler says no
-        const Msg fallback = declined ? *declined : ov::close_msg(c.kind);
+        const Msg fallback = declined ? *declined : pn::close_msg(c.kind);
 
         Model m;
         c.open(m);
         auto [after, cmd] = app::update(std::move(m), fallback);
-        CHECK(ov::kind_of(after.ui.overlay) != c.kind,
+        CHECK(pn::kind_of(after.ui.panel) != c.kind,
               (std::string{"an inert handler cannot trap the user in "} + c.name).c_str());
     }
 }

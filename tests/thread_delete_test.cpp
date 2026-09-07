@@ -17,14 +17,14 @@
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/app/deps.hpp"
-#include "agentty/runtime/picker.hpp"
+#include "agentty/runtime/panel/common.hpp"
 
 #include <optional>
 #include <print>
 #include <string>
 #include <vector>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 using namespace agentty;
 namespace detail = agentty::app::detail;
@@ -69,7 +69,7 @@ Model make_model(int cursor, const std::string& current_id) {
     }
     m.d.current.id = ThreadId{current_id};
     m.d.current.title = "active";
-    m.ui.overlay = ov::ThreadList{{cursor}};
+    m.ui.panel = pn::ThreadList{{cursor}};
     return m;
 }
 
@@ -78,7 +78,7 @@ Model step(Model m, msg::ThreadListMsg tm) {
 }
 
 const pick::OpenAt* picker(const Model& m) {
-    return m.ui.overlay.get<ov::ThreadList>();
+    return m.ui.panel.get<pn::ThreadList>();
 }
 
 } // namespace
@@ -141,7 +141,7 @@ int main() {
         check(m.d.current.messages.empty(), "the fresh thread is empty");
         check(std::holds_alternative<phase::Idle>(m.s.phase),
               "a mid-stream active-thread delete drops phase back to Idle");
-        check(!m.ui.overlay.is<agentty::ui::overlay::ThreadList>(),
+        check(!m.ui.panel.is<agentty::ui::panel::ThreadList>(),
               "the picker closes on an active-thread delete (full reset_inline swap)");
     }
 

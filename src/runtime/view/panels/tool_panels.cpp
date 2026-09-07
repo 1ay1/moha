@@ -8,7 +8,7 @@
 // scrollbar glyph + thumb math, keep-selection-in-view auto-scroll. agentty
 // supplies only the row-level Elements and the typed cursor index.
 
-#include "pickers_prologue.hpp"
+#include "panels_prologue.hpp"
 
 namespace agentty::ui {
 
@@ -17,7 +17,7 @@ namespace agentty::ui {
 // shortcut in the key handler maps 1-based onto these rows, so the
 // leading number is the affordance that teaches the fast path.
 Element code_block_picker(const Model& m) {
-    auto* o = m.ui.overlay.get<ov::CodeBlocks>();
+    auto* o = m.ui.panel.get<pn::CodeBlocks>();
     if (!o) return nothing();
 
     Panel::Config cfg;
@@ -103,7 +103,7 @@ Element code_block_picker(const Model& m) {
 // TUI); this card shows the summary — command, exit code, size — plus
 // the LAST few lines (errors live at the end) and the decision keys.
 Element code_block_result_card(const Model& m) {
-    auto* r = m.ui.overlay.get<ov::CodeBlockResult>();
+    auto* r = m.ui.panel.get<pn::CodeBlockResult>();
     if (!r) return nothing();
 
     const bool ok_exit = !r->timed_out && r->exit_code == 0;
@@ -257,7 +257,7 @@ Element code_block_result_card(const Model& m) {
 // would rewrite committed rows (HardReset corruption class). The overlay
 // paints strictly over the live viewport, same as every other picker.
 Element tool_output_viewer(const Model& m) {
-    const auto* o = m.ui.overlay.get<ov::ToolViewer>();
+    const auto* o = m.ui.panel.get<pn::ToolViewer>();
     if (!o) return nothing();
 
     const int sz = static_cast<int>(o->entries.size());

@@ -26,9 +26,9 @@
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/app/update/internal.hpp"   // apply_smart
 #include "agentty/runtime/model.hpp"
-#include "agentty/runtime/rag_settings.hpp"
+#include "agentty/runtime/panel/rag.hpp"
 #include "agentty/runtime/settings_registry.hpp"
-#include "agentty/runtime/smart_form.hpp"
+#include "agentty/runtime/panel/smart_form.hpp"
 #include "agentty/store/store.hpp"
 #include "agentty/tool/subagent.hpp"
 

@@ -29,7 +29,7 @@
 #include "agentty/tool/subagent.hpp"
 #include "agentty/workspace/checkpoint.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::app::detail {
 
@@ -822,7 +822,7 @@ commit_provider_switch(Model m, std::string_view spec,
     const bool have_desired = !desired_model.empty();
     if (open_picker && provider::active().kind != provider::Kind::ExternalAcp
         && !have_desired)
-        m.ui.overlay = ov::FusedPicker{{0, ""}};
+        m.ui.panel = pn::FusedPicker{{0, ""}};
 
     // Name the DERIVED wire endpoint for OpenAI-dialect hosts so the /v1
     // defaulting is visible, not magic — the custom-host dead-loop report

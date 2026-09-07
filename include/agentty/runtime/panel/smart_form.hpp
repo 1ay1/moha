@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "agentty/domain/smart_mode.hpp"
-#include "agentty/runtime/form.hpp"
+#include "agentty/runtime/panel/form.hpp"
 #include "agentty/store/store.hpp"   // Settings: what the advanced rows read
 
 namespace agentty::smart_form {

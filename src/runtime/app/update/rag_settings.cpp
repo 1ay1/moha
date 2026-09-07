@@ -13,12 +13,12 @@
 
 #include <maya/core/overload.hpp>
 
-#include "agentty/runtime/rag_settings.hpp"
+#include "agentty/runtime/panel/rag.hpp"
 #include "agentty/rag/embed_secret.hpp"
 #include "agentty/tool/mcp_tools_backends.hpp"
 #include "agentty/tool/subagent.hpp"   // set_smart: the task router's own copy
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::app::detail {
 
@@ -173,7 +173,7 @@ void refresh_status(rs::EmbedForm& f) {
 }
 
 [[nodiscard]] rs::EmbedForm* form_of(Model& m) {
-    auto* o = m.ui.overlay.get<ov::RagSettings>();
+    auto* o = m.ui.panel.get<pn::RagSettings>();
     return o ? &o->embed : nullptr;
 }
 
@@ -195,8 +195,8 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             // the keyboard but cannot act on it.
             const auto s = deps().load_settings();
             const auto mode = s.rag.configured ? s.rag.mode : store::RagMode::On;
-            m.ui.overlay.descend(
-                ov::RagSettings{{mode, mode, make_embed_form(mode)}});
+            m.ui.panel.descend(
+                pn::RagSettings{{mode, mode, make_embed_form(mode)}});
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](CloseRagSettings) -> Step {
@@ -221,7 +221,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             // Reveal/hide the Tier::Advanced rows. The form is rebuilt because
             // the row SET changes; the cursor is kept where it was so the
             // toggle does not also move the selection out from under the user.
-            if (auto* o = m.ui.overlay.get<ov::RagSettings>()) {
+            if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
                 o->advanced = !o->advanced;
                 const int cursor = o->embed.form.cursor;
                 o->embed.form = rs::build_form(o->embed.cfg, o->cursor,
@@ -235,7 +235,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
         },
         [&](RagSettingsReset) -> Step {
             commit_mode(store::RagMode::On);
-            if (auto* o = m.ui.overlay.get<ov::RagSettings>()) {
+            if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
                 o->cursor = store::RagMode::On;
                 o->active = store::RagMode::On;
                 o->embed  = make_embed_form(store::RagMode::On, o->advanced);
@@ -248,7 +248,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             // Idempotent re-seed. Nothing defers to this any more (the pane is
             // built on open), but a caller that wants a fresh probe state can
             // still ask for one.
-            if (auto* o = m.ui.overlay.get<ov::RagSettings>())
+            if (auto* o = m.ui.panel.get<pn::RagSettings>())
                 o->embed = make_embed_form(o->cursor, o->advanced);
             return {std::move(m), Cmd<Msg>::none()};
         },
@@ -260,7 +260,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             // clear `embed` instead, which left the pane open holding no form
             // — a state that swallows every key including the Esc that would
             // have escaped it.
-            if (auto* o = m.ui.overlay.get<ov::RagSettings>())
+            if (auto* o = m.ui.panel.get<pn::RagSettings>())
                 if (!form::escape(o->embed.form))
                     return {std::move(m), Cmd<Msg>::none()};   // unwound a level
             return agentty::app::update(std::move(m), Msg{CloseRagSettings{}});
@@ -285,7 +285,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
                 // nothing to validate and no probe to invalidate, so making the
                 // user press ^S for it would be ceremony.
                 if (on_mode) {
-                    if (auto* o = m.ui.overlay.get<ov::RagSettings>()) {
+                    if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
                         o->cursor = rs::mode_from_form(f->form, o->cursor);
                         o->active = o->cursor;
                         commit_mode(o->cursor);
@@ -293,7 +293,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
                 } else {
                     invalidate_probe(*f);
                     if (on_backend) {
-                        auto* o = m.ui.overlay.get<ov::RagSettings>();
+                        auto* o = m.ui.panel.get<pn::RagSettings>();
                         const auto mode = o ? o->cursor : store::RagMode::On;
                         resync_rows(*f, mode, o && o->advanced);
                     } else {
@@ -390,7 +390,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
                                      std::chrono::seconds{4})};
         },
         [&](RagEmbedRevert) -> Step {
-            if (auto* o = m.ui.overlay.get<ov::RagSettings>()) {
+            if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
                 auto& f = o->embed;
                 f.cfg   = current_embed_config();
                 f.form  = rs::build_form(f.cfg, o->cursor, deps().load_settings());

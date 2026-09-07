@@ -1,5 +1,5 @@
 #pragma once
-// agentty::ui::overlay — the EXCLUSIVE overlay slot, as a sum type.
+// agentty::ui::panel — the EXCLUSIVE overlay slot, as a sum type.
 //
 // Model::UI used to carry 16 independent overlay fields (pick::OneAxis
 // here, an ad-hoc Closed|Open variant there). "Only one overlay open at
@@ -10,10 +10,10 @@
 //
 // Now every exclusive overlay lives in ONE slot:
 //
-//     m.ui.overlay = ov::FusedPicker{{.index = 3}};    // opens (closes rival)
-//     m.ui.overlay.is<ov::FusedPicker>()               // open?
-//     m.ui.overlay.get<ov::FusedPicker>()              // payload* or nullptr
-//     m.ui.overlay.close<ov::FusedPicker>()            // close IF topmost
+//     m.ui.panel = pn::FusedPicker{{.index = 3}};    // opens (closes rival)
+//     m.ui.panel.is<pn::FusedPicker>()               // open?
+//     m.ui.panel.get<pn::FusedPicker>()              // payload* or nullptr
+//     m.ui.panel.close<pn::FusedPicker>()            // close IF topmost
 //
 // Opening is assignment — it structurally closes whatever was open,
 // because a variant holds one alternative. "Two exclusive overlays open"
@@ -30,7 +30,7 @@
 //   • todo       — an AMBIENT pane, not a modal: it stays open UNDER a
 //                  picker and unclaimed keys fall through to global. Its
 //                  open flag stays on TodoState.
-// overlay::top() (overlay.hpp) composes these four sources — login,
+// panel::top() (overlay.hpp) composes these four sources — login,
 // permission, this slot, todo — into the one priority answer, which is
 // now four checks instead of twenty.
 //
@@ -48,20 +48,20 @@
 #include <utility>
 #include <variant>
 
-#include "agentty/runtime/picker.hpp"
+#include "agentty/runtime/panel/common.hpp"
 #include "agentty/domain/smart_mode.hpp"   // smart::OverlayRow
-#include "agentty/runtime/command_palette.hpp"
-#include "agentty/runtime/mention_palette.hpp"
-#include "agentty/runtime/symbol_palette.hpp"
-#include "agentty/runtime/code_block_picker.hpp"
-#include "agentty/runtime/tool_output_viewer.hpp"
-#include "agentty/runtime/checkpoint_picker.hpp"
-#include "agentty/runtime/rag_settings.hpp"
-#include "agentty/runtime/settings_list.hpp"
-#include "agentty/runtime/fork_picker.hpp"
-#include "agentty/runtime/form.hpp"
+#include "agentty/runtime/panel/palette.hpp"
+#include "agentty/runtime/panel/mention.hpp"
+#include "agentty/runtime/panel/symbol.hpp"
+#include "agentty/runtime/panel/code_blocks.hpp"
+#include "agentty/runtime/panel/tool_output.hpp"
+#include "agentty/runtime/panel/checkpoints.hpp"
+#include "agentty/runtime/panel/rag.hpp"
+#include "agentty/runtime/panel/settings/list.hpp"
+#include "agentty/runtime/panel/fork.hpp"
+#include "agentty/runtime/panel/form.hpp"
 
-namespace agentty::ui::overlay {
+namespace agentty::ui::panel {
 
 struct None {};
 
@@ -159,7 +159,7 @@ template <class K>
 concept Alternative = requires(Variant v) { std::holds_alternative<K>(v); };
 
 // The slot itself: a thin wrapper so call sites read as intent
-// (`m.ui.overlay.is<ov::FusedPicker>()`) rather than as variant plumbing.
+// (`m.ui.panel.is<pn::FusedPicker>()`) rather than as variant plumbing.
 class State {
 public:
     State() = default;
@@ -298,4 +298,4 @@ enum class Kind {
     return std::visit(V{}, s.raw());
 }
 
-} // namespace agentty::ui::overlay
+} // namespace agentty::ui::panel

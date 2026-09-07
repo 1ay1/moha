@@ -21,10 +21,10 @@
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/app/update/internal.hpp"  // app::detail::fused_rows_for_model
-#include "agentty/runtime/picker.hpp"
+#include "agentty/runtime/panel/common.hpp"
 #include "agentty/domain/smart_mode.hpp"   // kSmartModeRows
-#include "agentty/runtime/smart_form.hpp"
-#include "agentty/runtime/form_keys.hpp"
+#include "agentty/runtime/panel/smart_form.hpp"
+#include "agentty/runtime/panel/form_keys.hpp"
 #include "agentty/provider/selection.hpp"
 
 #include <optional>
@@ -32,7 +32,7 @@
 #include <string>
 #include <vector>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 using namespace agentty;
 
@@ -98,13 +98,13 @@ TEST_CASE("smart slot picker stack") {
         Model m = in_slot_assign(slot);
         auto [m2, cmd] = app::update(std::move(m), Msg{CloseFusedPicker{}});
 
-        CHECK(!m2.ui.overlay.is<ov::FusedPicker>(),
+        CHECK(!m2.ui.panel.is<pn::FusedPicker>(),
               "Esc closes the model picker");
-        CHECK(m2.ui.overlay.is<ov::SmartMode>(),
+        CHECK(m2.ui.panel.is<pn::SmartMode>(),
               "Esc RE-OPENS Smart Mode — navigation is a stack, not a trapdoor");
         CHECK(!m2.ui.smart_assign_slot,
               "the pending slot-assign is cleared on back-out");
-        if (auto* o = m2.ui.overlay.get<ov::SmartMode>()) {
+        if (auto* o = m2.ui.panel.get<pn::SmartMode>()) {
             const auto* row = o->form.focused();
             CHECK(row && row->id == smart_form::field_of_role(
                              static_cast<smart::ModelRole>(slot)),
@@ -132,16 +132,16 @@ TEST_CASE("smart slot picker stack") {
                 opus = i; break;
             }
         REQUIRE(opus >= 0);
-        if (auto* c = m.ui.overlay.get<ov::FusedPicker>()) c->index = opus;
+        if (auto* c = m.ui.panel.get<pn::FusedPicker>()) c->index = opus;
 
         auto [m2, cmd] = app::update(std::move(m), Msg{FusedPickerSelect{}});
 
-        CHECK(!m2.ui.overlay.is<ov::FusedPicker>(),
+        CHECK(!m2.ui.panel.is<pn::FusedPicker>(),
               "Enter closes the model picker");
-        CHECK(m2.ui.overlay.is<ov::SmartMode>(),
+        CHECK(m2.ui.panel.is<pn::SmartMode>(),
               "Enter returns to Smart Mode so sibling slots stay one step away");
         CHECK(!m2.ui.smart_assign_slot, "slot-assign consumed");
-        if (auto* o = m2.ui.overlay.get<ov::SmartMode>()) {
+        if (auto* o = m2.ui.panel.get<pn::SmartMode>()) {
             const auto* row = o->form.focused();
             CHECK(row && row->id == smart_form::field_of_role(
                              static_cast<smart::ModelRole>(slot)),
@@ -214,8 +214,8 @@ TEST_CASE("smart slot picker stack") {
         m.ui.smart_assign_slot.reset();       // ordinary model switch
         auto [m1, _] = app::update(std::move(m), Msg{OpenFusedPicker{}});
         auto [m2, cmd] = app::update(std::move(m1), Msg{CloseFusedPicker{}});
-        CHECK(!m2.ui.overlay.is<ov::FusedPicker>(), "ordinary Esc closes picker");
-        CHECK(!m2.ui.overlay.is<ov::SmartMode>(),
+        CHECK(!m2.ui.panel.is<pn::FusedPicker>(), "ordinary Esc closes picker");
+        CHECK(!m2.ui.panel.is<pn::SmartMode>(),
               "ordinary model-switch Esc does NOT spuriously open Smart Mode");
     }
 
@@ -233,13 +233,13 @@ TEST_CASE("smart slot picker stack") {
         Model cur = std::move(m1);
 
         auto row_id = [](const Model& mm) -> std::string {
-            auto* o = mm.ui.overlay.get<ov::SmartMode>();
+            auto* o = mm.ui.panel.get<pn::SmartMode>();
             if (!o) return {};
             const auto* r = o->form.focused();
             return r ? r->id : std::string{};
         };
         auto rows_in = [](const Model& mm) -> int {
-            auto* o = mm.ui.overlay.get<ov::SmartMode>();
+            auto* o = mm.ui.panel.get<pn::SmartMode>();
             return o ? static_cast<int>(o->form.fields.size()) : 0;
         };
         auto move = [](Model mm, int d) {

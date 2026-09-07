@@ -12,7 +12,7 @@
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/app/deps.hpp"
-#include "agentty/runtime/picker.hpp"
+#include "agentty/runtime/panel/common.hpp"
 #include "agentty/diff/diff.hpp"
 
 #include <map>
@@ -20,7 +20,7 @@
 #include <print>
 #include <string>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 using namespace agentty;
 namespace detail = agentty::app::detail;
@@ -130,22 +130,22 @@ int main() {
         detail::apply_tool_output(m, ToolCallId{"t1"},
             std::expected<std::string, tools::ToolError>{"ok"},
             make_change("a.txt", before, after));
-        m.ui.overlay = agentty::ui::overlay::DiffReview{{0, 0}};
+        m.ui.panel = agentty::ui::panel::DiffReview{{0, 0}};
         // Two-press guard (commit 7498bf3f): from the OPEN pane the first
         // ^X arms (no write), the second executes. Palette-driven reject
         // (pane closed) executes on the first press.
         auto armed = detail::diff_review_update(std::move(m), RejectAllChanges{});
         check(g_writes.count("a.txt") == 0,
               "first reject-all press only arms, no write yet");
-        check(armed.first.ui.overlay.get<ov::DiffReview>()
-                  && armed.first.ui.overlay.get<ov::DiffReview>()->confirm_reject_all,
+        check(armed.first.ui.panel.get<pn::DiffReview>()
+                  && armed.first.ui.panel.get<pn::DiffReview>()->confirm_reject_all,
               "first reject-all press arms the confirm flag");
         auto s = detail::diff_review_update(std::move(armed.first), RejectAllChanges{});
         check(g_writes.count("a.txt") == 1, "reject-all wrote the file");
         check(g_writes["a.txt"] == before,
               "reject-all reverted the file to ORIGINAL contents");
         check(s.first.d.pending_changes.empty(), "queue cleared after reject-all");
-        check(!s.first.ui.overlay.is<agentty::ui::overlay::DiffReview>(),
+        check(!s.first.ui.panel.is<agentty::ui::panel::DiffReview>(),
               "pane closes after reject-all");
     }
 
@@ -156,7 +156,7 @@ int main() {
         detail::apply_tool_output(m, ToolCallId{"t1"},
             std::expected<std::string, tools::ToolError>{"ok"},
             make_change("b.txt", before, after));
-        m.ui.overlay = agentty::ui::overlay::DiffReview{{0, 0}};
+        m.ui.panel = agentty::ui::panel::DiffReview{{0, 0}};
         auto s = detail::diff_review_update(std::move(m), AcceptAllChanges{});
         check(g_writes.empty(), "accept-all writes nothing (tool already wrote)");
         check(s.first.d.pending_changes.empty(), "queue cleared after accept-all");
@@ -177,7 +177,7 @@ int main() {
             make_change("c.txt", b, a));
         auto& fc0 = m.d.pending_changes[0];
         check(fc0.hunks.size() >= 2, "distinct edits produce >=2 hunks");
-        m.ui.overlay = agentty::ui::overlay::DiffReview{{0, 0}};
+        m.ui.panel = agentty::ui::panel::DiffReview{{0, 0}};
         // Accept the first hunk, reject the second, then close.
         auto s1 = detail::diff_review_update(std::move(m), AcceptHunk{});
         auto s2 = detail::diff_review_update(std::move(s1.first), RejectHunk{});

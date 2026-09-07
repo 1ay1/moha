@@ -31,16 +31,16 @@
 #include "agentty/util/home_dir.hpp"
 #include "agentty/util/env.hpp"
 #include "agentty/util/image_dims.hpp"
-#include "agentty/runtime/command_palette.hpp"
+#include "agentty/runtime/panel/palette.hpp"
 #include "agentty/runtime/composer_attachment.hpp"
-#include "agentty/runtime/mention_palette.hpp"
-#include "agentty/runtime/symbol_palette.hpp"
+#include "agentty/runtime/panel/mention.hpp"
+#include "agentty/runtime/panel/symbol.hpp"
 #include "agentty/workspace/files.hpp"
 #include "agentty/util/isolated_thread.hpp"
 #include "agentty/workspace/symbols.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::app::detail {
 
@@ -586,7 +586,7 @@ Step composer_update(Model m, msg::ComposerMsg cm) {
                 return prev == '\n';
             };
             if (e.ch == U'/' && at_line_start()) {
-                m.ui.overlay = ov::CommandPalette{};
+                m.ui.panel = pn::CommandPalette{};
                 return done(std::move(m));
             }
             // '@' opens the file mention picker. Unlike '/' this is
@@ -609,7 +609,7 @@ Step composer_update(Model m, msg::ComposerMsg cm) {
                 // freezing the UI on an inline walk; the next keystroke
                 // re-pulls once the background thread publishes.
                 if (files_ready()) o.files = list_workspace_files();
-                m.ui.overlay = ov::Mention{std::move(o)};
+                m.ui.panel = pn::Mention{std::move(o)};
                 // Refresh git signals in the background so the working-set
                 // ranking reflects edits made since startup (the agent may
                 // have modified files this session). Cheap (~two git calls);
@@ -627,7 +627,7 @@ Step composer_update(Model m, msg::ComposerMsg cm) {
             if (e.ch == U'#' && at_word_boundary()) {
                 symbol_palette::Open o;
                 if (symbols_ready()) o.entries = list_workspace_symbols();
-                m.ui.overlay = ov::Symbol{std::move(o)};
+                m.ui.panel = pn::Symbol{std::move(o)};
                 return done(std::move(m));
             }
             // Coalesce consecutive typing into one undo unit, but

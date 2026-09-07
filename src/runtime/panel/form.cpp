@@ -10,7 +10,7 @@
 // deletion therefore step over whole code points by inspecting continuation
 // bytes (0b10xxxxxx).
 
-#include "agentty/runtime/form.hpp"
+#include "agentty/runtime/panel/form.hpp"
 
 #include <algorithm>
 #include <cctype>

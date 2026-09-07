@@ -23,11 +23,11 @@
 #include "agentty/domain/profile.hpp"
 #include "agentty/domain/session.hpp"
 #include "agentty/domain/todo.hpp"
-#include "agentty/runtime/overlay_state.hpp"   // ui::overlay::State (the exclusive slot)
+#include "agentty/runtime/panel/slot.hpp"   // ui::panel::State (the exclusive slot)
 #include "agentty/mcp/plugin_model.hpp"    // mcp::PluginModel (owned in the Model)
 #include "agentty/runtime/composer_attachment.hpp"
 #include "agentty/runtime/login.hpp"
-#include "agentty/runtime/picker.hpp"
+#include "agentty/runtime/panel/common.hpp"
 #include "agentty/runtime/view/cache.hpp"
 
 namespace agentty {
@@ -355,8 +355,8 @@ struct Model {
         // separate fields required are gone. See overlay_state.hpp for
         // the alternatives and the deliberate non-members (login,
         // permission, todo — they coexist with the slot by design;
-        // overlay::top() composes all four into the priority answer).
-        ui::overlay::State  overlay;
+        // panel::top() composes all four into the priority answer).
+        ui::panel::State  panel;
         // Escape-based clipboard read bookkeeping: bumped when a query is
         // emitted; a successful paste stamps done = seq. The delayed
         // ClipboardQueryTimeout{seq} only fires its diagnosis when seq still
@@ -400,7 +400,7 @@ struct Model {
         // overlay holding it is destroyed by the hand-off, and a pane that
         // came back with an empty `from` would send Esc to the thread
         // instead of to whatever the user descended from.
-        ui::overlay::From smart_assign_from;
+        ui::panel::From smart_assign_from;
         // Effort tier changed via ←/→ in the model picker but not yet
         // flushed to disk. Persisting per keystroke is a synchronous
         // load+fsync+rename on the UI thread; instead the CycleEffort arm
@@ -632,7 +632,7 @@ struct Model {
     // (does the spinner advance) and app/program.hpp (does the frame change
     // the visual hash).
     [[nodiscard]] bool loading_spinner_visible() const noexcept {
-        return ui.overlay.is<ui::overlay::FusedPicker>()
+        return ui.panel.is<ui::panel::FusedPicker>()
             && d.any_catalog_loading();
     }
 };

@@ -4,9 +4,9 @@
 // navigation, so the panes cannot drift apart, and the whole interaction model
 // is testable by feeding synthetic KeyEvents with no terminal attached.
 
-#include "agentty/runtime/form_keys.hpp"
+#include "agentty/runtime/panel/form_keys.hpp"
 
-#include "agentty/runtime/nav.hpp"
+#include "agentty/runtime/panel/nav.hpp"
 
 namespace agentty::form::keys {
 

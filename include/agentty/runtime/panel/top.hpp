@@ -1,7 +1,7 @@
 #pragma once
-// agentty::ui::overlay — THE routing function for overlay priority.
+// agentty::ui::panel — THE routing function for overlay priority.
 //
-// The overlay state itself lives in ONE variant slot (m.ui.overlay — see
+// The overlay state itself lives in ONE variant slot (m.ui.panel — see
 // overlay_state.hpp): opening is assignment, exclusivity is structural.
 // This header answers the one remaining question the slot cannot answer
 // alone: WHO OWNS THE KEYBOARD when the slot's overlay coexists with the
@@ -19,9 +19,9 @@
 
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/login.hpp"
-#include "agentty/runtime/overlay_state.hpp"
+#include "agentty/runtime/panel/slot.hpp"
 
-namespace agentty::ui::overlay {
+namespace agentty::ui::panel {
 
 // The active (topmost) overlay, in canonical priority order:
 //   1. login       — owns the whole keyboard until auth completes.
@@ -32,9 +32,9 @@ namespace agentty::ui::overlay {
 [[nodiscard]] inline Kind top(const Model& m) noexcept {
     if (login::is_open(m.ui.login))         return Kind::Login;
     if (m.d.pending_permission.has_value()) return Kind::Permission;
-    if (const Kind k = kind_of(m.ui.overlay); k != Kind::None) return k;
+    if (const Kind k = kind_of(m.ui.panel); k != Kind::None) return k;
     if (pick::is_open(m.ui.todo.open))      return Kind::Todo;
     return Kind::None;
 }
 
-} // namespace agentty::ui::overlay
+} // namespace agentty::ui::panel

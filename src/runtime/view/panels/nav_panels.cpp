@@ -9,15 +9,15 @@
 // scrollbar glyph + thumb math, keep-selection-in-view auto-scroll. agentty
 // supplies only the row-level Elements and the typed cursor index.
 
-#include "pickers_prologue.hpp"
+#include "panels_prologue.hpp"
 
-#include "agentty/runtime/view/form_view.hpp"
+#include "agentty/runtime/view/form_panel.hpp"
 #include <maya/widget/panel.hpp>
 
 namespace agentty::ui {
 
 Element thread_list(const Model& m) {
-    auto* picker = m.ui.overlay.get<ov::ThreadList>();
+    auto* picker = m.ui.panel.get<pn::ThreadList>();
     if (!picker) return nothing();
 
     Panel::Config cfg;
@@ -90,7 +90,7 @@ Element thread_list(const Model& m) {
 // each showing its RESOLVED model (pinned, or the auto-fill). See
 // docs/design/smart-mode.md.
 Element smart_mode_overlay(const Model& m) {
-    auto* o = m.ui.overlay.get<ov::SmartMode>();
+    auto* o = m.ui.panel.get<pn::SmartMode>();
     if (!o) return nothing();
     // Every glyph belongs to maya::Panel; this host only projects state onto
     // its Config, exactly as the Retrieval pane does.
@@ -101,7 +101,7 @@ Element smart_mode_overlay(const Model& m) {
 }
 
 Element command_palette(const Model& m) {
-    auto* o = m.ui.overlay.get<ov::CommandPalette>();
+    auto* o = m.ui.panel.get<pn::CommandPalette>();
     if (!o) return nothing();
 
     // Live visibility context — literally the same function the reducer uses,
@@ -248,7 +248,7 @@ Element command_palette(const Model& m) {
 }
 
 Element mention_palette(const Model& m) {
-    auto* o = m.ui.overlay.get<ov::Mention>();
+    auto* o = m.ui.panel.get<pn::Mention>();
     if (!o) return nothing();
 
     const auto& matches = mention_filtered(*o);
@@ -325,7 +325,7 @@ Element mention_palette(const Model& m) {
 }
 
 Element symbol_palette(const Model& m) {
-    auto* o = m.ui.overlay.get<ov::Symbol>();
+    auto* o = m.ui.panel.get<pn::Symbol>();
     if (!o) return nothing();
 
     const auto& matches = symbol_filtered(*o);

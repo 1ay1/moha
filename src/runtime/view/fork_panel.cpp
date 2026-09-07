@@ -5,18 +5,18 @@
 // so the only choice is RAG behaviour. Enter forks with the highlighted
 // row. Own TU, matching rag_settings_view.
 
-#include "agentty/runtime/view/pickers.hpp"
-#include "pickers/pickers_common.hpp"   // kPanel* widths, picker_viewport_h
+#include "agentty/runtime/view/panels.hpp"
+#include "panels/panels_common.hpp"   // kPanel* widths, picker_viewport_h
 
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
-#include "agentty/runtime/fork_picker.hpp"
+#include "agentty/runtime/panel/fork.hpp"
 
 #include <maya/widget/panel.hpp>
 
 #include <string>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::ui {
 
@@ -46,7 +46,7 @@ struct RowSpec { const char* label; const char* help; };
 } // namespace
 
 Element fork_picker_view(const Model& m) {
-    const auto* o = m.ui.overlay.get<ov::Fork>();
+    const auto* o = m.ui.panel.get<pn::Fork>();
     if (!o) return nothing();
 
     Panel::Config cfg;

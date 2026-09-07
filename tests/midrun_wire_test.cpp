@@ -46,16 +46,16 @@
 #include "agentty/runtime/app/update.hpp"
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/msg.hpp"
-#include "agentty/runtime/picker.hpp"
+#include "agentty/runtime/panel/common.hpp"
 #include "agentty/runtime/view/changes_strip.hpp"
 #include "agentty/runtime/view/composer.hpp"
-#include "agentty/runtime/view/pickers.hpp"
+#include "agentty/runtime/view/panels.hpp"
 #include "agentty/runtime/view/status_bar/status_bar.hpp"
 #include "agentty/runtime/view/thread/conversation.hpp"
 #include "agentty/runtime/view/thread/thread.hpp"
 #include "agentty/runtime/view/view.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 using agentty::Model;
 using agentty::Message;
@@ -1767,9 +1767,9 @@ TEST_CASE("model picker open close no scrollback growth") {
     {
         Canvas closed_c = paint(view_root(m), kWidth, pool);
         const int closed_rows = closed_c.max_content_row();
-        m.ui.overlay = ov::FusedPicker{{0, ""}};
+        m.ui.panel = pn::FusedPicker{{0, ""}};
         Canvas open_c = paint(view_root(m), kWidth, pool);
-        m.ui.overlay.close<ov::FusedPicker>();
+        m.ui.panel.close<pn::FusedPicker>();
         const int open_rows = open_c.max_content_row();
         if (open_rows > closed_rows) {
             std::fprintf(stderr,
@@ -1785,7 +1785,7 @@ TEST_CASE("model picker open close no scrollback growth") {
     // Render multiple animation frames per state so the welcome
     // wordmark's per-frame bob and the picker animation advance.
     for (int cycle = 0; cycle < 4; ++cycle) {
-        m.ui.overlay = ov::FusedPicker{{0, ""}};   // open
+        m.ui.panel = pn::FusedPicker{{0, ""}};   // open
         for (int f = 0; f < 5; ++f) {
             render_state(m);
             std::this_thread::sleep_for(std::chrono::milliseconds{8});

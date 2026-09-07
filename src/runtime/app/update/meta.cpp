@@ -20,18 +20,18 @@
 #include "agentty/provider/selection.hpp"   // provider::active (stall watchdog)
 #include "agentty/runtime/composer_attachment.hpp"
 #include "agentty/runtime/mem.hpp"
-#include "agentty/runtime/settings_items.hpp"      // ascend(): revalidate a restored list
+#include "agentty/runtime/panel/settings/items.hpp"      // ascend(): revalidate a restored list
 #include "agentty/runtime/settings_registry.hpp"   // tuning row write-back
 #include "agentty/runtime/view/helpers.hpp"   // ui::profile_label
 #include "agentty/runtime/view/palette.hpp"   // ui::palette_context
 #include "agentty/store/store.hpp"
 #include "agentty/tool/subagent.hpp"   // set_smart: the task router's own copy
 #include "agentty/workspace/checkpoint.hpp"
-#include "agentty/runtime/smart_form.hpp"
+#include "agentty/runtime/panel/smart_form.hpp"
 #include "agentty/runtime/app/settings_cache.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::app::detail {
 
@@ -165,14 +165,14 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             // descend(): whatever is open right now (palette, settings list,
             // nothing) becomes this pane's Esc target automatically — no
             // caller stamps an origin any more.
-            m.ui.overlay.descend(ov::SmartMode{{}, build_smart_form(m), false});
+            m.ui.panel.descend(pn::SmartMode{{}, build_smart_form(m), false});
             return done(std::move(m));
         },
         [&](SmartModeAdvanced) -> Step {
             // Reveal/hide the routing-policy rows. The row SET changes, so the
             // form is rebuilt; the cursor is kept and clamped, since hiding
             // rows can leave it past the end.
-            auto* o = m.ui.overlay.get<ov::SmartMode>();
+            auto* o = m.ui.panel.get<pn::SmartMode>();
             if (!o) return done(std::move(m));
             o->advanced = !o->advanced;
             const int cursor = o->form.cursor;
@@ -189,7 +189,7 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return done(std::move(m));
         },
         [&](SmartModeKey& e) -> Step {
-            auto* o = m.ui.overlay.get<ov::SmartMode>();
+            auto* o = m.ui.panel.get<pn::SmartMode>();
             if (!o) return done(std::move(m));
 
             // What the cursor is on BEFORE the shared reducer runs — activate
@@ -255,7 +255,7 @@ Step meta_update(Model m, msg::MetaMsg mm) {
                 // and must bring it back in the state the user left it.
                 m.ui.smart_assign_advanced = o->advanced;
                 m.ui.smart_assign_from     = o->from;
-                m.ui.overlay.close<ov::SmartMode>();
+                m.ui.panel.close<pn::SmartMode>();
                 return agentty::app::update(std::move(m), Msg{OpenFusedPicker{}});
             }
 
@@ -266,7 +266,7 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return done(std::move(m));
         },
         [&](SmartModeClearSlot) -> Step {
-            auto* o = m.ui.overlay.get<ov::SmartMode>();
+            auto* o = m.ui.panel.get<pn::SmartMode>();
             if (!o) return done(std::move(m));
             // `x` only means something on a slot row. role_of_field returns
             // nullopt for the master switch, so "not a slot" cannot fall
@@ -995,20 +995,20 @@ Step meta_update(Model m, msg::MetaMsg mm) {
 }
 
 void ascend(Model& m) {
-    if (!m.ui.overlay.ascend()) {   // no parent → opened over the thread
-        m.ui.overlay.close_all();
+    if (!m.ui.panel.ascend()) {   // no parent → opened over the thread
+        m.ui.panel.close_all();
         return;
     }
     // Revalidate: the restored snapshot is as old as the descent, and the
     // model may have moved. Only state that indexes a LIVE list needs work —
     // free text (queries) cannot go stale.
-    if (auto* p = m.ui.overlay.get<ov::CommandPalette>()) {
+    if (auto* p = m.ui.panel.get<pn::CommandPalette>()) {
         // The filtered list is model-dependent (gated rows appear/vanish);
         // clamp the cursor into today's list rather than yesterday's.
         const int sz = static_cast<int>(
             filtered_commands(p->query, ui::palette_context(m)).size());
         p->index = sz <= 0 ? 0 : std::clamp(p->index, 0, sz - 1);
-    } else if (auto* s = m.ui.overlay.get<ov::SettingsList>()) {
+    } else if (auto* s = m.ui.panel.get<pn::SettingsList>()) {
         // Rows derive from live model state (a plugin may have connected or
         // been removed while the child pane was open); clamp the restored
         // cursor into today's list. Same policy as the old reopen path,
@@ -1016,7 +1016,7 @@ void ascend(Model& m) {
         const int rows = static_cast<int>(
             settings::items_for(m, s->concern).size());
         s->index = rows <= 0 ? 0 : std::clamp(s->index, 0, rows - 1);
-    } else if (auto* sm = m.ui.overlay.get<ov::SmartMode>()) {
+    } else if (auto* sm = m.ui.panel.get<pn::SmartMode>()) {
         // The form snapshot may predate a config change made in the child
         // (a fused-picker slot assignment writes smart config). Rebuild from
         // the live model — the same builder every (re)open uses — keeping

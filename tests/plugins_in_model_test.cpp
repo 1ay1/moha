@@ -19,12 +19,12 @@
 #include "agtest.hpp"
 
 #include "agentty/runtime/app/update.hpp"
-#include "agentty/runtime/settings_items.hpp"
+#include "agentty/runtime/panel/settings/items.hpp"
 #include "agentty/mcp/plugin_model.hpp"
 
 #include <string>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 using namespace agentty;
 
@@ -35,7 +35,7 @@ TEST_CASE("plugins in model") {
         Model m;
         auto [m2, cmd] = app::update(
             std::move(m), Msg{OpenSettingsList{settings::Category::Plugins}});
-        check(m2.ui.overlay.is<ov::SettingsList>(),
+        check(m2.ui.panel.is<pn::SettingsList>(),
               "open: Plugins panel is open");
         check(m2.ui.plugins_loading,
               "open: plugins_loading armed (connect is loop-driven)");
@@ -46,7 +46,7 @@ TEST_CASE("plugins in model") {
     // ── 2: PluginsUpdated stores the snapshot + clears loading ──
     {
         Model m;
-        m.ui.overlay = ov::SettingsList{{settings::Category::Plugins, 0}};
+        m.ui.panel = pn::SettingsList{{settings::Category::Plugins, 0}};
         m.ui.plugins_loading = true;
 
         mcp::PluginModel snap;
@@ -257,7 +257,7 @@ TEST_CASE("plugins in model") {
 TEST_CASE("settings nav skips non-actionable rows") {
     using settings::Action;
     auto opened = [](const Model& mm) {
-        return mm.ui.overlay.get<ov::SettingsList>();
+        return mm.ui.panel.get<pn::SettingsList>();
     };
 
     // Build a populated Plugins model: row 0 is the "N tools on the wire"

@@ -4,7 +4,7 @@
 // definitions found. Same family as files.hpp: a pure-I/O scanner
 // that the runtime's `#` picker consumes.
 //
-// SymbolEntry lives here (not in runtime/symbol_palette.hpp)
+// SymbolEntry lives here (not in runtime/panel/symbol.hpp)
 // because its shape is dictated by what the scanner emits; the UI
 // state is downstream — symbol_palette::Open just holds a vector
 // of these.

@@ -4,7 +4,7 @@
 // (which needs the model catalogue and the active provider) and hands the
 // resulting labels in; this file only decides what the rows ARE.
 
-#include "agentty/runtime/smart_form.hpp"
+#include "agentty/runtime/panel/smart_form.hpp"
 
 #include "agentty/runtime/settings_registry.hpp"   // row ranges
 

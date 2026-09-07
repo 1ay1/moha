@@ -26,7 +26,7 @@
 
 #include <maya/terminal/input.hpp>
 
-#include "agentty/runtime/form.hpp"
+#include "agentty/runtime/panel/form.hpp"
 
 namespace agentty::form::keys {
 

@@ -177,7 +177,7 @@ struct CharView {
 
 } // namespace agentty::ui::nav
 
-namespace agentty::ui::overlay {
+namespace agentty::ui::panel {
 
 // The message that closes an overlay of this Kind.
 //
@@ -219,4 +219,4 @@ namespace agentty::ui::overlay {
     return Msg{NoOp{}};
 }
 
-} // namespace agentty::ui::overlay
+} // namespace agentty::ui::panel

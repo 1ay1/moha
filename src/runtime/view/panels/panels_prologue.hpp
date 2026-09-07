@@ -10,8 +10,8 @@
 // drifting), each split file includes THIS once. Over-including is harmless;
 // the win is one place to edit when the dependency set changes.
 
-#include "agentty/runtime/view/pickers.hpp"
-#include "pickers_common.hpp"
+#include "agentty/runtime/view/panels.hpp"
+#include "panels_common.hpp"
 #include "agentty/domain/smart_mode.hpp"   // kSmartModeRows
 
 #include <algorithm>
@@ -32,7 +32,7 @@
 #include "agentty/auth/vault.hpp"   // vault::signed_in — uniform OAuth status
 #include "agentty/runtime/view/hints.hpp"
 #include "agentty/runtime/view/palette.hpp"
-#include "agentty/runtime/code_block_picker.hpp"  // extract_code_blocks (palette gating)
+#include "agentty/runtime/panel/code_blocks.hpp"  // extract_code_blocks (palette gating)
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_helpers.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_args.hpp"
 #include "agentty/runtime/view/thread/turn/agent_timeline/tool_body_preview.hpp"
@@ -50,7 +50,7 @@
 #include "agentty/workspace/files.hpp"
 #include "agentty/workspace/symbols.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::ui {
 

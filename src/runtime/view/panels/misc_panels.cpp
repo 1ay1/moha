@@ -7,7 +7,7 @@
 // scrollbar glyph + thumb math, keep-selection-in-view auto-scroll. agentty
 // supplies only the row-level Elements and the typed cursor index.
 
-#include "pickers_prologue.hpp"
+#include "panels_prologue.hpp"
 
 namespace agentty::ui {
 
@@ -19,7 +19,7 @@ namespace agentty::ui {
 // blind. Enter rewinds; the destructive files+transcript revert is the
 // existing RestoreCheckpoint flow.
 Element checkpoint_picker(const Model& m) {
-    auto* o = m.ui.overlay.get<ov::Checkpoints>();
+    auto* o = m.ui.panel.get<pn::Checkpoints>();
     if (!o) return nothing();
 
     // Relative "time ago" from a wall-clock ms stamp — local to the view;

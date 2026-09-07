@@ -4,13 +4,13 @@
 // behaves. The current mode is marked; Enter/Space selects. A deliberately
 // tiny pane: one decision, not a wall of toggles.
 
-#include "agentty/runtime/view/pickers.hpp"
+#include "agentty/runtime/view/panels.hpp"
 
-#include "agentty/runtime/view/form_view.hpp"
+#include "agentty/runtime/view/form_panel.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
-#include "agentty/runtime/rag_settings.hpp"
-#include "pickers/pickers_common.hpp"
+#include "agentty/runtime/panel/rag.hpp"
+#include "panels/panels_common.hpp"
 
 #include <maya/widget/panel.hpp>
 #include <maya/widget/panel.hpp>
@@ -19,7 +19,7 @@
 #include <algorithm>
 #include <string>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::ui {
 
@@ -28,7 +28,7 @@ using namespace maya::dsl;
 namespace rs = agentty::rag_settings;
 
 Element rag_settings_picker(const Model& m) {
-    const auto* o = m.ui.overlay.get<ov::RagSettings>();
+    const auto* o = m.ui.panel.get<pn::RagSettings>();
     if (!o) return nothing();
 
     // ONE pane, always the form. Mode and embedder are two rows of the same

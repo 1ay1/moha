@@ -9,7 +9,7 @@
 
 #include <doctest/doctest.h>
 
-#include "agentty/runtime/rag_settings.hpp"
+#include "agentty/runtime/panel/rag.hpp"
 
 namespace rs = agentty::rag_settings;
 namespace eb = agentty::rag::embed;

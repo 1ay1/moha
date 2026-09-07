@@ -8,12 +8,12 @@
 #include <maya/terminal/ansi.hpp>
 
 #include "agentty/runtime/login.hpp"
-#include "agentty/runtime/picker.hpp"
-#include "agentty/runtime/overlay.hpp"
-#include "agentty/runtime/nav.hpp"
+#include "agentty/runtime/panel/common.hpp"
+#include "agentty/runtime/panel/top.hpp"
+#include "agentty/runtime/panel/nav.hpp"
 #include "agentty/runtime/app/update/internal.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::app {
 
@@ -955,14 +955,14 @@ std::optional<Msg> on_composer(ComposerKeyState s, const KeyEvent& ev) {
 
 Sub<Msg> subscribe(const Model& m) {
     // THE routing decision: which overlay owns the keyboard. Computed once
-    // per subscription rebuild by overlay::top() — the SAME function the
+    // per subscription rebuild by panel::top() — the SAME function the
     // view uses to decide what renders, so keys and pixels can never go to
     // different surfaces (the old twin if-chains could, and did, disagree
     // on order).
-    const auto active_overlay = ui::overlay::top(m);
-    const bool in_login = active_overlay == ui::overlay::Kind::Login;
+    const auto active_overlay = ui::panel::top(m);
+    const bool in_login = active_overlay == ui::panel::Kind::Login;
     const bool settings_list_adding = [&] {
-        const auto* so = m.ui.overlay.get<ov::SettingsList>();
+        const auto* so = m.ui.panel.get<pn::SettingsList>();
         return so && so->input_active;
     }();
     const bool streaming  = m.s.active()
@@ -998,9 +998,9 @@ Sub<Msg> subscribe(const Model& m) {
     // Which mode each form-backed pane is in. Three bools per pane — NOT the
     // pane's rows, which would be a per-frame deep copy on the input path.
     FormFocus rag_form, smart_form_snap;
-    if (const auto* o = m.ui.overlay.get<ui::overlay::RagSettings>())
+    if (const auto* o = m.ui.panel.get<ui::panel::RagSettings>())
         rag_form = focus_of(o->embed.form);
-    if (const auto* o = m.ui.overlay.get<ui::overlay::SmartMode>())
+    if (const auto* o = m.ui.panel.get<ui::panel::SmartMode>())
         smart_form_snap = focus_of(o->form);
 
     auto key_sub = Sub<Msg>::on_key(
@@ -1025,7 +1025,7 @@ Sub<Msg> subscribe(const Model& m) {
             // compile warning, not a silent dead key. Kind::Todo is the one
             // AMBIENT overlay — unclaimed keys fall THROUGH to the global
             // handling below rather than being swallowed.
-            using OK = ui::overlay::Kind;
+            using OK = ui::panel::Kind;
 
             // ── The escape guarantee ──────────────────────────────────
             // Every EXCLUSIVE overlay swallows unclaimed keys (that is what
@@ -1078,7 +1078,7 @@ Sub<Msg> subscribe(const Model& m) {
             if (active_overlay != OK::None && active_overlay != OK::Todo) {
                 if (std::holds_alternative<SpecialKey>(ev.key)
                     && std::get<SpecialKey>(ev.key) == SpecialKey::Escape)
-                    return ui::overlay::close_msg(active_overlay);
+                    return ui::panel::close_msg(active_overlay);
                 // Exclusive overlay, unclaimed non-Esc key: swallow it, as
                 // modality requires.
                 return Msg{NoOp{}};

@@ -11,7 +11,7 @@
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/view/hints.hpp"
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::ui {
 
@@ -140,7 +140,7 @@ Element diff_review(const Model& m) {
             return text(std::move(s), fg_dim(c));
         });
     };
-    auto* cursor = m.ui.overlay.get<ov::DiffReview>();
+    auto* cursor = m.ui.panel.get<pn::DiffReview>();
     if (!cursor || m.d.pending_changes.empty()) return nothing();
     const int fidx = std::min<int>(cursor->file_index,
                                    static_cast<int>(m.d.pending_changes.size()) - 1);

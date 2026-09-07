@@ -10,19 +10,19 @@
 //   • add   — a one-line prompt (header) with a live caret; footer shows
 //             the format hint + submit/cancel keys.
 
-#include "agentty/runtime/view/pickers.hpp"
-#include "pickers/pickers_common.hpp"   // kPanel* widths, picker_viewport_h
+#include "agentty/runtime/view/panels.hpp"
+#include "panels/panels_common.hpp"   // kPanel* widths, picker_viewport_h
 
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
-#include "agentty/runtime/settings_list.hpp"
-#include "agentty/runtime/settings_items.hpp"
+#include "agentty/runtime/panel/settings/list.hpp"
+#include "agentty/runtime/panel/settings/items.hpp"
 
 #include <maya/widget/panel.hpp>
 
 #include <string>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 namespace agentty::ui {
 
@@ -83,7 +83,7 @@ const char* add_prompt(se::Category c) {
 } // namespace
 
 Element settings_list_picker(const Model& m) {
-    const auto* o = m.ui.overlay.get<ov::SettingsList>();
+    const auto* o = m.ui.panel.get<pn::SettingsList>();
     if (!o) return nothing();
 
     const bool adding = o->input_active;

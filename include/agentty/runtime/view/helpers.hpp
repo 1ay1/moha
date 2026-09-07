@@ -159,7 +159,7 @@ namespace agentty::ui {
 // the query text. `accent` colors the caret via OSC 12 (Rgb only;
 // ignored elsewhere — harmless).
 // Bottom-most-anchor-wins in the serializer, and the composer stops
-// emitting its anchor while any overlay is open (overlay::top gate in
+// emitting its anchor while any overlay is open (panel::top gate in
 // composer_config), so exactly one anchor exists per frame.
 //
 // Shape 1 (BLINKING block) is deliberate and unconditional: a search

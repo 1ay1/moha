@@ -7,7 +7,7 @@
 #include <string_view>
 
 #include "agentty/runtime/composer_attachment.hpp"
-#include "agentty/runtime/overlay.hpp"
+#include "agentty/runtime/panel/top.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/view/status_bar/model_badge.hpp"
@@ -177,7 +177,7 @@ bool composer_uses_hardware_caret(const Model& m) noexcept {
     return !painted_caret_env
         && !welcome_bob
         && !agent_active
-        && ui::overlay::top(m) == ui::overlay::Kind::None
+        && ui::panel::top(m) == ui::panel::Kind::None
         && m.ui.terminal_focused
         // Inside tmux, only claim the hardware caret when tmux will
         // actually FORWARD the cursor-style escape (its `cstyle`

@@ -1,7 +1,7 @@
 #pragma once
 // agentty::ui::login — the in-app authentication modal's state machine.
 //
-// Same shape as the other picker variants in `runtime/picker.hpp`: a
+// Same shape as the other picker variants in `runtime/panel/common.hpp`: a
 // closed sum type so the validity of each state's data is enforced
 // by the type system rather than by hand-maintained invariants.
 //

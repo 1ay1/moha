@@ -161,7 +161,7 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/app/update/frozen.cpp
     src/runtime/app/update/tool.cpp
     src/runtime/app/update/login.cpp
-    src/runtime/app/update/picker.cpp
+    src/runtime/app/update/panels.cpp
     src/runtime/app/update/palette.cpp
     src/runtime/app/update/mention.cpp
     src/runtime/app/update/symbol.cpp
@@ -169,13 +169,13 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/app/update/checkpoint.cpp
     src/runtime/app/update/rag_settings.cpp
     src/runtime/app/update/settings_list.cpp
-    src/runtime/settings_items.cpp
-    src/runtime/form.cpp
-    src/runtime/form_keys.cpp
-    src/runtime/view/form_view.cpp
-    src/runtime/rag_settings_form.cpp
+    src/runtime/panel/settings_items.cpp
+    src/runtime/panel/form.cpp
+    src/runtime/panel/form_keys.cpp
+    src/runtime/view/form_panel.cpp
+    src/runtime/panel/rag_form.cpp
     src/runtime/settings_registry.cpp
-    src/runtime/smart_form.cpp
+    src/runtime/panel/smart_form.cpp
     src/runtime/app/update/fork.cpp
     src/runtime/app/update/diff.cpp
     src/runtime/app/update/meta.cpp
@@ -214,13 +214,13 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/view/status_bar/model_badge.cpp
     src/runtime/view/status_bar/status_bar.cpp
     src/runtime/view/changes_strip.cpp
-    src/runtime/view/pickers/model_picker.cpp
-    src/runtime/view/pickers/nav_pickers.cpp
-    src/runtime/view/pickers/tool_pickers.cpp
-    src/runtime/view/pickers/misc_pickers.cpp
-    src/runtime/view/rag_settings_view.cpp
-    src/runtime/view/settings_list_view.cpp
-    src/runtime/view/fork_view.cpp
+    src/runtime/view/panels/model_panel.cpp
+    src/runtime/view/panels/nav_panels.cpp
+    src/runtime/view/panels/tool_panels.cpp
+    src/runtime/view/panels/misc_panels.cpp
+    src/runtime/view/rag_panel.cpp
+    src/runtime/view/settings_list_panel.cpp
+    src/runtime/view/fork_panel.cpp
     src/runtime/view/diff_review.cpp
     src/runtime/view/login.cpp
     src/runtime/view/view.cpp

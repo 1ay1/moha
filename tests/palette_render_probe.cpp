@@ -2,16 +2,16 @@
 // and asserts their layout + styling invariants. Lives in the fold suite so it
 // links the full runtime object tree and renders through the real maya path.
 #include "agentty/runtime/model.hpp"
-#include "agentty/runtime/view/pickers.hpp"
+#include "agentty/runtime/view/panels.hpp"
 #include "agentty/runtime/view/diff_review.hpp"
-#include "agentty/runtime/command_palette.hpp"
+#include "agentty/runtime/panel/palette.hpp"
 #include "agentty/diff/diff.hpp"
-#include "agentty/runtime/picker.hpp"
+#include "agentty/runtime/panel/common.hpp"
 #include <maya/app/inline.hpp>
 #include <cstdio>
 #include <string>
 
-namespace ov = agentty::ui::overlay;
+namespace pn = agentty::ui::panel;
 
 using namespace agentty;
 
@@ -30,7 +30,7 @@ static int count_of(const std::string& h, const std::string& n) {
 
 static void palette_checks() {
     Model m;
-    m.ui.overlay = ov::CommandPalette{{}};
+    m.ui.panel = pn::CommandPalette{{}};
     m.d.pending_changes.push_back(FileChange{});
     auto rend = [&]{ return maya::render_to_string(ui::command_palette(m), 82); };
     std::string out = rend();
@@ -47,7 +47,7 @@ static void palette_checks() {
     check(has(out, "\xe2\x94\x80\xe2\x94\x80"), "palette: header rule");
     check(!has(out, "\xe2\x94\x8c\xe2\x94\x80 THREAD"), "palette: no bracket header");
     check(!has_mojibake(out), "palette: no mojibake");
-    auto* o = m.ui.overlay.get<agentty::ui::overlay::CommandPalette>();
+    auto* o = m.ui.panel.get<agentty::ui::panel::CommandPalette>();
     o->query = "rev";
     std::string ansi = maya::render_to_string_ansi(ui::command_palette(m), 82);
     // Locate the Review row and confirm it carries a distinct highlight style.
@@ -67,7 +67,7 @@ static void diff_review_checks() {
     m.d.pending_changes.push_back(a);
     auto b = diff::compute("README.md", "old\n", "new\nmore\n");
     m.d.pending_changes.push_back(b);
-    m.ui.overlay = ui::overlay::DiffReview{{0, 0}};
+    m.ui.panel = ui::panel::DiffReview{{0, 0}};
 
     std::string out = maya::render_to_string(ui::diff_review(m), 84);
     check(has(out, "login.cpp") && has(out, "README.md"),
