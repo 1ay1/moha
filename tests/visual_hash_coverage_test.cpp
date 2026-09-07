@@ -307,14 +307,14 @@ const std::vector<Axis>& visual_axes() {
         {"smart_mode overlay opens", [](Model& m) {
             agentty::smart_form::Inputs in;
             in.enabled = true;
-            m.ui.overlay = ov::SmartMode{agentty::smart_form::build_form(in)};
+            m.ui.overlay = ov::SmartMode{{}, agentty::smart_form::build_form(in)};
         }},
         {"smart_mode cursor move", [](Model& m) {
             agentty::smart_form::Inputs in;
             in.enabled = true;
             auto f = agentty::smart_form::build_form(in);
             agentty::smart_form::focus_role(f, agentty::smart::ModelRole::Utility);
-            m.ui.overlay = ov::SmartMode{std::move(f)};
+            m.ui.overlay = ov::SmartMode{{}, std::move(f)};
         }},
         {"rag picker opens", [](Model& m) {
             agentty::rag_settings::Open o;

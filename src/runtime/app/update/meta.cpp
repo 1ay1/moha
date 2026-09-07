@@ -20,6 +20,7 @@
 #include "agentty/provider/selection.hpp"   // provider::active (stall watchdog)
 #include "agentty/runtime/composer_attachment.hpp"
 #include "agentty/runtime/mem.hpp"
+#include "agentty/runtime/settings_items.hpp"      // ascend(): revalidate a restored list
 #include "agentty/runtime/settings_registry.hpp"   // tuning row write-back
 #include "agentty/runtime/view/helpers.hpp"   // ui::profile_label
 #include "agentty/runtime/view/palette.hpp"   // ui::palette_context
@@ -161,11 +162,10 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return {std::move(m), std::move(toast)};
         },
         [&](OpenSmartMode) -> Step {
-            // ^S opens from the thread. Callers that open it from somewhere
-            // else (the palette, the settings list) construct the overlay
-            // themselves with the right origin — see settings_list.cpp.
-            m.ui.overlay = ov::SmartMode{build_smart_form(m), false,
-                                         ui::settings_origin::Thread{}};
+            // descend(): whatever is open right now (palette, settings list,
+            // nothing) becomes this pane's Esc target automatically — no
+            // caller stamps an origin any more.
+            m.ui.overlay.descend(ov::SmartMode{{}, build_smart_form(m), false});
             return done(std::move(m));
         },
         [&](SmartModeAdvanced) -> Step {
@@ -182,15 +182,10 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return done(std::move(m));
         },
         [&](CloseSmartMode) -> Step {
-            // Esc unwinds ONE level, to whatever opened this pane — ^S from the
-            // thread closes; a palette row or the settings list reopens that.
-            // This used to always drop to the thread, which threw away the
-            // palette a user had just navigated through.
-            const auto from = m.ui.overlay.get<ov::SmartMode>()
-                            ? m.ui.overlay.get<ov::SmartMode>()->from
-                            : ui::settings_origin::Origin{ui::settings_origin::Thread{}};
-            m.ui.overlay.close<ov::SmartMode>();
-            back_to(m, from);
+            // Esc unwinds ONE level, to whatever opened this pane — ^S from
+            // the thread closes; a palette row or the settings list is
+            // restored with its full state (query, cursor) intact.
+            ascend(m);
             return done(std::move(m));
         },
         [&](SmartModeKey& e) -> Step {
@@ -999,24 +994,39 @@ Step meta_update(Model m, msg::MetaMsg mm) {
     }, mm);
 }
 
-void back_to(Model& m, const ui::settings_origin::Origin& from) {
-    namespace so = ui::settings_origin;
-    std::visit(maya::overload{
-        [&](const so::Thread&) {
-            // Nothing to go back to — the pane was opened by a direct chord,
-            // so Esc means "done", and the overlay slot is already empty.
-        },
-        [&](const so::Palette& p) {
-            // The live context, not a default one: the palette filters rows by
-            // it, so a cursor computed against the wrong context lands on a
-            // neighbouring command.
-            m.ui.overlay = ov::CommandPalette{
-                {"", palette_index_of(p.row, ui::palette_context(m))}};
-        },
-        [&](const so::SettingsList& s) {
-            m.ui.overlay = ov::SettingsList{{s.category, s.row}};
-        },
-    }, from);
+void ascend(Model& m) {
+    if (!m.ui.overlay.ascend()) {   // no parent → opened over the thread
+        m.ui.overlay.close_all();
+        return;
+    }
+    // Revalidate: the restored snapshot is as old as the descent, and the
+    // model may have moved. Only state that indexes a LIVE list needs work —
+    // free text (queries) cannot go stale.
+    if (auto* p = m.ui.overlay.get<ov::CommandPalette>()) {
+        // The filtered list is model-dependent (gated rows appear/vanish);
+        // clamp the cursor into today's list rather than yesterday's.
+        const int sz = static_cast<int>(
+            filtered_commands(p->query, ui::palette_context(m)).size());
+        p->index = sz <= 0 ? 0 : std::clamp(p->index, 0, sz - 1);
+    } else if (auto* s = m.ui.overlay.get<ov::SettingsList>()) {
+        // Rows derive from live model state (a plugin may have connected or
+        // been removed while the child pane was open); clamp the restored
+        // cursor into today's list. Same policy as the old reopen path,
+        // which also carried a bare index.
+        const int rows = static_cast<int>(
+            settings::items_for(m, s->concern).size());
+        s->index = rows <= 0 ? 0 : std::clamp(s->index, 0, rows - 1);
+    } else if (auto* sm = m.ui.overlay.get<ov::SmartMode>()) {
+        // The form snapshot may predate a config change made in the child
+        // (a fused-picker slot assignment writes smart config). Rebuild from
+        // the live model — the same builder every (re)open uses — keeping
+        // only view state: the cursor and the advanced toggle.
+        const int cur = sm->form.cursor;
+        auto f = build_smart_form(m, sm->advanced);
+        f.cursor = std::clamp(cur, 0,
+                              static_cast<int>(f.fields.size()) - 1);
+        sm->form = std::move(f);
+    }
 }
 
 void apply_smart(Model& m, smart::RoleConfig cfg) {

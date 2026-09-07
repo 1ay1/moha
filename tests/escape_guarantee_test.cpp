@@ -74,7 +74,7 @@ const std::vector<Case>& cases() {
         {ov::Kind::SmartMode, "smart mode",
          [](Model& m) {
              smart_form::Inputs in;
-             m.ui.overlay = ov::SmartMode{smart_form::build_form(in)};
+             m.ui.overlay = ov::SmartMode{{}, smart_form::build_form(in)};
          }},
         {ov::Kind::DiffReview, "diff review",
          [](Model& m) { m.ui.overlay = ov::DiffReview{{}}; }},

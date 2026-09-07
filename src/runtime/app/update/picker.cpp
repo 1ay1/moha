@@ -987,8 +987,12 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // with a row set that is now derived.
                 auto f = build_smart_form(m, m.ui.smart_assign_advanced);
                 smart_form::focus_role(f, *role);
-                m.ui.overlay = ov::SmartMode{std::move(f), m.ui.smart_assign_advanced,
-                                             m.ui.smart_assign_from};
+                // Plain assignment, not descend(): this RESTORES the pane the
+                // hand-off destroyed; the parked from rides back in. A descend
+                // here would stash the picker as parent and Esc would bounce.
+                m.ui.overlay = ov::SmartMode{{std::move(m.ui.smart_assign_from)},
+                                             std::move(f),
+                                             m.ui.smart_assign_advanced};
             }
             return done(std::move(m));
         },
@@ -1267,8 +1271,9 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // exact tedium this fixes.
                 auto f = build_smart_form(m, m.ui.smart_assign_advanced);
                 smart_form::focus_role(f, assigned);
-                m.ui.overlay = ov::SmartMode{std::move(f), m.ui.smart_assign_advanced,
-                                             m.ui.smart_assign_from};
+                m.ui.overlay = ov::SmartMode{{std::move(m.ui.smart_assign_from)},
+                                             std::move(f),
+                                             m.ui.smart_assign_advanced};
                 auto toast = set_status_toast(m, "Smart Mode slot set");
                 return {std::move(m), std::move(toast)};
             }

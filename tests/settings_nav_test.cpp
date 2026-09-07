@@ -9,9 +9,11 @@
 // and the settings-list hand-offs were outright trapdoors (they closed the
 // list before opening the target, so Esc lost your place entirely).
 //
-// Each pane now CARRIES its origin (ui::settings_origin), so "return to the
-// wrong place" stops being representable. These tests walk each entry point in
-// and press Esc, through the real app::update reducer.
+// Each pane now CARRIES a snapshot of the panel it was opened over
+// (ov::From), so "return to the wrong place" stops being representable — and
+// the return is the FULL state, query and cursor, not a reconstruction.
+// These tests walk each entry point in and press Esc, through the real
+// app::update reducer.
 
 #include "agtest.hpp"
 
@@ -20,14 +22,12 @@
 #include "agentty/runtime/form_keys.hpp"
 #include "agentty/runtime/settings_categories.hpp"
 #include "agentty/runtime/settings_items.hpp"   // items_for, Action
-#include "agentty/runtime/settings_origin.hpp"
 #include "agentty/runtime/view/palette.hpp"   // ui::palette_context
 
 #include <string>
 #include <vector>
 
 namespace ov = agentty::ui::overlay;
-namespace so = agentty::ui::settings_origin;
 
 using namespace agentty;
 
@@ -102,8 +102,9 @@ TEST_CASE("settings nav: ^S then Esc closes to the thread") {
 }
 
 TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
-    // …with the cursor on the row that opened it, so the palette comes back
-    // exactly where it was left rather than at the top.
+    // …with the FULL palette state the user left: the query they typed and
+    // the cursor on the matching row. (The old origin-reconstruction reset
+    // the query to "" and recomputed a cursor; the snapshot just restores.)
     install_stub_deps();
     {
         Model m = run_from_palette(Model{}, "smart mode", Command::SmartMode);
@@ -111,12 +112,18 @@ TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
 
         m = press_escape(std::move(m));
         REQUIRE(m.ui.overlay.is<ov::CommandPalette>());
-        // Against the LIVE context, which is what the reopened palette filters
-        // by. A default-constructed context describes a different list (it
-        // claims pending changes, a code block and an update are all present),
-        // so comparing against that asserts a row position the user never sees.
-        CHECK(m.ui.overlay.get<ov::CommandPalette>()->index
-              == palette_index_of(Command::SmartMode, ui::palette_context(m)));
+        const auto* p = m.ui.overlay.get<ov::CommandPalette>();
+        CHECK(p->query == "smart mode");
+        // The cursor must still land on the command that was run — resolved
+        // through the SAME filtered list the view renders, against the LIVE
+        // context (revalidated by ascend(), in case gating changed while the
+        // pane was open).
+        const auto matches = filtered_commands(p->query, ui::palette_context(m));
+        REQUIRE(!matches.empty());
+        REQUIRE(p->index >= 0);
+        REQUIRE(p->index < static_cast<int>(matches.size()));
+        CHECK(matches[static_cast<std::size_t>(p->index)]->id
+              == Command::SmartMode);
     }
     {
         Model m = run_from_palette(Model{}, "retrieval", Command::OpenRagSettings);
@@ -124,9 +131,14 @@ TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
 
         m = press_escape(std::move(m));
         REQUIRE(m.ui.overlay.is<ov::CommandPalette>());
-        CHECK(m.ui.overlay.get<ov::CommandPalette>()->index
-              == palette_index_of(Command::OpenRagSettings,
-                                  ui::palette_context(m)));
+        const auto* p = m.ui.overlay.get<ov::CommandPalette>();
+        CHECK(p->query == "retrieval");
+        const auto matches = filtered_commands(p->query, ui::palette_context(m));
+        REQUIRE(!matches.empty());
+        REQUIRE(p->index >= 0);
+        REQUIRE(p->index < static_cast<int>(matches.size()));
+        CHECK(matches[static_cast<std::size_t>(p->index)]->id
+              == Command::OpenRagSettings);
     }
 }
 

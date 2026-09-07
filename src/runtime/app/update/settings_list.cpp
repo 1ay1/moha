@@ -142,24 +142,12 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
             return done(std::move(m));
         },
         [&](CloseSettingsList) -> Step {
-            // Esc returns to the command palette the user opened this from,
-            // rather than dropping straight back to the thread — the
-            // settings pickers are reached via Ctrl+K, so Esc unwinds one
-            // level (picker → palette → thread), matching the mental stack.
-            // Restore the cursor to the row that opened this picker so the
-            // palette comes back exactly where the user left it.
-            Command src = Command::OpenPlugins;
-            if (auto* o = m.ui.overlay.get<ov::SettingsList>()) {
-                switch (o->concern) {
-                    case se::Category::Plugins:  src = Command::OpenPlugins;  break;
-                    case se::Category::Commands: src = Command::OpenCommands; break;
-                    case se::Category::Agents:   src = Command::OpenAgents;   break;
-                    case se::Category::Hooks:    src = Command::OpenHooks;    break;
-                    case se::Category::General:  src = Command::OpenPlugins;  break;
-                }
-            }
-            m.ui.overlay.close<ov::SettingsList>();
-            m.ui.overlay = ov::CommandPalette{{"", palette_index_of(src)}};
+            // Esc unwinds one level: the palette snapshot stashed at open
+            // (query and cursor intact), or the thread when ^S-style direct
+            // entry left no parent. The old hand-reconstruction mapped the
+            // category back to a palette command; the snapshot just IS the
+            // palette the user left.
+            ascend(m);
             return done(std::move(m));
         },
         [&](SettingsListMove& e) -> Step {
@@ -216,29 +204,16 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
                 case se::Action::CycleProfile:
                     return agentty::app::update(std::move(m), Msg{CycleProfile{}});
                 case se::Action::OpenRag: {
-                    // Descending, not jumping: the target records that it came
-                    // from THIS list on THIS category, so Esc lands back here
-                    // rather than dropping to the thread. Constructed directly
-                    // instead of dispatching Open* — those arms mean "opened
-                    // from the thread" and set the origin accordingly.
-                    const auto cat = o->concern;
-                    const int  idx = o->index;   // the row we descended FROM
-                    m.ui.overlay.close<ov::SettingsList>();
-                    auto st = agentty::app::update(std::move(m),
-                                                   Msg{OpenRagSettings{}});
-                    if (auto* r = st.first.ui.overlay.get<ov::RagSettings>())
-                        r->from = ui::settings_origin::SettingsList{cat, idx};
-                    return st;
+                    // Descending, not jumping: OpenRagSettings runs with the
+                    // list still open, so descend() stashes it — category,
+                    // cursor and its own parent chain — as the pane's Esc
+                    // target. No hand-stamped origin, nothing to forget.
+                    return agentty::app::update(std::move(m),
+                                                Msg{OpenRagSettings{}});
                 }
                 case se::Action::OpenSmart: {
-                    const auto cat = o->concern;
-                    const int  idx = o->index;   // the row we descended FROM
-                    m.ui.overlay.close<ov::SettingsList>();
-                    auto st = agentty::app::update(std::move(m),
-                                                   Msg{OpenSmartMode{}});
-                    if (auto* s = st.first.ui.overlay.get<ov::SmartMode>())
-                        s->from = ui::settings_origin::SettingsList{cat, idx};
-                    return st;
+                    return agentty::app::update(std::move(m),
+                                                Msg{OpenSmartMode{}});
                 }
                 case se::Action::RemovePlugin: {
                     auto path = edit_target(row);

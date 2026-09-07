@@ -195,22 +195,16 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             // the keyboard but cannot act on it.
             const auto s = deps().load_settings();
             const auto mode = s.rag.configured ? s.rag.mode : store::RagMode::On;
-            m.ui.overlay = ov::RagSettings{{mode, mode, make_embed_form(mode)}};
+            m.ui.overlay.descend(
+                ov::RagSettings{{mode, mode, make_embed_form(mode)}});
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](CloseRagSettings) -> Step {
-            // Esc unwinds ONE level, to whatever opened this pane. It used to
-            // always reopen the command palette — right when you came from ^K,
-            // wrong from the settings list, which is now a real entry point.
+            // Esc unwinds ONE level: the parent snapshot (palette or settings
+            // list, full state intact) or the thread when there is none.
             // (Selecting a mode, below, commits and drops to the thread —
             // that's "done", not "back".)
-            const auto from = m.ui.overlay.get<ov::RagSettings>()
-                            ? m.ui.overlay.get<ov::RagSettings>()->from
-                            : ui::settings_origin::Origin{
-                                  ui::settings_origin::Palette{
-                                      Command::OpenRagSettings}};
-            m.ui.overlay.close<ov::RagSettings>();
-            back_to(m, from);
+            ascend(m);
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](RagSettingsMove& e) -> Step {

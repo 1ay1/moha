@@ -398,10 +398,9 @@ struct Model {
         bool smart_assign_advanced = false;
         // …and where THAT pane's Esc goes. Parked for the same reason: the
         // overlay holding it is destroyed by the hand-off, and a pane that
-        // came back with a default origin would send Esc to the thread
-        // instead of to the settings list the user descended from.
-        ui::settings_origin::Origin smart_assign_from =
-            ui::settings_origin::Thread{};
+        // came back with an empty `from` would send Esc to the thread
+        // instead of to whatever the user descended from.
+        ui::overlay::From smart_assign_from;
         // Effort tier changed via ←/→ in the model picker but not yet
         // flushed to disk. Persisting per keystroke is a synchronous
         // load+fsync+rename on the UI thread; instead the CycleEffort arm

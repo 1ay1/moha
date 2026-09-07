@@ -348,15 +348,19 @@ Step login_update         (Model m, msg::LoginMsg          lm);
 Step diff_review_update   (Model m, msg::DiffReviewMsg     dm);
 Step meta_update          (Model m, msg::MetaMsg           mm);
 
-// ── Esc: back one level ─────────────────────────────────────────
+// ── Esc: back one level ───────────────────────────────────────────────
 //
-// Reopen whatever `from` names, having already closed the pane. ONE function
-// because three panes need it and three copies is how they drifted: each close
-// handler hardcoded a destination that was right for one entry point and wrong
-// for the others.
+// Restore the panel this one was opened over (its FULL state — query,
+// cursor, nested parent), then REVALIDATE it against the live model: the
+// model may have changed while the child was open, so a restored cursor
+// can point past the end of a now-shorter filtered list. Closes outright
+// when there is no parent (opened over the thread).
 //
-// Navigation is a STACK, not a trapdoor — Esc walks back the way you came in.
-void back_to(Model& m, const ui::settings_origin::Origin& from);
+// ONE function because per-pane copies is how this drifted before: each
+// close handler hardcoded a destination that was right for one entry
+// point and wrong for the others. Navigation is a STACK, not a trapdoor —
+// Esc walks back the way you came in.
+void ascend(Model& m);
 
 // Build the Smart Mode pane from the live model + catalogue (meta.cpp).
 // Shared with picker.cpp, which reopens the pane after a slot assignment —

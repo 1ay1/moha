@@ -56,23 +56,11 @@ template <class T, class V>
 [[nodiscard]] CommandHandler emit_val(V v) {
     return [v](Model m) { return agentty::app::update(std::move(m), Msg{T{v}}); };
 }
-// emit_settings<Msg, Overlay>(row): open a settings pane and record that the
-// PALETTE opened it, at `row`.
-//
-// The Open* messages mean "opened from the thread" — that is what ^S and ^K's
-// own chord do — so a palette row has to say otherwise, or Esc would close to
-// the thread and throw away the palette the user just navigated. Stamping it
-// here keeps the Open* arms honest about their default instead of teaching
-// them about every possible caller.
-template <class T, class Ov>
-[[nodiscard]] CommandHandler emit_settings(Command row) {
-    return [row](Model m) {
-        auto st = agentty::app::update(std::move(m), Msg{T{}});
-        if (auto* o = st.first.ui.overlay.template get<Ov>())
-            o->from = ui::settings_origin::Palette{row};
-        return st;
-    };
-}
+// NOTE on Esc chains: the select arm below snapshots the palette and
+// `adopt()`s it onto WHATEVER the command opened — generically, after
+// dispatch. The old emit_settings<> wrapper (which hand-stamped an origin
+// per settings command) is gone: commands need no per-caller knowledge,
+// and every palette-opened overlay now unwinds back to the palette.
 } // namespace
 
 // The registry: Command → what it does. Ordered for readability, not lookup
@@ -114,11 +102,8 @@ template <class T, class Ov>
         add(Command::OpenModels,       emit<OpenFusedPicker>());
         add(Command::SwapModel,        emit<SwitchToPreviousModel>());
         add(Command::OpenProviders,    emit<OpenProviderPicker>());
-        add(Command::SmartMode,
-            emit_settings<OpenSmartMode, ov::SmartMode>(Command::SmartMode));
-        add(Command::OpenRagSettings,
-            emit_settings<OpenRagSettings, ov::RagSettings>(
-                Command::OpenRagSettings));
+        add(Command::SmartMode,        emit<OpenSmartMode>());
+        add(Command::OpenRagSettings,  emit<OpenRagSettings>());
         add(Command::OpenPlugins,      emit_val<OpenSettingsList>(settings::Category::Plugins));
         add(Command::OpenCommands,     emit_val<OpenSettingsList>(settings::Category::Commands));
         add(Command::OpenAgents,       emit_val<OpenSettingsList>(settings::Category::Agents));
@@ -198,16 +183,30 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             // o->index against the unfiltered enum, which silently fired
             // the wrong command whenever any query was active.
             auto matches = filtered_commands(o->query, ui::palette_context(m));
-            m.ui.overlay.close<ov::CommandPalette>();
+            // Copy out BEFORE closing: `o` points into the variant, and
+            // close() destroys that alternative (the old code read o->index
+            // through the dangling pointer afterwards).
+            const int idx = o->index;
             if (matches.empty()
-                || o->index < 0
-                || o->index >= static_cast<int>(matches.size()))
+                || idx < 0
+                || idx >= static_cast<int>(matches.size())) {
+                m.ui.overlay.close<ov::CommandPalette>();
                 return done(std::move(m));
-            const Command sel = matches[static_cast<std::size_t>(o->index)]->id;
+            }
+            const Command sel = matches[static_cast<std::size_t>(idx)]->id;
+            // Snapshot the palette — query, cursor, its own parent chain —
+            // then dispatch and let WHATEVER the command opened adopt it as
+            // its Esc target. Generic: the registry needs no per-command
+            // origin plumbing, and a command that opens nothing leaves the
+            // slot None, where adopt() is a no-op.
+            auto parent = ov::From::of(ov::Snapshot{m.ui.overlay.raw()});
+            m.ui.overlay.close<ov::CommandPalette>();
             // Behaviour lives in the command registry (dispatch_command), not
             // an inline switch — one declarative table, no drift, and adding a
             // command never touches this arm.
-            return dispatch_command(sel, std::move(m));
+            auto st = dispatch_command(sel, std::move(m));
+            st.first.ui.overlay.adopt(std::move(parent));
+            return st;
         },
     }, pm);
 }

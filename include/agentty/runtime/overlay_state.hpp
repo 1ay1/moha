@@ -44,6 +44,7 @@
 // opening a different overlay. (This was equally true with separate
 // fields: assigning pick::Closed{} destroyed the payload too.)
 
+#include <memory>
 #include <utility>
 #include <variant>
 
@@ -57,7 +58,6 @@
 #include "agentty/runtime/checkpoint_picker.hpp"
 #include "agentty/runtime/rag_settings.hpp"
 #include "agentty/runtime/settings_list.hpp"
-#include "agentty/runtime/settings_origin.hpp"   // Esc target, one level up
 #include "agentty/runtime/fork_picker.hpp"
 #include "agentty/runtime/form.hpp"
 
@@ -65,10 +65,50 @@ namespace agentty::ui::overlay {
 
 struct None {};
 
+// ── From: the panel this one was opened OVER, as a full snapshot ──────
+//
+// Esc must unwind ONE level, and "one level up" depends on how you got
+// here — which a panel cannot know unless it is told. The old answer
+// (settings_origin::Origin) named the parent KIND plus hand-picked fields
+// (a palette row, a settings category+row) and back_to() RECONSTRUCTED the
+// parent from them — every field the reconstruction forgot (the palette's
+// half-typed query) was user state silently thrown away, and every panel
+// that wanted the behaviour needed its own stamp at every opener.
+//
+// A From carries the parent's ENTIRE slot value instead. Restoring is
+// copying it back — nothing to reconstruct, nothing to forget — and the
+// stashed parent contains ITS from, so palette → settings list → pane
+// unwinds level by level without any stack to keep in sync with the slot:
+// the chain lives inside the values, bounded by how deep a user actually
+// descended.
+//
+// shared_ptr<const>: Model is copied by value in the reducer loop, so the
+// snapshot must be cheap to copy and safe to share — immutable, restored
+// BY COPY, never mutated in place. Snapshot is defined after Variant (the
+// type is self-referential through this one indirection).
+//
+// Restored state can be STALE — the model may have changed while the child
+// was open (a stream ended; a setting was applied). ascend()'s caller owns
+// revalidation: clamp cursors, rebuild forms. See app::detail::ascend().
+struct Snapshot;
+class From {
+public:
+    From() = default;
+    [[nodiscard]] bool empty() const noexcept { return !s_; }
+    [[nodiscard]] const Snapshot* get() const noexcept { return s_.get(); }
+    static From of(Snapshot s);
+private:
+    std::shared_ptr<const Snapshot> s_;
+};
+
+// Base every alternative inherits: where Esc goes. Default-empty = "opened
+// over the thread", so Esc closes.
+struct WithFrom { From from; };
+
 // ── The exclusive overlays: one distinct type each, payload inherited ───
-struct FusedPicker     : pick::OpenAt {};
-struct ProviderPicker  : pick::OpenAt {};
-struct ThreadList      : pick::OpenAt {};
+struct FusedPicker     : pick::OpenAt, WithFrom {};
+struct ProviderPicker  : pick::OpenAt, WithFrom {};
+struct ThreadList      : pick::OpenAt, WithFrom {};
 // Smart Mode carries a typed ROW, not an index. The other pickers list a
 // variable number of runtime-derived entries, so an int cursor is the honest
 // representation there; Smart Mode's rows are a fixed, named set, and
@@ -78,36 +118,25 @@ struct ThreadList      : pick::OpenAt {};
 // the env-pin lock and the picker hand-off all come from the shared form
 // layer, so this pane behaves identically to Retrieval and to every future
 // config surface — and an out-of-range cursor is not representable.
-struct SmartMode {
+struct SmartMode : WithFrom {
     agentty::form::Form form;
     // Show the advanced routing-policy rows (^A). View state, not config — it
     // dies with the overlay and is not persisted. Held HERE because every
     // rebuild (a slot assignment reopens the pane) must preserve it, or the
     // rows would vanish the moment the user pinned a model.
     bool advanced = false;
-    // Where Esc goes: one level UP, to whatever opened this. ^S opened it from
-    // the thread, so Esc closes; a palette row or the settings list opened it,
-    // so Esc reopens that with its cursor intact. See settings_origin.hpp —
-    // the close handler used to hardcode one answer, which was necessarily
-    // wrong for two of the three entry points.
-    settings_origin::Origin from = settings_origin::Thread{};
 };
-struct CommandPalette  : agentty::palette::Open {};
-struct Mention         : agentty::mention::Open {};
-struct Symbol          : agentty::symbol_palette::Open {};
-struct CodeBlocks      : agentty::code_block_picker::Open {};
-struct CodeBlockResult : agentty::code_block_picker::Result {};
-struct ToolViewer      : agentty::tool_viewer::Open {};
-struct Checkpoints     : agentty::checkpoint_picker::Open {};
-struct RagSettings     : agentty::rag_settings::Open {
-    // Same contract as SmartMode::from — Esc unwinds one level to whatever
-    // opened this pane, rather than always to the command palette.
-    settings_origin::Origin from =
-        settings_origin::Palette{Command::OpenRagSettings};
-};
-struct SettingsList    : agentty::settings::ListOpen {};
-struct Fork            : agentty::fork_picker::Open {};
-struct DiffReview      : pick::OpenAtCell {};
+struct CommandPalette  : agentty::palette::Open, WithFrom {};
+struct Mention         : agentty::mention::Open, WithFrom {};
+struct Symbol          : agentty::symbol_palette::Open, WithFrom {};
+struct CodeBlocks      : agentty::code_block_picker::Open, WithFrom {};
+struct CodeBlockResult : agentty::code_block_picker::Result, WithFrom {};
+struct ToolViewer      : agentty::tool_viewer::Open, WithFrom {};
+struct Checkpoints     : agentty::checkpoint_picker::Open, WithFrom {};
+struct RagSettings     : agentty::rag_settings::Open, WithFrom {};
+struct SettingsList    : agentty::settings::ListOpen, WithFrom {};
+struct Fork            : agentty::fork_picker::Open, WithFrom {};
+struct DiffReview      : pick::OpenAtCell, WithFrom {};
 
 using Variant = std::variant<
     None,
@@ -116,6 +145,15 @@ using Variant = std::variant<
     CodeBlocks, CodeBlockResult, ToolViewer, Checkpoints,
     RagSettings, SettingsList, Fork,
     DiffReview>;
+
+// The one indirection that lets the type refer to itself: a stashed parent
+// is a whole slot value, from included.
+struct Snapshot { Variant v; };
+inline From From::of(Snapshot s) {
+    From f;
+    f.s_ = std::make_shared<const Snapshot>(std::move(s));
+    return f;
+}
 
 template <class K>
 concept Alternative = requires(Variant v) { std::holds_alternative<K>(v); };
@@ -156,6 +194,56 @@ public:
     }
     // Close unconditionally (whatever is open).
     void close_all() noexcept { v_ = None{}; }
+
+    // Open K OVER the current overlay: K's `from` becomes a snapshot of
+    // whatever is open now, so Esc can restore it verbatim — query, cursor,
+    // nested from and all. Opening over None stashes nothing (from stays
+    // empty) and Esc simply closes: "the thread" needs no snapshot.
+    //
+    // Use `descend` at OPEN sites and plain assignment at RESTORE sites —
+    // a restore that descended would stash the child as its own parent's
+    // parent and Esc would cycle instead of unwinding.
+    template <Alternative K>
+    void descend(K k) {
+        if (!std::holds_alternative<None>(v_))
+            k.from = From::of(Snapshot{std::move(v_)});
+        v_ = std::move(k);
+    }
+
+    // Give the CURRENTLY-OPEN overlay a parent, if it has none yet. The
+    // caller pattern: a dispatcher (palette select, settings-list action)
+    // snapshots itself, closes, runs the command — and then adopts, so
+    // WHATEVER the command opened inherits the dispatcher as its Esc
+    // target. Generic: the dispatcher needs no per-command knowledge, and
+    // a command that opened nothing (None) or re-opened something that
+    // already has a parent is left alone.
+    void adopt(From f) {
+        std::visit(
+            [&](auto& a) {
+                if constexpr (requires { a.from; })
+                    if (a.from.empty()) a.from = std::move(f);
+            },
+            v_);
+    }
+
+    // Restore the parent this overlay was opened over. False if there is
+    // none (opened over the thread, or a pre-descend code path) — the
+    // caller closes instead. The restored state may be STALE; the caller
+    // owns revalidation (app::detail::ascend wraps both).
+    [[nodiscard]] bool ascend() {
+        const From* f = std::visit(
+            [](const auto& a) -> const From* {
+                if constexpr (requires { a.from; }) return &a.from;
+                else return nullptr;
+            },
+            v_);
+        if (!f || f->empty()) return false;
+        // Copy out BEFORE overwriting: the snapshot lives inside v_.
+        auto keep = f->get();
+        Variant restored = keep->v;
+        v_ = std::move(restored);
+        return true;
+    }
 
     [[nodiscard]] const Variant& raw() const noexcept { return v_; }
 
