@@ -68,9 +68,7 @@ namespace ff = agentty::form::field;
             return maya::panel::Pick{v.label, v.placeholder};
         }
         else if constexpr (std::is_same_v<T, ff::Header>) {
-            // A header carries no control — Panel::Item::is_header says so, and
-            // the widget renders the label as a section rule.
-            return maya::panel::Label{};
+            return maya::panel::Header{};
         }
         else if constexpr (std::is_same_v<T, ff::Action>) {
             maya::panel::Action a;
@@ -123,7 +121,6 @@ maya::Panel::Config form_config(const agentty::form::Form& f, maya::Color accent
         row.locked        = src.locked;
         row.locked_reason = src.locked_reason;
         row.error         = src.error;
-        row.is_header     = std::holds_alternative<ff::Header>(src.value);
         row.control       = control_for(src, editing && on_row);
         cfg.items.push_back(std::move(row));
     }

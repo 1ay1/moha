@@ -34,7 +34,7 @@ Panel::Item text_row(const char* label, const char* value = "") {
 Panel::Item header_row(const char* label) {
     Panel::Item r;
     r.leading   = label;
-    r.is_header = true;
+    r.control   = maya::panel::Header{};
     return r;
 }
 
@@ -67,7 +67,7 @@ std::vector<Panel::Item> mixed_rows(int n) {
         r.leading = "row" + std::to_string(i);
         if (i % 3 == 0)  r.help    = "help for row " + std::to_string(i);
         if (i % 5 == 0)  r.error   = "bad value";
-        if (i % 11 == 0) r.is_header = true;   // headers outrank both
+        if (i % 11 == 0) r.control = maya::panel::Header{};   // headers outrank both
         rows.push_back(std::move(r));
     }
     return rows;
@@ -860,7 +860,7 @@ namespace {
 // line, plus one for the help of the FOCUSED row, plus one for an error.
 // A header is always exactly one.
 int expected_lines(const Panel::Item& r, bool focused) {
-    if (r.is_header) return 1;
+    if (r.is_header()) return 1;
     return 1 + (focused && !r.help.empty() ? 1 : 0) + (!r.error.empty() ? 1 : 0);
 }
 
@@ -984,7 +984,7 @@ TEST_CASE("panel: a row is rendered whenever any part of it is on screen") {
         c.items       = mixed_rows(kRows);
         c.selected   = sel;
 
-        const bool is_header = c.items[static_cast<std::size_t>(sel)].is_header;
+        const bool is_header = c.items[static_cast<std::size_t>(sel)].is_header();
         const std::string label = "row" + std::to_string(sel);
         const std::string help  = c.items[static_cast<std::size_t>(sel)].help;
 

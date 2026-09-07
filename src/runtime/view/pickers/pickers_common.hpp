@@ -229,7 +229,7 @@ struct SectionHeader {
 // twice by two owners — harmless only because upper-casing is idempotent.
 [[nodiscard]] inline Panel::Item section_header(SectionHeader h) {
     Panel::Item hdr;
-    hdr.is_header     = true;
+    hdr.control       = maya::panel::Header{};
     hdr.leading       = std::move(h.label);
     hdr.leading_style = fg_of(h.hue);
     if (h.count > 0) {
