@@ -129,7 +129,7 @@ Element settings_list_picker(const Model& m) {
         // navigation rows (RAG/Smart/profile) which show an affordance arrow.
         const Badge b = nav_badge(it.action).value_or(status_badge(it.status));
 
-        Panel::Row row;
+        Panel::Item row;
         // A plugin's tool rows are indented under their server with a tree
         // connector (├─ / └─ for the last one), a dim on/off checkbox, and
         // dimmed text — so the server→tools hierarchy reads at a glance
@@ -172,7 +172,7 @@ Element settings_list_picker(const Model& m) {
             row.trailing       = "press d again to remove";
             row.trailing_style = fg_bold(warn);
         }
-        cfg.rows.push_back(std::move(row));
+        cfg.items.push_back(std::move(row));
     }
 
     // ── Footer ───────────────────────────────────────────────────

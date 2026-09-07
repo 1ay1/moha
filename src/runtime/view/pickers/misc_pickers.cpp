@@ -44,10 +44,10 @@ Element checkpoint_picker(const Model& m) {
     cfg.scroll     = &m.ui.checkpoints_scroll;
     cfg.selected   = o->entries.empty() ? -1 : o->index;
 
-    cfg.rows.reserve(o->entries.size());
+    cfg.items.reserve(o->entries.size());
     for (int i = 0; i < static_cast<int>(o->entries.size()); ++i) {
         const auto& e = o->entries[static_cast<std::size_t>(i)];
-        Panel::Row row;
+        Panel::Item row;
         row.leading = "#" + std::to_string(e.turn) + "  " + e.preview;
         row.leading_style = fg_of(fg);
 
@@ -81,7 +81,7 @@ Element checkpoint_picker(const Model& m) {
         const bool has_changes =
             e.diff_state == checkpoint_picker::Entry::DiffState::Ready && !e.clean;
         row.trailing_style = has_changes ? fg_of(success) : fg_dim(muted);
-        cfg.rows.push_back(std::move(row));
+        cfg.items.push_back(std::move(row));
     }
 
     cfg.footer.push_back(text(""));
@@ -112,8 +112,8 @@ Element todo_modal(const Model& m) {
     cfg.selected   = -1;
 
     if (m.ui.todo.items.empty()) {
-        cfg.items.push_back(text("  No tasks yet.", fg_italic(muted)));
-        cfg.items.push_back(text("  The agent will create tasks as it works.", fg_dim(muted)));
+        cfg.prebuilt.push_back(text("  No tasks yet.", fg_italic(muted)));
+        cfg.prebuilt.push_back(text("  The agent will create tasks as it works.", fg_dim(muted)));
     } else {
         // PlanView returns one Element with all tasks. It lives in
         // the scrollable region so a long task list pages cleanly
@@ -128,7 +128,7 @@ Element todo_modal(const Model& m) {
             }
             plan.add(item.content, ts);
         }
-        cfg.items.push_back(plan.build());
+        cfg.prebuilt.push_back(plan.build());
 
         int total = static_cast<int>(m.ui.todo.items.size());
         int done_count = 0;

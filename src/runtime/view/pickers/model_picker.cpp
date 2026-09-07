@@ -123,7 +123,7 @@ Element fused_picker(const Model& m) {
             m.d.provider_catalogs.begin(), m.d.provider_catalogs.end(),
             [](const ProviderCatalog& c) { return !c.models.empty(); });
 
-        Panel::Row nr;
+        Panel::Item nr;
         if (loading) {
             nr.leading = "  " + std::string{m.s.spinner.current_frame()}
                        + " loading model catalogs\xe2\x80\xa6";
@@ -137,7 +137,7 @@ Element fused_picker(const Model& m) {
             nr.leading = "  no models available";
         }
         nr.leading_style = fg_italic(muted);
-        cfg.rows.push_back(std::move(nr));
+        cfg.items.push_back(std::move(nr));
         cfg.selected = 0;
         // Keep the footer: an empty list is exactly when the user most needs
         // to be told how to leave or how to reach the provider picker.
@@ -217,25 +217,25 @@ Element fused_picker(const Model& m) {
             sh.count = sec == Section::Recent ? recent_count
                      : sec == Section::Others ? all_count
                                               : signin_count;
-            cfg.rows.push_back(section_header(std::move(sh)));
+            cfg.items.push_back(section_header(std::move(sh)));
         }
         if (i == picker->index)
-            visual_selected = static_cast<int>(cfg.rows.size());
+            visual_selected = static_cast<int>(cfg.items.size());
         const bool selected = (i == picker->index);
 
         // Sign-in offer row: "<Provider>  — Enter to sign in". Dim, single
         // action, no trailing chips (there's no model yet).
         if (r.is_signin_offer()) {
-            Panel::Row row;
+            Panel::Item row;
             row.leading       = "  " + r.label;
             row.leading_style = selected ? fg_bold(fg) : fg_of(muted);
             row.trailing       = "Enter to sign in \xe2\x86\x92";   // →
             row.trailing_style = fg_dim(muted);
-            cfg.rows.push_back(std::move(row));
+            cfg.items.push_back(std::move(row));
             continue;
         }
 
-        Panel::Row row;
+        Panel::Item row;
         const bool active = r.active;
         const int bw = maya::string_width(r.label);
         row.badge         = bw < badge_w
@@ -329,7 +329,7 @@ Element fused_picker(const Model& m) {
         // first) truncated "Claude Sonnet 4.6" to keep "200k ★ ✦" intact on a
         // narrow split, which is exactly backwards.
         row.trailing_secondary = true;
-        cfg.rows.push_back(std::move(row));
+        cfg.items.push_back(std::move(row));
     }
     cfg.selected = visual_selected;
 
@@ -469,9 +469,9 @@ Element provider_picker(const Model& m) {
         return {want.empty() ? "\xe2\x9a\xa0 no key" : "\xe2\x9a\xa0 " + std::string{want}, warn};
     };
 
-    cfg.rows.reserve(rows.size());
+    cfg.items.reserve(rows.size());
     for (const auto& r : rows) {
-        Panel::Row row;
+        Panel::Item row;
 
         if (const auto* p = r.preset()) {
             const bool active = (p->id == active_id);
@@ -527,7 +527,7 @@ Element provider_picker(const Model& m) {
         // picker; maya's default (leading yields first) is for rows where the
         // trailing cell matters more, like the file picker's diffstat.
         row.trailing_secondary = true;
-        cfg.rows.push_back(std::move(row));
+        cfg.items.push_back(std::move(row));
     }
 
     // Enter opens the accounts drill-down on an account-capable OAuth

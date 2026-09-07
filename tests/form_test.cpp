@@ -252,7 +252,7 @@ TEST_CASE("form view: a Secret's plaintext never reaches the widget") {
     const auto cfg = agentty::ui::form_config(f, maya::Color::blue());
 
     bool saw_secret = false;
-    for (const auto& row : cfg.rows) {
+    for (const auto& row : cfg.items) {
         if (const auto* s = std::get_if<maya::panel::Secret>(&row.control)) {
             saw_secret = true;
             CHECK(s->filled == 15);             // "sk-super-secret"
@@ -284,8 +284,8 @@ TEST_CASE("form view: the widget renders every control kind") {
     f.cursor = 0;
     press(f, key(maya::SpecialKey::Enter));
     auto cfg = agentty::ui::form_config(f, maya::Color::blue());
-    cfg.rows[1].origin = "settings.json";
-    cfg.rows[2].error  = "port must be 1-65535";
+    cfg.items[1].origin = "settings.json";
+    cfg.items[2].error  = "port must be 1-65535";
     maya::Element el = maya::Panel{std::move(cfg)}.build();
     CHECK(true);   // built without throwing
 }

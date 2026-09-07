@@ -29,16 +29,16 @@ Element thread_list(const Model& m) {
     cfg.selected   = picker->index;
 
     if (m.d.threads.empty()) {
-        cfg.items.push_back(text(
+        cfg.prebuilt.push_back(text(
             m.s.threads_loading ? "  Loading conversations…"
                                 : "  No threads yet.",
             fg_italic(muted)));
     } else {
-        cfg.rows.reserve(m.d.threads.size());
+        cfg.items.reserve(m.d.threads.size());
         for (const auto& t : m.d.threads) {
             const bool is_current = (t.id == m.d.current.id);
             const bool confirming = (picker->confirm_remove == t.id.value);
-            Panel::Row row;
+            Panel::Item row;
             // "● " marks the thread you're IN — the anchor for both the
             // picker and the ^←→ / Alt+←→ quick-cycle. Non-current rows
             // get a two-space gutter so titles stay column-aligned.
@@ -60,7 +60,7 @@ Element thread_list(const Model& m) {
             // The TITLE is what you are choosing; the timestamp is reference
             // data and yields first on a narrow terminal.
             row.trailing_secondary = true;
-            cfg.rows.push_back(std::move(row));
+            cfg.items.push_back(std::move(row));
         }
     }
 
@@ -152,18 +152,18 @@ Element command_palette(const Model& m) {
     };
 
     if (matches.empty()) {
-        cfg.items.push_back(text(
+        cfg.prebuilt.push_back(text(
             o->query.empty() ? "  no commands available"
                              : "  no command matches \"" + o->query + "\"",
             fg_italic(muted)));
     } else {
-        cfg.rows.reserve(matches.size() + 6);
+        cfg.items.reserve(matches.size() + 6);
         // On the EMPTY query we render real SECTION HEADERS between category
         // groups — true nesting, VS Code / Raycast style. The moment the user
         // types, headers vanish and the list goes flat-with-ranking (empty
         // categories would be noise, and label-hit ranking reorders anyway).
         // Headers are non-selectable rows; the cursor (o->index) indexes the
-        // header-FREE `matches`, so we only set Row::selected on real rows and
+        // header-FREE `matches`, so we only set Item::selected on real rows and
         // point cfg.selected at the header-adjusted display position — the
         // reducer/dispatch stay entirely header-unaware.
         const bool show_headers = o->query.empty();
@@ -183,7 +183,7 @@ Element command_palette(const Model& m) {
                     // rolling a header here is how the palette ended up with
                     // its own bracket-and-spine grouping while the model
                     // picker had plain rules — two designs for one idea.
-                    cfg.rows.push_back(section_header(
+                    cfg.items.push_back(section_header(
                         SectionHeader{std::string{lab}, category_hue(cmd.category)}));
                     ++display_row;
                 }
@@ -191,7 +191,7 @@ Element command_palette(const Model& m) {
                 first_group = false;
             }
 
-            Panel::Row row;
+            Panel::Item row;
 
             // ── Label, with live toggle/mode state folded in ──
             std::string label{cmd.label};
@@ -209,7 +209,7 @@ Element command_palette(const Model& m) {
                 row.highlight_fg = cmd.danger ? danger : highlight;
             }
 
-            // ── Description UNDER the focused row (Row::help), rag-style,
+            // ── Description UNDER the focused row (Item::help), rag-style,
             // not crammed into the same line. Prose belongs below — it gets
             // the panel's full width and only renders where the cursor is.
             // Trailing keeps only the SHORTCUT: short reference data that
@@ -222,7 +222,7 @@ Element command_palette(const Model& m) {
                 row.trailing_secondary = true;
             }
             if (i == o->index) sel_display = display_row;
-            cfg.rows.push_back(std::move(row));
+            cfg.items.push_back(std::move(row));
             ++display_row;
         }
         // Scroll tracks the header-adjusted cursor position.
@@ -272,18 +272,18 @@ Element mention_palette(const Model& m) {
         // Distinguish "still indexing" from "genuinely empty" — the walk
         // runs on a background thread; if it hasn't landed the picker
         // opened with an empty snapshot. files_ready() tells them apart.
-        cfg.items.push_back(text(
+        cfg.prebuilt.push_back(text(
             files_ready() ? "  workspace empty (or no readable files)"
                           : "  indexing workspace… (type to filter as it fills)",
             fg_italic(muted)));
     } else if (matches.empty()) {
-        cfg.items.push_back(text("  no matches", fg_italic(muted)));
+        cfg.prebuilt.push_back(text("  no matches", fg_italic(muted)));
     } else {
-        cfg.rows.reserve(matches.size());
+        cfg.items.reserve(matches.size());
         for (int i = 0; i < static_cast<int>(matches.size()); ++i) {
             const auto& path = o->files[matches[static_cast<std::size_t>(i)]];
             auto [name, dir] = split_name_dir(path);
-            Panel::Row row;
+            Panel::Item row;
             // Git-status badge — the working-set signal, colour-coded so the
             // file you're editing is unmistakable at a glance. Padded to a
             // fixed width so leading text aligns across rows.
@@ -308,7 +308,7 @@ Element mention_palette(const Model& m) {
             }
             row.trailing       = parent_segment(dir);
             row.trailing_style = fg_dim(muted);
-            cfg.rows.push_back(std::move(row));
+            cfg.items.push_back(std::move(row));
         }
     }
 
@@ -345,18 +345,18 @@ Element symbol_palette(const Model& m) {
     cfg.header.push_back(sep);
 
     if (o->entries.empty()) {
-        cfg.items.push_back(text(
+        cfg.prebuilt.push_back(text(
             symbols_ready() ? "  no symbols indexed"
                             : "  indexing symbols… (type to filter as it fills)",
             fg_italic(muted)));
     } else if (matches.empty()) {
-        cfg.items.push_back(text("  no matches", fg_italic(muted)));
+        cfg.prebuilt.push_back(text("  no matches", fg_italic(muted)));
     } else {
-        cfg.rows.reserve(matches.size());
+        cfg.items.reserve(matches.size());
         for (int i = 0; i < static_cast<int>(matches.size()); ++i) {
             const auto& sym = o->entries[matches[static_cast<std::size_t>(i)]];
             auto [fname, dir] = split_name_dir(sym.path);
-            Panel::Row row;
+            Panel::Item row;
             // Combine symbol name + locus into the leading cell so a
             // long parent-dir trailing still has room to render; the
             // "name  file:line" pair is what the user is scanning.
@@ -372,7 +372,7 @@ Element symbol_palette(const Model& m) {
             }
             row.trailing       = parent_segment(dir);
             row.trailing_style = fg_dim(muted);
-            cfg.rows.push_back(std::move(row));
+            cfg.items.push_back(std::move(row));
         }
     }
 

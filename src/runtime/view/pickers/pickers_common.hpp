@@ -227,8 +227,8 @@ struct SectionHeader {
 // The label is passed through as-is: Panel uppercases a header and draws the
 // rule to the right edge. Doing it here too was the same transform applied
 // twice by two owners — harmless only because upper-casing is idempotent.
-[[nodiscard]] inline Panel::Row section_header(SectionHeader h) {
-    Panel::Row hdr;
+[[nodiscard]] inline Panel::Item section_header(SectionHeader h) {
+    Panel::Item hdr;
     hdr.is_header     = true;
     hdr.leading       = std::move(h.label);
     hdr.leading_style = fg_of(h.hue);

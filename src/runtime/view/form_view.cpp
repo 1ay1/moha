@@ -68,7 +68,7 @@ namespace ff = agentty::form::field;
             return maya::panel::Pick{v.label, v.placeholder};
         }
         else if constexpr (std::is_same_v<T, ff::Header>) {
-            // A header carries no control — Panel::Row::is_header says so, and
+            // A header carries no control — Panel::Item::is_header says so, and
             // the widget renders the label as a section rule.
             return maya::panel::Label{};
         }
@@ -111,12 +111,12 @@ maya::Panel::Config form_config(const agentty::form::Form& f, maya::Color accent
         cfg.min_width = std::max(24, std::min(cfg.min_width, max_width - 6));
 
     const bool editing = f.editing();
-    cfg.rows.reserve(f.fields.size());
+    cfg.items.reserve(f.fields.size());
     for (std::size_t i = 0; i < f.fields.size(); ++i) {
         const auto& src = f.fields[i];
         const bool on_row = (static_cast<int>(i) == f.cursor);
 
-        maya::Panel::Row row;
+        maya::Panel::Item row;
         row.leading       = src.label;
         row.help          = src.help;
         row.origin        = src.origin;
@@ -125,7 +125,7 @@ maya::Panel::Config form_config(const agentty::form::Form& f, maya::Color accent
         row.error         = src.error;
         row.is_header     = std::holds_alternative<ff::Header>(src.value);
         row.control       = control_for(src, editing && on_row);
-        cfg.rows.push_back(std::move(row));
+        cfg.items.push_back(std::move(row));
     }
 
     // The open dropdown, if any. Its contents come from the SAME function the

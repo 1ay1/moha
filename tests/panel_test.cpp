@@ -24,15 +24,15 @@ namespace {
 
 using maya::Panel;
 
-Panel::Row text_row(const char* label, const char* value = "") {
-    Panel::Row r;
+Panel::Item text_row(const char* label, const char* value = "") {
+    Panel::Item r;
     r.leading = label;
     r.trailing = value;
     return r;
 }
 
-Panel::Row header_row(const char* label) {
-    Panel::Row r;
+Panel::Item header_row(const char* label) {
+    Panel::Item r;
     r.leading   = label;
     r.is_header = true;
     return r;
@@ -60,10 +60,10 @@ int count_of(const std::string& hay, const std::string& needle) {
 // A list whose rows deliberately disagree in height: some carry help (which
 // renders only under the FOCUSED row, so content height depends on where the
 // cursor is), some an error, some are headers.
-std::vector<Panel::Row> mixed_rows(int n) {
-    std::vector<Panel::Row> rows;
+std::vector<Panel::Item> mixed_rows(int n) {
+    std::vector<Panel::Item> rows;
     for (int i = 0; i < n; ++i) {
-        Panel::Row r;
+        Panel::Item r;
         r.leading = "row" + std::to_string(i);
         if (i % 3 == 0)  r.help    = "help for row " + std::to_string(i);
         if (i % 5 == 0)  r.error   = "bad value";
@@ -110,8 +110,8 @@ TEST_CASE("panel: an out-of-range cursor focuses nothing") {
     for (int sel : {-1, 5, 99, -99}) {
         Panel::Config c;
         c.title = " Stale ";
-        c.rows.push_back(text_row("Alpha"));
-        c.rows.push_back(text_row("Beta"));
+        c.items.push_back(text_row("Alpha"));
+        c.items.push_back(text_row("Beta"));
         c.selected = sel;
         const auto out = render(std::move(c));
 
@@ -128,8 +128,8 @@ TEST_CASE("panel: the cursor never lands on a header") {
     // act on — an arrow key that appears to do nothing.
     Panel::Config c;
     c.title = " Grouped ";
-    c.rows.push_back(header_row("Section"));
-    c.rows.push_back(text_row("Alpha"));
+    c.items.push_back(header_row("Section"));
+    c.items.push_back(text_row("Alpha"));
     c.selected = 0;                       // the header
     const auto out = render(std::move(c));
 
@@ -143,10 +143,10 @@ TEST_CASE("panel: a menu only opens on a Choice row") {
     // list anyway would put a dropdown under a control that cannot use it.
     Panel::Config c;
     c.title = " Mismatch ";
-    Panel::Row t;
+    Panel::Item t;
     t.leading = "Toggle";
     t.control = maya::panel::Toggle{true};
-    c.rows.push_back(std::move(t));
+    c.items.push_back(std::move(t));
     c.selected = 0;
 
     Panel::Menu m;
@@ -164,10 +164,10 @@ TEST_CASE("panel: a menu on a Choice row renders its options") {
     // The positive case, so the guard above cannot pass by disabling menus.
     Panel::Config c;
     c.title = " Choice ";
-    Panel::Row ch;
+    Panel::Item ch;
     ch.leading = "Backend";
     ch.control = maya::panel::Choice{"One"};
-    c.rows.push_back(std::move(ch));
+    c.items.push_back(std::move(ch));
     c.selected = 0;
 
     Panel::Menu m;
@@ -190,10 +190,10 @@ TEST_CASE("panel: a menu with fewer hints than options is safe") {
     // option without a bounds check reads past the end.
     Panel::Config c;
     c.title = " Hints ";
-    Panel::Row ch;
+    Panel::Item ch;
     ch.leading = "Pick";
     ch.control = maya::panel::Choice{"A"};
-    c.rows.push_back(std::move(ch));
+    c.items.push_back(std::move(ch));
     c.selected = 0;
 
     Panel::Menu m;
@@ -214,9 +214,9 @@ TEST_CASE("panel: highlight offsets outside the label are ignored") {
     // index past the label.
     Panel::Config c;
     c.title = " Highlight ";
-    Panel::Row r = text_row("abc");
+    Panel::Item r = text_row("abc");
     r.highlight = {0, 2, 99, -1};          // 99 and -1 are out of range
-    c.rows.push_back(std::move(r));
+    c.items.push_back(std::move(r));
     c.selected = 0;
 
     const auto out = render(std::move(c));
@@ -228,9 +228,9 @@ TEST_CASE("panel: an empty label with highlights is safe") {
     // The degenerate pairing: highlight offsets against no text at all.
     Panel::Config c;
     c.title = " Empty label ";
-    Panel::Row r;
+    Panel::Item r;
     r.highlight = {0, 1};
-    c.rows.push_back(std::move(r));
+    c.items.push_back(std::move(r));
     c.selected = 0;
 
     CHECK(framed(render(std::move(c))));
@@ -245,7 +245,7 @@ TEST_CASE("panel: a tiny viewport still shows a row") {
     c.scroll     = &s;
     c.viewport_h = 0;                      // degenerate
     for (int i = 0; i < 20; ++i)
-        c.rows.push_back(text_row("Row"));
+        c.items.push_back(text_row("Row"));
     c.selected = 19;
 
     const auto out = render(std::move(c));
@@ -259,7 +259,7 @@ TEST_CASE("panel: a narrow terminal keeps the frame closed") {
     Panel::Config c;
     c.title     = " N ";
     c.min_width = 1;                       // degenerate
-    c.rows.push_back(text_row("Alpha", "value"));
+    c.items.push_back(text_row("Alpha", "value"));
     c.selected = 0;
 
     const auto out = render(std::move(c), 24);
@@ -275,10 +275,10 @@ TEST_CASE("panel: the cursor row's help is kept in view when scrolled") {
     c.title      = " Help ";
     c.scroll     = &s;
     c.viewport_h = 6;
-    for (int i = 0; i < 12; ++i) c.rows.push_back(text_row("Row"));
-    Panel::Row last = text_row("Last");
+    for (int i = 0; i < 12; ++i) c.items.push_back(text_row("Row"));
+    Panel::Item last = text_row("Last");
     last.help = "the description of the last row";
-    c.rows.push_back(std::move(last));
+    c.items.push_back(std::move(last));
     c.selected = 12;                       // the last row
 
     const auto out = render(std::move(c));
@@ -296,7 +296,7 @@ TEST_CASE("panel: rows stay inside the border at any width") {
         c.scroll     = &s;
         c.viewport_h = 4;
         for (int i = 0; i < 10; ++i)
-            c.rows.push_back(text_row(
+            c.items.push_back(text_row(
                 "a fairly long label that will not fit",
                 "and a fairly long value too"));
         c.selected = 0;
@@ -327,10 +327,10 @@ TEST_CASE("panel: the caret stays visible in a value longer than its column") {
     for (std::size_t at : {std::size_t{0}, v.size() / 2, v.size()}) {
         Panel::Config c;
         c.title = " Caret ";
-        Panel::Row r;
+        Panel::Item r;
         r.leading = "Host";
         r.control = maya::panel::Text{v, at};
-        c.rows.push_back(std::move(r));
+        c.items.push_back(std::move(r));
         c.selected = 0;
 
         const auto out = render(std::move(c), 70);
@@ -348,10 +348,10 @@ TEST_CASE("panel: a scrolled value says which way it is scrolled") {
 
     Panel::Config c;
     c.title = " Caret ";
-    Panel::Row r;
+    Panel::Item r;
     r.leading = "Host";
     r.control = maya::panel::Text{v, v.size()};   // caret at the END
-    c.rows.push_back(std::move(r));
+    c.items.push_back(std::move(r));
     c.selected = 0;
 
     const auto out = render(std::move(c), 70);
@@ -364,10 +364,10 @@ TEST_CASE("panel: the text caret is not the row cursor bar") {
     // block, which cannot be confused with the quarter-block edge marker.
     Panel::Config c;
     c.title = " Distinct ";
-    Panel::Row r;
+    Panel::Item r;
     r.leading = "Host";
     r.control = maya::panel::Text{"abc", 1};
-    c.rows.push_back(std::move(r));
+    c.items.push_back(std::move(r));
     c.selected = 0;
 
     const auto out = render(std::move(c));
@@ -380,14 +380,14 @@ TEST_CASE("panel: an empty field being edited says so") {
     // artefact. An empty edited field keeps its placeholder beside the caret.
     Panel::Config c;
     c.title = " Empty edit ";
-    Panel::Row t;
+    Panel::Item t;
     t.leading = "Host";
     t.control = maya::panel::Text{"", 0, "hostname"};
-    c.rows.push_back(std::move(t));
-    Panel::Row s;
+    c.items.push_back(std::move(t));
+    Panel::Item s;
     s.leading = "Key";
     s.control = maya::panel::Secret{0, 0};
-    c.rows.push_back(std::move(s));
+    c.items.push_back(std::move(s));
     c.selected = 0;
 
     const auto out = render(std::move(c));
@@ -401,10 +401,10 @@ TEST_CASE("panel: dropdown options align with the value column") {
     // so opening a dropdown appeared to move the column.
     Panel::Config c;
     c.title = " Align ";
-    Panel::Row ch;
+    Panel::Item ch;
     ch.leading = "Backend";
     ch.control = maya::panel::Choice{"Auto"};
-    c.rows.push_back(std::move(ch));
+    c.items.push_back(std::move(ch));
     c.selected = 0;
 
     Panel::Menu m;
@@ -462,7 +462,7 @@ TEST_CASE("panel: a frame settles in a single render") {
         c.title      = " Nav ";
         c.viewport_h = kVh;
         c.scroll     = &s;
-        c.rows       = mixed_rows(kRows);
+        c.items       = mixed_rows(kRows);
         c.selected   = sel;
         return render(std::move(c), 72);
     };
@@ -507,9 +507,9 @@ TEST_CASE("panel: the scrollbar is sized from the CURRENT frame's content") {
             c.scroll     = &s;
             c.selected   = 0;
             for (int i = 0; i < rows; ++i) {
-                Panel::Row r;
+                Panel::Item r;
                 r.leading = "row" + std::to_string(i);
-                c.rows.push_back(std::move(r));
+                c.items.push_back(std::move(r));
             }
 
             const maya::Element frame = Panel{std::move(c)}.build();
@@ -530,9 +530,9 @@ TEST_CASE("panel: the scrollbar is sized from the CURRENT frame's content") {
         c.scroll     = &s;
         c.selected   = 0;
         for (int i = 0; i < 4; ++i) {
-            Panel::Row r;
+            Panel::Item r;
             r.leading = "row" + std::to_string(i);
-            c.rows.push_back(std::move(r));
+            c.items.push_back(std::move(r));
         }
         const maya::Element frame = Panel{std::move(c)}.build();
         (void)frame;
@@ -565,9 +565,9 @@ TEST_CASE("panel: independent panels do not interfere across threads") {
                 c.scroll     = &s;
                 c.selected   = sel;
                 for (int i = 0; i < rows; ++i) {
-                    Panel::Row r;
+                    Panel::Item r;
                     r.leading = "row" + std::to_string(i);
-                    c.rows.push_back(std::move(r));
+                    c.items.push_back(std::move(r));
                 }
                 if (render(std::move(c), 72).empty()) ++failures;
             }
@@ -591,9 +591,9 @@ TEST_CASE("panel: a built Element outlives the Config it came from") {
     maya::Element e = [] {
         Panel::Config c;
         c.title = " Scoped ";
-        c.rows.push_back(header_row("SECTION"));
+        c.items.push_back(header_row("SECTION"));
         for (int i = 0; i < 12; ++i)
-            c.rows.push_back(text_row("field", "value"));
+            c.items.push_back(text_row("field", "value"));
         c.selected = 1;
         return Panel{std::move(c)}.build();
     }();
@@ -621,14 +621,14 @@ TEST_CASE("panel: landing on a header does not move the view") {
         for (int sel = 0; sel < 40; ++sel) {
             Panel::Config c;
             c.title = " Nav "; c.viewport_h = kVh; c.scroll = &s;
-            c.rows = mixed_rows(kRows); c.selected = sel;
+            c.items = mixed_rows(kRows); c.selected = sel;
             (void)render(std::move(c), 72);
         }
     };
     const auto render_at = [&](maya::ScrollState& s, int sel) {
         Panel::Config c;
         c.title = " Nav "; c.viewport_h = kVh; c.scroll = &s;
-        c.rows = mixed_rows(kRows); c.selected = sel;
+        c.items = mixed_rows(kRows); c.selected = sel;
         (void)render(std::move(c), 72);
     };
 
@@ -674,7 +674,7 @@ TEST_CASE("panel: multi-row items scroll in row space") {
     c.scroll     = &s;
     for (int i = 0; i < 4; ++i) {
         const std::string n = std::to_string(i);
-        c.items.push_back(maya::dsl::v(
+        c.prebuilt.push_back(maya::dsl::v(
             maya::dsl::text("item" + n + "-a"),
             maya::dsl::text("item" + n + "-b"),
             maya::dsl::text("item" + n + "-c")).build());
@@ -707,10 +707,10 @@ TEST_CASE("panel: the dropdown reads as one attached block") {
     c.viewport_h = 12;
     c.scroll     = &s;
     for (int i = 0; i < 3; ++i) {
-        Panel::Row r;
+        Panel::Item r;
         r.leading = "field" + std::to_string(i);
         if (i == 1) r.control = maya::panel::Choice{.label = "beta"};
-        c.rows.push_back(std::move(r));
+        c.items.push_back(std::move(r));
     }
     Panel::Menu m;
     // Deliberately ragged: the shortest and longest differ by a lot, which is
@@ -781,7 +781,7 @@ TEST_CASE("panel: a vertical list has no horizontal scroll extent") {
         c.title      = " Wide ";
         c.viewport_h = 10;
         c.scroll     = &s;
-        c.rows       = mixed_rows(50);      // includes headers, help, errors
+        c.items       = mixed_rows(50);      // includes headers, help, errors
         c.selected   = 1;
         (void)render(std::move(c), width);
         CHECK(s.max_x == 0);
@@ -800,7 +800,7 @@ TEST_CASE("panel: resizing settles in a single render") {
         c.title      = " Resize ";
         c.viewport_h = 10;
         c.scroll     = &s;
-        c.rows       = mixed_rows(200);
+        c.items       = mixed_rows(200);
         c.selected   = 100;
         return render(std::move(c), width);
     };
@@ -826,10 +826,10 @@ TEST_CASE("panel: a Secret is never rendered in the clear") {
     // the widget's inputs, so no render path can leak one.
     Panel::Config c;
     c.title = " Secret ";
-    Panel::Row r;
+    Panel::Item r;
     r.leading = "API key";
     r.control = maya::panel::Secret{11};
-    c.rows.push_back(std::move(r));
+    c.items.push_back(std::move(r));
     c.selected = 0;
 
     const auto out = render(std::move(c));
@@ -859,7 +859,7 @@ namespace {
 // The documented rule, restated independently of the widget: a row is one
 // line, plus one for the help of the FOCUSED row, plus one for an error.
 // A header is always exactly one.
-int expected_lines(const Panel::Row& r, bool focused) {
+int expected_lines(const Panel::Item& r, bool focused) {
     if (r.is_header) return 1;
     return 1 + (focused && !r.help.empty() ? 1 : 0) + (!r.error.empty() ? 1 : 0);
 }
@@ -880,12 +880,12 @@ TEST_CASE("panel: the measured body is exactly as tall as the painted body") {
         c.title      = " Mixed ";
         c.viewport_h = kVh;
         c.scroll     = &s;
-        c.rows       = mixed_rows(kRows);
+        c.items       = mixed_rows(kRows);
         c.selected   = sel;
 
         int total = 0;
         for (int i = 0; i < kRows; ++i)
-            total += expected_lines(c.rows[static_cast<std::size_t>(i)],
+            total += expected_lines(c.items[static_cast<std::size_t>(i)],
                                     i == sel);
 
         (void)render(std::move(c));
@@ -915,10 +915,10 @@ TEST_CASE("panel: an open menu is measured at the height it draws") {
         c.viewport_h = vh;
         c.scroll     = &s;
         for (int i = 0; i < 12; ++i) {
-            Panel::Row r;
+            Panel::Item r;
             r.leading = "field" + std::to_string(i);
             if (i == 3) r.control = maya::panel::Choice{.label = "b"};
-            c.rows.push_back(std::move(r));
+            c.items.push_back(std::move(r));
         }
         Panel::Menu m;
         for (int i = 0; i < opts; ++i)
@@ -981,12 +981,12 @@ TEST_CASE("panel: a row is rendered whenever any part of it is on screen") {
         c.title      = " Window ";
         c.viewport_h = kVh;
         c.scroll     = &s;          // shared: this is a real key-nav walk
-        c.rows       = mixed_rows(kRows);
+        c.items       = mixed_rows(kRows);
         c.selected   = sel;
 
-        const bool is_header = c.rows[static_cast<std::size_t>(sel)].is_header;
+        const bool is_header = c.items[static_cast<std::size_t>(sel)].is_header;
         const std::string label = "row" + std::to_string(sel);
-        const std::string help  = c.rows[static_cast<std::size_t>(sel)].help;
+        const std::string help  = c.items[static_cast<std::size_t>(sel)].help;
 
         const auto out = render(std::move(c));
 
@@ -1008,11 +1008,11 @@ TEST_CASE("panel: a huge list renders only its viewport") {
     c.title      = " Huge ";
     c.viewport_h = 14;
     c.scroll     = &s;
-    c.rows.reserve(5000);
+    c.items.reserve(5000);
     for (int i = 0; i < 5000; ++i) {
-        Panel::Row r;
+        Panel::Item r;
         r.leading = "entry-" + std::to_string(i);
-        c.rows.push_back(std::move(r));
+        c.items.push_back(std::move(r));
     }
     c.selected = 2500;
 

@@ -28,7 +28,7 @@ Element code_block_picker(const Model& m) {
     cfg.scroll     = &m.ui.code_blocks_scroll;
     cfg.selected   = o->blocks.empty() ? -1 : o->index;
 
-    cfg.rows.reserve(o->blocks.size());
+    cfg.items.reserve(o->blocks.size());
     // First pass width: the badge column is padded to a common width so the
     // preview text of every row starts at the same column (a ▶ run badge and
     // a `python` tag badge would otherwise misalign). Mirrors the tool
@@ -57,7 +57,7 @@ Element code_block_picker(const Model& m) {
         const std::string lang = b.language.empty() ? std::string{"sh"}
                                                     : b.language;
 
-        Panel::Row row;
+        Panel::Item row;
         // Badge = the run affordance, a stable colour anchor (NOT dimmed on
         // the selected row, so "which of these actually runs" reads at a
         // glance): a ` ▶ ` play glyph in the success hue for a runnable
@@ -83,7 +83,7 @@ Element code_block_picker(const Model& m) {
                      + std::to_string(b.line_count)
                      + (b.line_count == 1 ? " line" : " lines");
         row.trailing_style = fg_dim(muted);
-        cfg.rows.push_back(std::move(row));
+        cfg.items.push_back(std::move(row));
     }
 
     cfg.footer.push_back(text(""));
@@ -219,7 +219,7 @@ Element code_block_result_card(const Model& m) {
     const int first = sc.y;
     const int last  = std::min(total_rows, first + vh);
     for (int i = first; i < last; ++i)
-        cfg.items.push_back(cache.rows[static_cast<std::size_t>(i)]);
+        cfg.prebuilt.push_back(cache.rows[static_cast<std::size_t>(i)]);
 
     cfg.footer.push_back(text(""));
     // Scroll-position readout: which lines of the capture are on screen —
@@ -299,10 +299,10 @@ Element tool_output_viewer(const Model& m) {
         for (const auto& e : o->entries)
             badge_w = std::max(badge_w, string_width(e.title));
 
-        cfg.rows.reserve(o->entries.size());
+        cfg.items.reserve(o->entries.size());
         for (int i = 0; i < sz; ++i) {
             const auto& e = o->entries[static_cast<std::size_t>(i)];
-            Panel::Row row;
+            Panel::Item row;
             const Color cat_hue = tool_category_color(e.name);
             if (e.is_live) {
                 // The currently-running tool, pinned to the top. A bright
@@ -319,7 +319,7 @@ Element tool_output_viewer(const Model& m) {
                 row.leading_style  = fg_of(fg);
                 row.trailing       = e.trailing;
                 row.trailing_style = fg_dim(cat_hue);
-                cfg.rows.push_back(std::move(row));
+                cfg.items.push_back(std::move(row));
                 continue;
             }
             row.badge = e.title;
@@ -337,7 +337,7 @@ Element tool_output_viewer(const Model& m) {
             row.leading_style  = e.failed ? fg_of(danger) : fg_of(fg);
             row.trailing       = e.trailing;
             row.trailing_style = e.failed ? fg_of(danger) : fg_dim(muted);
-            cfg.rows.push_back(std::move(row));
+            cfg.items.push_back(std::move(row));
         }
         if (!compact_list) {
             cfg.footer.push_back(text(""));
@@ -555,10 +555,10 @@ Element tool_output_viewer(const Model& m) {
     const int first = sc.y;
     const int last  = std::min(total_rows, first + vh);
     for (int i = first; i < last; ++i)
-        cfg.items.push_back(cache.rows[static_cast<std::size_t>(i)]);
+        cfg.prebuilt.push_back(cache.rows[static_cast<std::size_t>(i)]);
 
     if (total_rows == 0)
-        cfg.items.push_back(
+        cfg.prebuilt.push_back(
             text("  waiting for output\xe2\x80\xa6", fg_italic(muted))
             | height(1)
             | overflow(Overflow::Hidden));

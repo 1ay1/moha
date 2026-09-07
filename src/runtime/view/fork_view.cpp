@@ -64,12 +64,12 @@ Element fork_picker_view(const Model& m) {
     // table to keep in order.
     for (const fp::Choice c : fp::kChoices) {
         const RowSpec spec = row_spec(c);
-        Panel::Row row;
+        Panel::Item row;
         row.leading       = spec.label;
         row.leading_style = fg_of(fg);
         row.trailing      = spec.help;
         row.trailing_style = fg_dim(muted);
-        cfg.rows.push_back(std::move(row));
+        cfg.items.push_back(std::move(row));
     }
 
     cfg.footer.push_back(text(""));
