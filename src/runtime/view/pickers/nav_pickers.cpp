@@ -35,7 +35,6 @@ Element thread_list(const Model& m) {
             fg_italic(muted)));
     } else {
         cfg.rows.reserve(m.d.threads.size());
-        int i = 0;
         for (const auto& t : m.d.threads) {
             const bool is_current = (t.id == m.d.current.id);
             const bool confirming = (picker->confirm_remove == t.id.value);
@@ -62,7 +61,6 @@ Element thread_list(const Model& m) {
             // data and yields first on a narrow terminal.
             row.trailing_secondary = true;
             cfg.rows.push_back(std::move(row));
-            ++i;
         }
     }
 
@@ -211,19 +209,18 @@ Element command_palette(const Model& m) {
                 row.highlight_fg = cmd.danger ? danger : highlight;
             }
 
-            // ── Trailing: description · shortcut. The LABEL is what you
-            // select, so mark the trailing SECONDARY — the widget shrinks it
-            // first and keeps a gap, so on a narrow (phone/SSH) terminal the
-            // description gracefully truncates (then vanishes) while the label
-            // and shortcut stay whole, instead of the label being eaten.
-            std::string trailing{cmd.description};
+            // ── Description UNDER the focused row (Row::help), rag-style,
+            // not crammed into the same line. Prose belongs below — it gets
+            // the panel's full width and only renders where the cursor is.
+            // Trailing keeps only the SHORTCUT: short reference data that
+            // survives a narrow (phone/SSH) terminal, marked SECONDARY so it
+            // yields before the label does.
+            row.help = cmd.description;
             if (cmd.shortcut && *cmd.shortcut) {
-                trailing += "  \xc2\xb7  ";
-                trailing += cmd.shortcut;
+                row.trailing           = cmd.shortcut;
+                row.trailing_style     = fg_dim(muted);
+                row.trailing_secondary = true;
             }
-            row.trailing           = std::move(trailing);
-            row.trailing_style     = fg_dim(muted);
-            row.trailing_secondary = true;
             if (i == o->index) sel_display = display_row;
             cfg.rows.push_back(std::move(row));
             ++display_row;
