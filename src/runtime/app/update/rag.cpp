@@ -315,6 +315,22 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
             return {std::move(m), Cmd<Msg>::none()};
         },
 
+        [&](RagEmbedPaste& e) -> Step {
+            auto* f = form_of(m);
+            if (!f) return {std::move(m), Cmd<Msg>::none()};
+            auto* row = f->form.focused();
+            // Only while actually EDITING: the router targets pastes by a
+            // snapshot that can go stale (same rule as the editing-intent
+            // guards), so the reducer re-checks the true mode.
+            if (!f->form.editing() || !row || !row->editable() || row->locked)
+                return {std::move(m), Cmd<Msg>::none()};
+            agentty::form::paste(row->value, e.text);
+            f->form.dirty = true;
+            invalidate_probe(*f);
+            refresh_status(*f);
+            return {std::move(m), Cmd<Msg>::none()};
+        },
+
         // Run the probe on a worker: it dials a network endpoint (or loads a
         // model file) and must never block the UI thread.
         [&](RagEmbedTest) -> Step {

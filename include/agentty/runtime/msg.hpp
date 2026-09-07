@@ -613,6 +613,9 @@ struct UpdateTodos { std::vector<TodoItem> items; };
 struct OpenSmartMode {};
 struct CloseSmartMode {};
 struct SmartModeKey { form::keys::Action action; };
+// Bracketed paste while a Smart Mode field is being edited — lands in the
+// field's buffer, not the composer behind the panel.
+struct SmartModePaste { std::string text; };
 // Reveal/hide the advanced routing-policy rows (^A). View state on the
 // overlay; the pane rebuilds. Not persisted.
 struct SmartModeAdvanced {};
@@ -785,6 +788,9 @@ struct RagAdvanced {};
 struct RagEmbedOpen  {};                   // enter the embeddings pane
 struct RagEmbedClose {};                   // leave one level (menu/field/pane)
 struct RagEmbedKey   { form::keys::Action action; };
+// Bracketed paste while a Retrieval field is being edited (API keys, hosts,
+// paths — the fields pasting was born for).
+struct RagEmbedPaste { std::string text; };
 struct RagEmbedTest  {};                   // run the probe (worker thread)
 // Probe result. Carries the MEASURED dimension — the only trustworthy source
 // for it, since a wrong dim makes rag-cpp's HNSW silently drop every vector.
@@ -1027,7 +1033,7 @@ using CheckpointMsg = std::variant<
 using RagMsg = std::variant<
     OpenRag, CloseRag, RagMove,
     RagAdjust, RagReset, RagAdvanced,
-    RagEmbedOpen, RagEmbedClose, RagEmbedKey,
+    RagEmbedOpen, RagEmbedClose, RagEmbedKey, RagEmbedPaste,
     RagEmbedTest, RagEmbedTestDone, RagEmbedSave, RagEmbedRevert>;
 
 using SettingsListMsg = std::variant<
@@ -1060,7 +1066,7 @@ using MetaMsg = std::variant<
     CompactContext, CycleProfile, RestoreCheckpoint, CheckpointRestored,
     ScrollThread, ToggleRetrievedExpanded,
     TerminalFocus,
-    OpenSmartMode, CloseSmartMode, SmartModeKey, SmartModeAdvanced,
+    OpenSmartMode, CloseSmartMode, SmartModeKey, SmartModePaste, SmartModeAdvanced,
     SmartModeClearSlot,
     Tick, Quit, NoOp, ClearStatus, RedrawScreen,
     UpdateCheckDone, UpdateApplied>;

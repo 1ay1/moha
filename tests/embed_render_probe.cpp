@@ -57,6 +57,7 @@ int main(int argc, char** argv) {
     c.model = "nomic-embed-text";
 
     const bool advanced = (arg == "--advanced" || arg == "--scroll");
+    const bool edit     = (arg == "--edit");
     agentty::store::Settings settings;
     auto form = rs::build_form(c, agentty::store::RagMode::On, settings, advanced);
     form.subtitle = eb::describe(c);
@@ -74,6 +75,18 @@ int main(int argc, char** argv) {
     }
 
     if (open_menu) {
+        auto a = agentty::form::keys::Action{agentty::form::keys::Intent::Activate};
+        (void)agentty::form::keys::apply(form, a);
+    }
+
+    // --edit: cursor on the Model row (a Text field), mid-edit — renders the
+    // caret, the edit-hued edge bar and the mode hint in the note line.
+    if (edit) {
+        for (std::size_t i = 0; i < form.fields.size(); ++i)
+            if (form.fields[i].is_text_like() && !form.fields[i].locked) {
+                form.cursor = static_cast<int>(i);
+                break;
+            }
         auto a = agentty::form::keys::Action{agentty::form::keys::Intent::Activate};
         (void)agentty::form::keys::apply(form, a);
     }

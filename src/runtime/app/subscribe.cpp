@@ -1126,7 +1126,9 @@ Sub<Msg> subscribe(const Model& m) {
         });
 
     auto paste_sub = Sub<Msg>::on_paste(
-        [in_login, settings_list_adding](std::string s) -> Msg {
+        [in_login, settings_list_adding,
+         rag_editing   = rag_form.editing,
+         smart_editing = smart_form_snap.editing](std::string s) -> Msg {
         // Route a bracketed paste to whatever modal currently owns text
         // input, so it lands in that field's buffer — NOT the composer.
         //   • login modal open      → its code/key fields (OAuth codes, keys)
@@ -1134,9 +1136,15 @@ Sub<Msg> subscribe(const Model& m) {
         //     "name command args…" line under Ctrl+K → Plugins). Without
         //     this the paste fell through to ComposerPaste and appeared in
         //     the composer while the add-prompt had visual focus.
+        //   • a form field being EDITED (Retrieval / Smart Mode) → that
+        //     field — API keys and hosts are the fields pasting exists for;
+        //     these panes' reducers re-verify the mode, so a stale snapshot
+        //     degrades to a dropped paste, never a mis-target.
         //   • otherwise               → the composer.
         if (in_login) return LoginPaste{std::move(s)};
         if (settings_list_adding) return SettingsListPaste{std::move(s)};
+        if (rag_editing)   return RagEmbedPaste{std::move(s)};
+        if (smart_editing) return SmartModePaste{std::move(s)};
         return ComposerPaste{std::move(s)};
     });
 
