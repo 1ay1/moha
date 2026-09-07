@@ -27,6 +27,8 @@
 #include "agentty/runtime/login.hpp"
 #include "agentty/runtime/view/palette.hpp"
 
+#include <maya/widget/panel.hpp>
+
 namespace agentty::ui {
 
 using namespace maya;
@@ -82,56 +84,6 @@ Element body_text(std::string_view content, Style sty) {
         .style   = sty,
         .wrap    = TextWrap::Wrap,
     }};
-}
-
-// Render an inline single-line text input with a block cursor. Mirrors
-// the composer's input style. `secret` masks each byte as a bullet so
-// keys/codes don't sit in plaintext on screen.
-//
-// The input row sits inside its own thin-bordered rect that spans the
-// modal width — readable at a glance, and the focus border tells the
-// user where to type without needing a separate label row above.
-Element input_row(std::string_view value, int cursor, bool secret,
-                  std::string_view placeholder)
-{
-    std::string display;
-    if (secret) {
-        // Bytes, not codepoints — a full UTF-8 mask is overkill since
-        // OAuth codes and API keys are ASCII.
-        display.assign(value.size(), '*');
-    } else {
-        display.assign(value);
-    }
-
-    auto prefix = text("\xE2\x80\xBA ", fg_bold(accent));   // ›
-
-    if (display.empty()) {
-        // Placeholder + cursor at home position.
-        auto caret = text(" ", Style{}.with_bold().with_inverse());
-        Element ph_el = !placeholder.empty()
-            ? Element{text(std::string{placeholder}, fg_dim(muted))}
-            : Element{text(" ", fg_of(fg))};
-        return (h(prefix, caret, std::move(ph_el))
-                | padding(0, 1)
-                | border(BorderStyle::Round)
-                | bcolor(accent)).build();
-    }
-
-    if (cursor < 0) cursor = 0;
-    if (cursor > static_cast<int>(display.size())) cursor = static_cast<int>(display.size());
-    std::string before = display.substr(0, cursor);
-    std::string at_cursor = (cursor < static_cast<int>(display.size()))
-        ? std::string{display[cursor]} : std::string{" "};
-    std::string after = (cursor + 1 < static_cast<int>(display.size()))
-        ? display.substr(cursor + 1) : std::string{};
-    return (h(
-        prefix,
-        text(before, fg_of(fg)),
-        text(at_cursor, Style{}.with_bold().with_inverse()),
-        text(after, fg_of(fg))
-    ) | padding(0, 1)
-      | border(BorderStyle::Round)
-      | bcolor(accent)).build();
 }
 
 // Bordered, wrap-mode "URL panel": the URL fills the modal width and
@@ -229,37 +181,63 @@ Element panel_picking(std::string_view provider,
     return v(std::move(rows)).build();
 }
 
+// One-item Panel for a single-field input state. The field is a REAL
+// panel item — Secret (count-only masking, the type-level can't-leak
+// guarantee) or Text (caret windowing, so a long paste scrolls under the
+// caret instead of walking off the edge). Prose rides as header lines;
+// Enter SUBMITS here, so the derived editing hint is overridden.
+Element input_panel(std::string title, std::vector<Element> prose,
+                    maya::PanelControl control, std::string note,
+                    std::string editing_note,
+                    std::vector<Element> footer = {}) {
+    maya::Panel::Config cfg;
+    cfg.title     = std::move(title);
+    cfg.accent    = accent;
+    cfg.min_width = 48;
+    cfg.selected  = 0;
+    for (auto& p : prose) cfg.header.push_back(std::move(p));
+    cfg.header.push_back(text(""));
+    maya::Panel::Item it;
+    it.leading = "\xe2\x80\xba";                    // › — the prompt marker
+    it.leading_style = fg_bold(accent);
+    it.control = std::move(control);
+    cfg.items.push_back(std::move(it));
+    cfg.footer       = std::move(footer);
+    cfg.note         = std::move(note);
+    cfg.editing_note = std::move(editing_note);
+    return maya::Panel{std::move(cfg)}.build();
+}
+
 Element panel_oauth_code(const login::OAuthCode& s) {
-    std::vector<Element> rows;
-    rows.push_back(text("OAuth via claude.ai", fg_bold(fg)));
-    rows.push_back(body_text(
-        "Step 1 — open this URL and authorize agentty:",
+    std::vector<Element> prose;
+    prose.push_back(body_text(
+        "  Step 1 \xe2\x80\x94 open this URL and authorize agentty:",
         fg_dim(muted)));
-    rows.push_back(text(""));
-    rows.push_back(url_panel(s.authorize_url));
-    rows.push_back(text(""));
-    rows.push_back(body_text(
-        "Step 2 — paste the callback code below:",
+    prose.push_back(text(""));
+    prose.push_back(url_panel(s.authorize_url));
+    prose.push_back(text(""));
+    prose.push_back(body_text(
+        "  Step 2 \xe2\x80\x94 paste the callback code below:",
         fg_dim(muted)));
-    rows.push_back(text(""));
-    rows.push_back(input_row(s.code_input, s.cursor, /*secret=*/true,
-                             /*placeholder=*/"paste the code from claude.ai"));
-    rows.push_back(text(""));
-    // Two hint rows: top for the URL-side affordances, bottom for the
-    // form submit / cancel. The empty-code shortcuts are the most
-    // helpful surface — the user lands here with an empty field, so
-    // bare `c` / `o` give them the URL without any modifier dance.
-    rows.push_back(key_hints({
+    // The code is a credential in transit: Secret, count-only.
+    maya::panel::Secret sec;
+    sec.filled      = s.code_input.size();
+    sec.caret       = std::min<std::size_t>(
+        static_cast<std::size_t>(std::max(0, s.cursor)), s.code_input.size());
+    sec.placeholder = "paste the code from claude.ai";
+    std::vector<Element> footer;
+    footer.push_back(text(""));
+    footer.push_back(key_hints({
         {"c",   "copy URL"},
         {"o",   "open browser"},
         {"^Y",  "copy"},
         {"^O",  "open"},
     }));
-    rows.push_back(key_hints({
-        {"Enter", "submit code"},
-        {"Esc",   "cancel"},
-    }));
-    return v(std::move(rows)).build();
+    return input_panel(" OAuth via claude.ai ", std::move(prose),
+                       std::move(sec),
+                       "\xe2\x86\xb5 submit code \xc2\xb7 esc cancel",
+                       "\xe2\x86\xb5 submit code \xc2\xb7 esc cancel",
+                       std::move(footer));
 }
 
 Element panel_oauth_exchanging() {
@@ -368,33 +346,28 @@ Element panel_device_waiting(const login::DeviceWaiting& s) {
 }
 
 Element panel_api_key(const login::ApiKeyInput& s) {
-    std::vector<Element> rows;
     const bool anthropic = s.provider.empty();
-    if (anthropic) {
-        rows.push_back(text("Anthropic API key", fg_bold(fg)));
-        rows.push_back(body_text(
-            "Paste an sk-ant-… key. It will be saved to "
-            "~/.config/agentty/credentials.json (0600).",
-            fg_dim(muted)));
-        rows.push_back(text(""));
-        rows.push_back(input_row(s.key_input, s.cursor, /*secret=*/true,
-                                 /*placeholder=*/"sk-ant-…"));
-    } else {
-        rows.push_back(text(s.provider_label + " API key", fg_bold(fg)));
-        rows.push_back(body_text(
-            "Paste your " + s.provider_label + " API key to switch to it. "
-            "It's saved to ~/.config/agentty settings so you won't be "
-            "asked again.",
-            fg_dim(muted)));
-        rows.push_back(text(""));
-        rows.push_back(input_row(s.key_input, s.cursor, /*secret=*/true,
-                                 /*placeholder=*/"paste API key…"));
-    }
-    rows.push_back(text(""));
-    rows.push_back(key_hints({{"Enter", "submit"},
-                              {"Esc", login::has_parent(s.origin)
-                                          ? "back" : "cancel"}}));
-    return v(std::move(rows)).build();
+    std::vector<Element> prose;
+    prose.push_back(body_text(
+        anthropic
+            ? "  Paste an sk-ant-\xe2\x80\xa6 key. It will be saved to "
+              "~/.config/agentty/credentials.json (0600)."
+            : "  Paste your " + s.provider_label + " API key to switch to "
+              "it. It's saved to ~/.config/agentty settings so you won't "
+              "be asked again.",
+        fg_dim(muted)));
+    // The KEY never reaches the widget — panel::Secret carries a count.
+    maya::panel::Secret sec;
+    sec.filled      = s.key_input.size();
+    sec.caret       = std::min<std::size_t>(
+        static_cast<std::size_t>(std::max(0, s.cursor)), s.key_input.size());
+    sec.placeholder = anthropic ? "sk-ant-\xe2\x80\xa6" : "paste API key\xe2\x80\xa6";
+    const char* back = login::has_parent(s.origin) ? "esc back" : "esc cancel";
+    return input_panel(
+        " " + (anthropic ? std::string{"Anthropic"} : s.provider_label) + " API key ",
+        std::move(prose), std::move(sec),
+        std::string{"\xe2\x86\xb5 submit \xc2\xb7 "} + back,
+        std::string{"\xe2\x86\xb5 submit \xc2\xb7 "} + back);
 }
 
 // Connect probe in flight: name the host and what's being tried so the
@@ -414,10 +387,9 @@ Element panel_host_probing(const login::HostProbing& s) {
 }
 
 Element panel_custom_host(const login::CustomHostInput& s) {
-    std::vector<Element> rows;
-    rows.push_back(text("Custom OpenAI-compatible host", fg_bold(fg)));
-    rows.push_back(body_text(
-        "Enter a host or host:port for any server that speaks the OpenAI "
+    std::vector<Element> prose;
+    prose.push_back(body_text(
+        "  Enter a host or host:port for any server that speaks the OpenAI "
         "chat API \xe2\x80\x94 llama.cpp, vLLM, LM Studio, a proxy, or a "
         "remote box. A non-443 port uses plain HTTP (the local-server "
         "convention); a bare host uses HTTPS on 443 and defaults to the "
@@ -427,63 +399,85 @@ Element panel_custom_host(const login::CustomHostInput& s) {
         "(e.g. \xe2\x80\xa6/v1#work and \xe2\x80\xa6/v1#personal \xe2\x80\x94 "
         "each keeps its own API key and model).",
         fg_dim(muted)));
-    rows.push_back(text(""));
-    rows.push_back(input_row(s.host_input, s.cursor, /*secret=*/false,
-                             /*placeholder=*/"localhost:8080"));
-    rows.push_back(text(""));
-    rows.push_back(body_text(
-        "Examples:  localhost:8080  \xc2\xb7  https://ollama.com/v1#work  "
+    // Text, not Secret — a host is not a credential, and the caret
+    // windowing means a long pasted URL scrolls under the caret.
+    maya::panel::Text t;
+    t.value       = s.host_input;
+    t.caret       = std::min<std::size_t>(
+        static_cast<std::size_t>(std::max(0, s.cursor)), s.host_input.size());
+    t.placeholder = "localhost:8080";
+    const char* back = login::has_parent(s.origin) ? "esc back" : "esc cancel";
+    std::vector<Element> footer;
+    footer.push_back(text(""));
+    footer.push_back(body_text(
+        "  Examples:  localhost:8080  \xc2\xb7  https://ollama.com/v1#work  "
         "\xc2\xb7  inference.example.com  \xc2\xb7  https://inference.example.com/api",
         fg_dim(muted)));
-    rows.push_back(text(""));
-    rows.push_back(key_hints({{"Enter", "connect"},
-                              {"Esc", login::has_parent(s.origin)
-                                          ? "back" : "cancel"}}));
-    return v(std::move(rows)).build();
+    return input_panel(
+        " Custom OpenAI-compatible host ", std::move(prose), std::move(t),
+        std::string{"\xe2\x86\xb5 connect \xc2\xb7 "} + back,
+        std::string{"\xe2\x86\xb5 connect \xc2\xb7 "} + back,
+        std::move(footer));
 }
 
-// The account switcher: a selectable list of saved accounts for the active
-// provider plus a trailing "+ Add another account…" row. The highlighted
-// row is inverse-styled; the active account carries a ✓.
+// The account switcher, as a real maya::Panel — the same widget every
+// picker uses, so the account list gets the panel's cursor bar, badge
+// column, viewport scrolling and mode chrome instead of a hand-rolled
+// inverse-video list (which the panel merge removed everywhere else).
+//
+// Item mapping:
+//   badge   ✓ on the ACTIVE account (accent) — ⚠ while delete is armed
+//   leading label ("#work", "personal…")
+//   trailing"press d again to confirm" while armed — SECONDARY, so the
+//           label survives narrow terminals
+//   + Add another account… rides as the last item, dim until selected
 Element panel_account_list(const login::AccountList& s) {
-    std::vector<Element> rows;
-    rows.push_back(text(s.provider_label + " accounts", fg_bold(fg)));
-    rows.push_back(body_text(
-        s.rows.empty()
-            ? "No saved accounts. Add one to sign in without leaving agentty."
-            : "The active account is marked ✓. Switching is instant; removing "
-              "an account requires confirmation.",
-        fg_dim(muted)));
-    rows.push_back(text(""));
+    maya::Panel::Config cfg;
+    cfg.title     = " " + s.provider_label + " accounts ";
+    cfg.accent    = accent;
+    cfg.min_width = 48;
+    const int n = static_cast<int>(s.rows.size());
+    cfg.selected  = std::min(s.cursor, n);   // last item = add-new
 
-    const int add_row = static_cast<int>(s.rows.size());
-    for (int i = 0; i < add_row; ++i) {
-        const auto& r = s.rows[static_cast<std::size_t>(i)];
-        const bool sel = (i == s.cursor);
+    if (s.rows.empty()) {
+        cfg.header.push_back(body_text(
+            "  No saved accounts. Add one to sign in without leaving agentty.",
+            fg_dim(muted)));
+        cfg.header.push_back(text(""));
+    }
+
+    for (const auto& r : s.rows) {
+        maya::Panel::Item it;
         const bool confirming = (s.confirm_remove == r.label);
-        std::string line = std::string(sel ? "› " : "  ")
-                         + (r.active ? "✓ " : "  ") + r.label;
-        if (confirming) line += "  — press Del/d again to remove";
-        Style sty = confirming ? fg_bold(danger)
-                  : sel ? Style{}.with_fg(fg).with_bold().with_inverse()
-                        : (r.active ? fg_bold(accent) : fg_of(fg));
-        rows.push_back(text(line, sty));
+        it.leading = r.label;
+        it.active  = r.active;
+        if (confirming) {
+            it.badge           = "\xe2\x9a\xa0";           // ⚠
+            it.badge_style     = fg_of(danger);
+            it.leading_style   = fg_bold(danger);
+            it.trailing        = "press d again to confirm";
+            it.trailing_style  = fg_of(danger);
+        } else if (r.active) {
+            it.badge         = "\xe2\x9c\x93";             // ✓
+            it.badge_style   = fg_of(accent);
+            it.leading_style = fg_bold(accent);
+            it.trailing       = "active";
+            it.trailing_style = fg_dim(muted);
+        }
+        it.trailing_secondary = true;
+        cfg.items.push_back(std::move(it));
     }
-    // Trailing add-new row.
     {
-        const bool sel = (s.cursor >= add_row);
-        std::string line = std::string(sel ? "› " : "  ")
-                         + "  + Add another account…";
-        Style sty = sel ? Style{}.with_fg(fg).with_bold().with_inverse()
-                        : fg_dim(muted);
-        rows.push_back(text(line, sty));
+        maya::Panel::Item add;
+        add.leading       = "+ Add another account\xe2\x80\xa6";
+        add.leading_style = fg_dim(muted);
+        cfg.items.push_back(std::move(add));
     }
 
-    rows.push_back(text(""));
-    rows.push_back(key_hints({{"↑↓", "move"}, {"Enter", "select"},
-                              {"Del/d", s.confirm_remove.empty() ? "remove" : "confirm"},
-                              {"Esc", "close"}}));
-    return v(std::move(rows)).build();
+    cfg.note = s.confirm_remove.empty()
+                   ? "\xe2\x86\x91\xe2\x86\x93 move \xc2\xb7 \xe2\x86\xb5 select \xc2\xb7 d remove \xc2\xb7 esc close"
+                   : "d confirm remove \xc2\xb7 any other key cancels";
+    return maya::Panel{std::move(cfg)}.build();
 }
 
 } // namespace
@@ -517,6 +511,17 @@ Element login_modal(const Model& m) {
             return panel_picking("", true, s.message);
         }
     }, m.ui.login);
+
+    // Panel-BUILT states (the inputs, the account list) draw their own
+    // frame, title and note line — wrapping them again would nest two
+    // borders. Only the hand-built prose states (picking, the waiting
+    // spinners, failure) still get the generic "Sign in" frame.
+    const bool self_framed =
+        std::holds_alternative<login::OAuthCode>(m.ui.login)
+        || std::holds_alternative<login::ApiKeyInput>(m.ui.login)
+        || std::holds_alternative<login::CustomHostInput>(m.ui.login)
+        || std::holds_alternative<login::AccountList>(m.ui.login);
+    if (self_framed) return body;
 
     // Responsive sizing: `min_width` floors the modal at a readable
     // width on tiny terminals; the Overlay's default Stretch lets it
