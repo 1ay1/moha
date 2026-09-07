@@ -27,7 +27,7 @@ namespace pn = agentty::ui::panel;
 
 namespace agentty::app::detail {
 
-namespace cp = agentty::checkpoint_picker;
+namespace cp = agentty::checkpoints;
 using maya::Cmd;
 using maya::overload;
 
@@ -127,7 +127,7 @@ Cmd<Msg> load_all_diffs(const std::vector<cp::Entry>& entries) {
 
 Step checkpoint_update(Model m, msg::CheckpointMsg cm) {
     return std::visit(overload{
-        [&](OpenCheckpointPicker) -> Step {
+        [&](OpenCheckpoints) -> Step {
             // A rewind rewrites the worktree + transcript — only offer it
             // from a settled session (mirrors the RestoreCheckpoint gate).
             if (!m.s.is_idle() || m.s.compacting || m.s.thread_loading) {
@@ -151,11 +151,11 @@ Step checkpoint_update(Model m, msg::CheckpointMsg cm) {
             m.ui.checkpoints_scroll = Model::UI::routed_scroll();
             return {std::move(m), std::move(diffs)};
         },
-        [&](CloseCheckpointPicker) -> Step {
+        [&](CloseCheckpoints) -> Step {
             m.ui.panel.close<pn::Checkpoints>();
             return done(std::move(m));
         },
-        [&](CheckpointPickerMove& e) -> Step {
+        [&](CheckpointsMove& e) -> Step {
             auto* o = m.ui.panel.get<pn::Checkpoints>();
             if (!o || o->entries.empty()) return done(std::move(m));
             const int n = static_cast<int>(o->entries.size());
@@ -179,7 +179,7 @@ Step checkpoint_update(Model m, msg::CheckpointMsg cm) {
             en.clean         = (e.files_changed == 0);
             return done(std::move(m));
         },
-        [&](CheckpointPickerSelect) -> Step {
+        [&](CheckpointsSelect) -> Step {
             auto* o = m.ui.panel.get<pn::Checkpoints>();
             if (!o || o->entries.empty()
                 || o->index < 0 || o->index >= static_cast<int>(o->entries.size())) {

@@ -1,4 +1,4 @@
-// mention_update — reducer for `msg::MentionPaletteMsg`. The @file
+// mention_update — reducer for `msg::MentionMsg`. The @file
 // picker captures a snapshot of the workspace's files at open time and
 // then filters that snapshot per-keystroke. On select, an Attachment
 // of kind FileRef is appended to composer.attachments and the inline
@@ -24,9 +24,9 @@ namespace agentty::app::detail {
 
 using maya::overload;
 
-Step mention_update(Model m, msg::MentionPaletteMsg mm) {
+Step mention_update(Model m, msg::MentionMsg mm) {
     return std::visit(overload{
-        [&](OpenMentionPalette) -> Step {
+        [&](OpenMention) -> Step {
             // Capture the workspace listing once on open. Re-walking
             // disk on every keystroke would dominate frame cost on
             // larger repos and produce visible lag in the picker.
@@ -35,11 +35,11 @@ Step mention_update(Model m, msg::MentionPaletteMsg mm) {
             m.ui.panel = pn::Mention{std::move(o)};
             return done(std::move(m));
         },
-        [&](CloseMentionPalette) -> Step {
+        [&](CloseMention) -> Step {
             m.ui.panel.close<pn::Mention>();
             return done(std::move(m));
         },
-        [&](MentionPaletteInput& e) -> Step {
+        [&](MentionInput& e) -> Step {
             auto* o = m.ui.panel.get<pn::Mention>();
             if (o && static_cast<uint32_t>(e.ch) < 0x80
                   && e.ch >= 0x20) {
@@ -54,7 +54,7 @@ Step mention_update(Model m, msg::MentionPaletteMsg mm) {
             }
             return done(std::move(m));
         },
-        [&](MentionPaletteBackspace) -> Step {
+        [&](MentionBackspace) -> Step {
             auto* o = m.ui.panel.get<pn::Mention>();
             if (!o) return done(std::move(m));
             if (o->query.empty()) {
@@ -67,7 +67,7 @@ Step mention_update(Model m, msg::MentionPaletteMsg mm) {
             o->index = 0;
             return done(std::move(m));
         },
-        [&](MentionPaletteMove& e) -> Step {
+        [&](MentionMove& e) -> Step {
             auto* o = m.ui.panel.get<pn::Mention>();
             if (!o) return done(std::move(m));
             int sz = static_cast<int>(mention_filtered(*o).size());
@@ -75,7 +75,7 @@ Step mention_update(Model m, msg::MentionPaletteMsg mm) {
             o->index = std::clamp(o->index + e.delta, 0, sz - 1);
             return done(std::move(m));
         },
-        [&](MentionPaletteSelect) -> Step {
+        [&](MentionSelect) -> Step {
             auto* o = m.ui.panel.get<pn::Mention>();
             if (!o) return done(std::move(m));
             const auto& matches = mention_filtered(*o);

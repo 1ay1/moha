@@ -59,7 +59,6 @@ void add_all_registry_rows(form::Builder& b, const store::Settings& settings,
 
 form::Form build_form(const eb::EmbedConfig& c, store::RagMode mode,
                       const store::Settings& settings, bool advanced) {
-    const store::RagConfig& rag = settings.rag;
     form::Builder b{" Retrieval "};
     b.subtitle(eb::describe(c));
 

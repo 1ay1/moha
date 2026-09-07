@@ -26,7 +26,7 @@
 
 namespace agentty {
 
-namespace fork_picker {
+namespace fork_panel {
 
 // The three rows, in display order.
 enum class Choice {
@@ -61,19 +61,19 @@ struct Closed {};
 // something else.
 struct Open { Choice choice = Choice::RagPerTurn; };
 
-} // namespace fork_picker
+} // namespace fork_panel
 
-using ForkPickerState = std::variant<fork_picker::Closed, fork_picker::Open>;
+using ForkState = std::variant<fork_panel::Closed, fork_panel::Open>;
 
-[[nodiscard]] inline bool fork_picker_is_open(const ForkPickerState& s) noexcept {
-    return std::holds_alternative<fork_picker::Open>(s);
+[[nodiscard]] inline bool fork_picker_is_open(const ForkState& s) noexcept {
+    return std::holds_alternative<fork_panel::Open>(s);
 }
-[[nodiscard]] inline fork_picker::Open* fork_picker_opened(ForkPickerState& s) noexcept {
-    return std::get_if<fork_picker::Open>(&s);
+[[nodiscard]] inline fork_panel::Open* fork_picker_opened(ForkState& s) noexcept {
+    return std::get_if<fork_panel::Open>(&s);
 }
-[[nodiscard]] inline const fork_picker::Open*
-fork_picker_opened(const ForkPickerState& s) noexcept {
-    return std::get_if<fork_picker::Open>(&s);
+[[nodiscard]] inline const fork_panel::Open*
+fork_picker_opened(const ForkState& s) noexcept {
+    return std::get_if<fork_panel::Open>(&s);
 }
 
 } // namespace agentty

@@ -33,25 +33,25 @@ namespace {
 // only maps Kind → view; it holds no ordering knowledge of its own.
 // Exhaustive on Kind (-Wswitch): a new overlay without a view arm is a
 // compile warning, not an invisible modal.
-std::optional<maya::Element> pick_overlay(const Model& m) {
+std::optional<maya::Element> pick_panel(const Model& m) {
     using OK = panel::Kind;
     switch (panel::top(m)) {
         case OK::Login:          return login_modal(m);
         case OK::Permission:     return std::nullopt;   // renders inline, not as an overlay
-        case OK::CommandPalette: return command_palette(m);
-        case OK::Mention:        return mention_palette(m);
-        case OK::Symbol:         return symbol_palette(m);
-        case OK::CodeBlocks:     return code_block_picker(m);
+        case OK::Palette: return command_palette(m);
+        case OK::Mention:        return mention(m);
+        case OK::Symbol:         return symbol(m);
+        case OK::CodeBlocks:     return code_blocks(m);
         case OK::CodeBlockResult: return code_block_result_card(m);
-        case OK::ToolViewer:     return tool_output_viewer(m);
-        case OK::Checkpoints:    return checkpoint_picker(m);
-        case OK::RagSettings:    return rag_settings_picker(m);
+        case OK::ToolOutput:     return tool_output_viewer(m);
+        case OK::Checkpoints:    return checkpoints(m);
+        case OK::Rag:    return rag_settings_picker(m);
         case OK::SettingsList:   return settings_list_picker(m);
         case OK::Fork:           return fork_picker_view(m);
-        case OK::FusedPicker:    return fused_picker(m);
-        case OK::ProviderPicker: return provider_picker(m);
+        case OK::Models:    return fused_picker(m);
+        case OK::Providers: return provider_picker(m);
         case OK::ThreadList:     return thread_list(m);
-        case OK::SmartMode:      return smart_mode_overlay(m);
+        case OK::SmartMode:      return smart_mode_panel(m);
         case OK::DiffReview:     return diff_review(m);
         case OK::Todo:           return todo_modal(m);
         case OK::None:           return std::nullopt;
@@ -77,7 +77,7 @@ std::optional<maya::Element> pick_overlay(const Model& m) {
 // viewport boundary and nothing strands. maya::Overlay's Anchor +
 // inset express exactly this (the inset sits OUTSIDE the bg-filled box,
 // which a plain in-box padding can't do).
-maya::Element compose_overlay(maya::Element base, maya::Element overlay) {
+maya::Element compose_panel(maya::Element base, maya::Element overlay) {
     return maya::Overlay{{
         .base    = std::move(base),
         .overlay = std::move(overlay),
@@ -127,7 +127,7 @@ maya::Element view(const Model& m) {
         alc.changes_strip = changes_strip_config(m);
         alc.composer      = composer_config(m);
         alc.status_bar    = status_bar_config(m);
-        overlay = pick_overlay(m);
+        overlay = pick_panel(m);
     }
 
     // ── Phase 2: layout build under a HEIGHT-CAPPED context ──
@@ -153,7 +153,7 @@ maya::Element view(const Model& m) {
 
     auto base = maya::AppLayout{std::move(alc)}.build();
     if (!overlay) return base;
-    return compose_overlay(std::move(base), std::move(*overlay));
+    return compose_panel(std::move(base), std::move(*overlay));
 }
 
 } // namespace agentty::ui

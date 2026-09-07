@@ -587,7 +587,7 @@ TEST_CASE("fused: row columns align") {
 // there is ample room). The picker is commonly used in a split pane, so this
 // is not a hypothetical.
 TEST_CASE("fused: badge column scales with terminal width") {
-    // Mirrors picker_badge_max_cols()'s rule: on very narrow terminals the
+    // Mirrors panel_badge_max_cols()'s rule: on very narrow terminals the
     // badge is abbreviated hard; everywhere else it may grow to fit the
     // longest actual provider label, but never consume more than half the
     // picker's horizontal space so the model NAME column stays usable.
@@ -802,7 +802,7 @@ TEST_CASE("pickers: primary labels are not dimmed, trailing yields first") {
     // NOTE: the browse "all providers" section header is NOT asserted here.
     // Grepping this file would only prove the branch was TYPED — not that it
     // renders or that the rows it titles are on screen.
-    // picker_sections_render_test renders the real picker and reads the
+    // panel_sections_render_test renders the real picker and reads the
     // header back off the canvas, which is strictly stronger.
 }
 

@@ -2,7 +2,7 @@
 // Command palette — the enum, the label/description table, and the open
 // modal's UI state, kept in a single header so adding a new command is a
 // one-file change (extend the enum, append a row to `kCommands`, then wire
-// the selection in update.cpp's CommandPaletteSelect handler).
+// the selection in update.cpp's PaletteSelect handler).
 
 #include <algorithm>
 #include <array>
@@ -40,7 +40,7 @@ enum class Command : std::uint8_t {
     OpenCommands,
     OpenAgents,
     OpenHooks,
-    OpenRagSettings,
+    OpenRag,
     OpenLogin,
     SignOut,
     UpdateAgentty,
@@ -103,7 +103,7 @@ inline constexpr std::array kCommands = std::array{
     CommandDef{Command::SwapModel,     "Swap to previous model", "Jump back to the model you used before (cross-provider)", "Ctrl+Tab", Category::Config},
     CommandDef{Command::OpenProviders, "Switch provider",    "Choose the LLM backend (Anthropic, OpenAI, …)", "Ctrl+P", Category::Config},
     CommandDef{Command::SmartMode,     "Smart Mode",         "Configure role-based routing — send cheap grunt work to a cheaper model", "Ctrl+S", Category::Config},
-    CommandDef{Command::OpenRagSettings,"Retrieval (RAG)",   "Proactive retrieval on / first turn / off, and which embedding backend to use", "", Category::Config},
+    CommandDef{Command::OpenRag,"Retrieval (RAG)",   "Proactive retrieval on / first turn / off, and which embedding backend to use", "", Category::Config},
     CommandDef{Command::OpenPlugins,   "MCP servers",        "Plugins / MCP servers (mcp.json) — list & remove; add with `agentty plugin add`", "", Category::Config},
     CommandDef{Command::OpenCommands,  "Slash commands",     "Discovered /commands — author in .agentty/commands/*.md", "", Category::Config},
     CommandDef{Command::OpenAgents,    "Subagents",          "Task agent types — built-ins + your .agentty/agents/*.md", "", Category::Config},
@@ -238,7 +238,7 @@ struct Open {
 };
 } // namespace palette
 
-using CommandPaletteState = std::variant<palette::Closed, palette::Open>;
+using PaletteState = std::variant<palette::Closed, palette::Open>;
 
 // Index of `cmd` in the palette list AS RENDERED for `ctx`. Used to re-open
 // the palette focused on the row the user last selected, e.g. after Esc-ing
@@ -264,10 +264,10 @@ using CommandPaletteState = std::variant<palette::Closed, palette::Open>;
     return 0;
 }
 
-[[nodiscard]] inline bool is_open(const CommandPaletteState& s) noexcept {
+[[nodiscard]] inline bool is_open(const PaletteState& s) noexcept {
     return std::holds_alternative<palette::Open>(s);
 }
-[[nodiscard]] inline       palette::Open* opened(CommandPaletteState& s)       noexcept { return std::get_if<palette::Open>(&s); }
-[[nodiscard]] inline const palette::Open* opened(const CommandPaletteState& s) noexcept { return std::get_if<palette::Open>(&s); }
+[[nodiscard]] inline       palette::Open* opened(PaletteState& s)       noexcept { return std::get_if<palette::Open>(&s); }
+[[nodiscard]] inline const palette::Open* opened(const PaletteState& s) noexcept { return std::get_if<palette::Open>(&s); }
 
 } // namespace agentty

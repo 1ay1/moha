@@ -6,7 +6,7 @@
 //
 // SymbolEntry lives here (not in runtime/panel/symbol.hpp)
 // because its shape is dictated by what the scanner emits; the UI
-// state is downstream — symbol_palette::Open just holds a vector
+// state is downstream — symbol::Open just holds a vector
 // of these.
 
 #include <cstddef>

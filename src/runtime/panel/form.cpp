@@ -109,13 +109,6 @@ void number_insert(field::Number& n, char32_t ch) {
     n.value = std::clamp(next, n.min, n.max);
 }
 
-[[nodiscard]] std::string lower(std::string_view s) {
-    std::string out;
-    out.reserve(s.size());
-    for (unsigned char c : s) out.push_back(static_cast<char>(std::tolower(c)));
-    return out;
-}
-
 // Keep the highlight inside the list, and the scroll window near it.
 //
 // This is a HINT. The real window is only knowable at paint time (it depends on

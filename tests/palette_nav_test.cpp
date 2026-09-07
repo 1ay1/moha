@@ -91,7 +91,7 @@ TEST_CASE("palette nav: the cursor never lands on a section header") {
     install_stub_deps();
 
     Model m;
-    m.ui.panel = pn::CommandPalette{{}};
+    m.ui.panel = pn::Palette{{}};
     m.d.pending_changes.push_back(FileChange{});
 
     // Walk the whole list. Every stop must be a real, runnable row — the
@@ -106,7 +106,7 @@ TEST_CASE("palette nav: the cursor never lands on a section header") {
         CHECK(cl >= 0);
         CHECK_FALSE(is_header_line(out, cl));
 
-        auto [next, cmd] = app::update(std::move(m), Msg{CommandPaletteMove{+1}});
+        auto [next, cmd] = app::update(std::move(m), Msg{PaletteMove{+1}});
         m = std::move(next);
     }
 }
@@ -115,14 +115,14 @@ TEST_CASE("palette nav: moving up also skips headers") {
     install_stub_deps();
 
     Model m;
-    m.ui.panel = pn::CommandPalette{{}};
+    m.ui.panel = pn::Palette{{}};
     m.d.pending_changes.push_back(FileChange{});
 
     const int rows = static_cast<int>(filtered_commands("").size());
     REQUIRE(rows > 0);
 
     for (int step = 0; step < rows + 2; ++step) {
-        auto [next, cmd] = app::update(std::move(m), Msg{CommandPaletteMove{-1}});
+        auto [next, cmd] = app::update(std::move(m), Msg{PaletteMove{-1}});
         m = std::move(next);
 
         const auto out = frame(m);
@@ -139,8 +139,8 @@ TEST_CASE("palette nav: the cursor index addresses the header-free list") {
     install_stub_deps();
 
     Model m;
-    m.ui.panel = pn::CommandPalette{{}};
-    auto* o = m.ui.panel.get<pn::CommandPalette>();
+    m.ui.panel = pn::Palette{{}};
+    auto* o = m.ui.panel.get<pn::Palette>();
     REQUIRE(o != nullptr);
 
     const auto cmds = filtered_commands("");

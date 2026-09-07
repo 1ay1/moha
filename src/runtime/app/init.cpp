@@ -207,7 +207,7 @@ std::pair<Model, maya::Cmd<Msg>> init() {
     m.s.status = "ready";
 
     // Deferred startup Cmds (declared early: the first-run branch below may
-    // queue an OpenProviderPicker dispatch).
+    // queue an OpenProviders dispatch).
     std::vector<maya::Cmd<Msg>> cmds;
 
     // No credentials installed yet → main() invoked install() with an
@@ -247,7 +247,7 @@ std::pair<Model, maya::Cmd<Msg>> init() {
         }
         if (cred_elsewhere)
             cmds.push_back(maya::Cmd<Msg>::after(
-                std::chrono::milliseconds{0}, Msg{OpenProviderPicker{}}));
+                std::chrono::milliseconds{0}, Msg{OpenProviders{}}));
         else
             m.ui.login = ui::login::Picking{};
     }

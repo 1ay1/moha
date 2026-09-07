@@ -19,7 +19,7 @@ namespace agentty::ui {
 // (recent / all providers / sign in) render as is_header dividers. Selecting
 // switches provider+model atomically; a dim "sign in to X" row routes to login.
 Element fused_picker(const Model& m) {
-    auto* picker = m.ui.panel.get<pn::FusedPicker>();
+    auto* picker = m.ui.panel.get<pn::Models>();
     if (!picker) return text("");
 
     // Read the reducer-maintained cache — never rebuild per frame.
@@ -52,7 +52,7 @@ Element fused_picker(const Model& m) {
     // introducing a third hue. The cursor bar (bright cyan) still wins on
     // overlap, which is correct — where you ARE outranks where you were.
     cfg.active_color = accent;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.fused_picker_scroll;
 
     cfg.header.push_back(
@@ -186,7 +186,7 @@ Element fused_picker(const Model& m) {
     for (const auto& r : rows)
         if (!r.is_signin_offer())
             badge_w = std::max(badge_w, maya::string_width(r.label));
-    badge_w = std::min(badge_w, picker_badge_max_cols());
+    badge_w = std::min(badge_w, panel_badge_max_cols());
     for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
         const auto& r = rows[static_cast<std::size_t>(i)];
         const Section sec = section_of(r);
@@ -206,7 +206,7 @@ Element fused_picker(const Model& m) {
             }
 
             // Uniform section divider — label + hue + right-pinned count. See
-            // picker_detail::section_header (shared by every grouped picker).
+            // panel_detail::section_header (shared by every grouped picker).
             SectionHeader sh;
             sh.label = sec == Section::Recent ? "recent"
                      : sec == Section::Others ? others_label
@@ -383,14 +383,14 @@ Element fused_picker(const Model& m) {
 // (active_provider_id + reasoning_effort_footer live in pickers_common.hpp.)
 
 Element provider_picker(const Model& m) {
-    auto* picker = m.ui.panel.get<pn::ProviderPicker>();
+    auto* picker = m.ui.panel.get<pn::Providers>();
     if (!picker) return nothing();
 
     Panel::Config cfg;
     cfg.title      = " Providers ";
     cfg.accent     = highlight;
     cfg.min_width  = kPanelStandard;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.provider_picker_scroll;
     cfg.selected   = picker->index;
 

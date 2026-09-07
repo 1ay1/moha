@@ -256,7 +256,7 @@ Step meta_update(Model m, msg::MetaMsg mm) {
                 m.ui.smart_assign_advanced = o->advanced;
                 m.ui.smart_assign_from     = o->from;
                 m.ui.panel.close<pn::SmartMode>();
-                return agentty::app::update(std::move(m), Msg{OpenFusedPicker{}});
+                return agentty::app::update(std::move(m), Msg{OpenModels{}});
             }
 
             // 'x' resets the focused slot to auto.
@@ -1002,7 +1002,7 @@ void ascend(Model& m) {
     // Revalidate: the restored snapshot is as old as the descent, and the
     // model may have moved. Only state that indexes a LIVE list needs work —
     // free text (queries) cannot go stale.
-    if (auto* p = m.ui.panel.get<pn::CommandPalette>()) {
+    if (auto* p = m.ui.panel.get<pn::Palette>()) {
         // The filtered list is model-dependent (gated rows appear/vanish);
         // clamp the cursor into today's list rather than yesterday's.
         const int sz = static_cast<int>(

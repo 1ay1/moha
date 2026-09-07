@@ -1120,7 +1120,7 @@ maya::Element cached_markdown_for(const Message& msg, const Model& m,
     // adopted the instant the worker finishes.
     //
     // Fourth condition — the widget is LIVE with reveal_fx (is_live()).
-    // render_live_overlay_ animates the trailing-edge scramble / gradient
+    // render_live_panel_ animates the trailing-edge scramble / gradient
     // / pulsing caret EVERY frame the widget is live_, even when the
     // reveal cursor has caught up to the edge (backlog 0) and is just
     // waiting for the next token. The first three terms can ALL be false
@@ -1130,7 +1130,7 @@ maya::Element cached_markdown_for(const Message& msg, const Model& m,
     // the cursor is at the edge (reveal_in_progress false), no ramp, no
     // parse. Without this term the caret would stop pulsing and the turn
     // would look frozen even though the model is still working. Gating on
-    // is_live() (the exact condition render_live_overlay_ animates under)
+    // is_live() (the exact condition render_live_panel_ animates under)
     // guarantees the caret keeps breathing for the whole live window,
     // independent of phase or any timeout — the same robustness principle
     // as the is_streaming() caret gate, applied to the widget's own live

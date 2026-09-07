@@ -1,8 +1,8 @@
-// nav_pickers.cpp — navigation & command overlays: the thread list, the
+// nav_panels.cpp — navigation & command overlays: the thread list, the
 // Smart Mode config overlay, the command palette (^K), the @-mention file
 // palette, and the symbol palette. Split out of the former monolithic
-// pickers.cpp; shared scaffolding lives in pickers_prologue.hpp /
-// pickers_common.hpp.
+// panels.cpp; shared scaffolding lives in panels_prologue.hpp /
+// panels_common.hpp.
 //
 // Pure adapter: builds maya::Panel::Config values from Model state. The
 // widget owns every chrome decision — border style, viewport clipping,
@@ -24,7 +24,7 @@ Element thread_list(const Model& m) {
     cfg.title      = " Threads ";
     cfg.accent     = info;
     cfg.min_width  = kPanelStandard;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.thread_list_scroll;
     cfg.selected   = picker->index;
 
@@ -89,19 +89,19 @@ Element thread_list(const Model& m) {
 // Smart Mode config overlay: a master Enabled toggle + the three role slots,
 // each showing its RESOLVED model (pinned, or the auto-fill). See
 // docs/design/smart-mode.md.
-Element smart_mode_overlay(const Model& m) {
+Element smart_mode_panel(const Model& m) {
     auto* o = m.ui.panel.get<pn::SmartMode>();
     if (!o) return nothing();
     // Every glyph belongs to maya::Panel; this host only projects state onto
     // its Config, exactly as the Retrieval pane does.
     return maya::Panel{form_config(o->form, success,
                                   &m.ui.smart_mode_scroll,
-                                  picker_viewport_h(),
-                                  picker_terminal_cols())}.build();
+                                  panel_viewport_h(),
+                                  panel_terminal_cols())}.build();
 }
 
 Element command_palette(const Model& m) {
-    auto* o = m.ui.panel.get<pn::CommandPalette>();
+    auto* o = m.ui.panel.get<pn::Palette>();
     if (!o) return nothing();
 
     // Live visibility context — literally the same function the reducer uses,
@@ -117,7 +117,7 @@ Element command_palette(const Model& m) {
     cfg.title      = " Command Palette ";
     cfg.accent     = highlight;
     cfg.min_width  = kPanelStandard;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.command_palette_scroll;
     cfg.selected   = matches.empty() ? -1 : o->index;
 
@@ -247,7 +247,7 @@ Element command_palette(const Model& m) {
     return Panel{std::move(cfg)}.build();
 }
 
-Element mention_palette(const Model& m) {
+Element mention(const Model& m) {
     auto* o = m.ui.panel.get<pn::Mention>();
     if (!o) return nothing();
 
@@ -257,7 +257,7 @@ Element mention_palette(const Model& m) {
     cfg.title      = " Mention File ";
     cfg.accent     = info;
     cfg.min_width  = kPanelStandard;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.mention_palette_scroll;
     cfg.selected   = matches.empty() ? -1 : o->index;
 
@@ -324,7 +324,7 @@ Element mention_palette(const Model& m) {
     return Panel{std::move(cfg)}.build();
 }
 
-Element symbol_palette(const Model& m) {
+Element symbol(const Model& m) {
     auto* o = m.ui.panel.get<pn::Symbol>();
     if (!o) return nothing();
 
@@ -334,7 +334,7 @@ Element symbol_palette(const Model& m) {
     cfg.title      = " Symbol ";
     cfg.accent     = highlight;
     cfg.min_width  = kPanelWide;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.symbol_palette_scroll;
     cfg.selected   = matches.empty() ? -1 : o->index;
 
@@ -398,7 +398,7 @@ PaletteContext palette_context(const Model& m) {
         for (auto it = m.d.current.messages.rbegin();
              it != m.d.current.messages.rend(); ++it) {
             if (it->role != Role::Assistant || it->text.empty()) continue;
-            if (!code_block_picker::extract_code_blocks(it->text).empty())
+            if (!code_blocks::extract_code_blocks(it->text).empty())
                 return true;
         }
         return false;

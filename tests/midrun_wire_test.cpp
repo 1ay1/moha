@@ -1633,7 +1633,7 @@ TEST_CASE("model picker open close no scrollback growth") {
     // SHORT viewport so welcome+overlay overflows — the production trigger.
     constexpr int kTermH = 20;
 
-    // deps stub: FusedPickerSelect persists settings via deps().
+    // deps stub: ModelsSelect persists settings via deps().
     app::install_deps(app::Deps{
         .stream        = [](provider::Request, provider::EventSink) {},
         .save_thread   = [](const agentty::Thread&) {},
@@ -1767,9 +1767,9 @@ TEST_CASE("model picker open close no scrollback growth") {
     {
         Canvas closed_c = paint(view_root(m), kWidth, pool);
         const int closed_rows = closed_c.max_content_row();
-        m.ui.panel = pn::FusedPicker{{0, ""}};
+        m.ui.panel = pn::Models{{0, ""}};
         Canvas open_c = paint(view_root(m), kWidth, pool);
-        m.ui.panel.close<pn::FusedPicker>();
+        m.ui.panel.close<pn::Models>();
         const int open_rows = open_c.max_content_row();
         if (open_rows > closed_rows) {
             std::fprintf(stderr,
@@ -1785,13 +1785,13 @@ TEST_CASE("model picker open close no scrollback growth") {
     // Render multiple animation frames per state so the welcome
     // wordmark's per-frame bob and the picker animation advance.
     for (int cycle = 0; cycle < 4; ++cycle) {
-        m.ui.panel = pn::FusedPicker{{0, ""}};   // open
+        m.ui.panel = pn::Models{{0, ""}};   // open
         for (int f = 0; f < 5; ++f) {
             render_state(m);
             std::this_thread::sleep_for(std::chrono::milliseconds{8});
         }
-        auto [m2, cmd] = app::detail::fused_picker_update(
-            std::move(m), msg::FusedPickerMsg{FusedPickerSelect{}});  // close
+        auto [m2, cmd] = app::detail::models_update(
+            std::move(m), msg::ModelsMsg{ModelsSelect{}});  // close
         m = std::move(m2);
         (void)cmd;
         for (int f = 0; f < 5; ++f) {

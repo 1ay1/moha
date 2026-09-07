@@ -409,7 +409,7 @@ struct ModelsLoaded {
 // This is the ONE model surface. It also serves Smart Mode role→model
 // assignment: when Model::ui.smart_assign_slot >= 0 the list is scoped to
 // the active provider and Select writes the slot instead of switching.
-struct OpenFusedPicker {};
+struct OpenModels {};
 // Deferred lazy refresh: after the ACTIVE provider's fast refetch is issued on
 // open, this fires (via a short After delay) to background-refresh every OTHER
 // authed provider's live catalog. Keeping them off the initial batch means the
@@ -420,31 +420,31 @@ struct FusedRefreshOthers {};
 // and refetch (active immediately, others deferred). The manual escape hatch
 // when a catalog is stale/failed and the user doesn't want to wait for the TTL
 // or reopen. Shows the loading hint while fetches are in flight.
-struct FusedPickerRefresh {};
-struct CloseFusedPicker {};
-struct FusedPickerMove { int delta; };
-struct FusedPickerJump { enum class Where { Home, End, PageUp, PageDown }; Where where; };
-struct FusedPickerSelect {};        // atomic switch to the highlighted row
-struct FusedPickerToggleFavorite {};
+struct ModelsRefresh {};
+struct CloseModels {};
+struct ModelsMove { int delta; };
+struct ModelsJump { enum class Where { Home, End, PageUp, PageDown }; Where where; };
+struct ModelsSelect {};        // atomic switch to the highlighted row
+struct ModelsToggleFavorite {};
 // ←/→ cycles the reasoning-effort tier of the highlighted model; ^E toggles
 // thinking on/off. The fused picker is the COMPLETE "pick + tune your model"
 // surface — there is no second picker.
-struct FusedPickerCycleEffort { int delta; };
-struct FusedPickerToggleReasoning {};
+struct ModelsCycleEffort { int delta; };
+struct ModelsToggleReasoning {};
 // Toggle whether the model's reasoning/thinking is SHOWN (^R). Flips the
 // persisted Settings.show_reasoning / Model.show_reasoning: renders the
 // reasoning block in the transcript for every provider AND asks Anthropic
 // for visible thinking (interleaved-thinking beta). Distinct from
-// FusedPickerToggleReasoning above, which flips a single model's effort
+// ModelsToggleReasoning above, which flips a single model's effort
 // CAPABILITY override.
-struct FusedPickerToggleShowReasoning {};
+struct ModelsToggleShowReasoning {};
 // ^/ — scope the browse/filter list to ONLY the provider of the currently
 // highlighted row (so you can drill into "just this provider's models").
 // Pressing it again when already scoped clears the scope (back to all
 // providers). A no-op when the highlighted row has no provider (offers).
-struct FusedPickerScopeProvider {};
-struct FusedPickerFilterInput { char32_t ch; };
-struct FusedPickerFilterBackspace {};
+struct ModelsScopeProvider {};
+struct ModelsFilterInput { char32_t ch; };
+struct ModelsFilterBackspace {};
 // One authed provider's catalog resolved (async, one per provider on open).
 // `provider_id` guards against a provider signed out mid-fetch; `ok=false`
 // marks the group Failed. Merges into Model::d.provider_catalogs in place.
@@ -462,27 +462,27 @@ struct SwitchToPreviousModel {};
 // Mirrors the model picker. Selecting a provider live-switches the active
 // backend (provider::select + a deps() seam swap), persists the choice, and
 // kicks a fresh model fetch so the model list reflects the new backend.
-struct OpenProviderPicker {};
-struct CloseProviderPicker {};
-struct ProviderPickerMove { int delta; };
-struct ProviderPickerJump  { enum class Where { Home, End, PageUp, PageDown }; Where where; };
-struct ProviderPickerSelect {};
+struct OpenProviders {};
+struct CloseProviders {};
+struct ProvidersMove { int delta; };
+struct ProvidersJump  { enum class Where { Home, End, PageUp, PageDown }; Where where; };
+struct ProvidersSelect {};
 // Live search-filter over the provider list (mirrors the model picker): a
 // typed character appends to the query, Backspace trims it. The row list
 // narrows to fuzzy/substring matches on the id + label + blurb.
-struct ProviderPickerFilterInput { char32_t codepoint; };
-struct ProviderPickerFilterBackspace {};
+struct ProvidersFilterInput { char32_t codepoint; };
+struct ProvidersFilterBackspace {};
 // ^D on a row — two-press delete (confirm_remove): removes a SAVED CUSTOM
 // HOST from Settings entirely, OR signs out of a PRESET that has a saved key
 // (clears the key; the built-in preset stays). Mirrors ThreadListDelete /
 // AccountRemove. No-op on presets with no saved key, ACP, and the sentinel.
-struct ProviderPickerDelete {};
+struct ProvidersDelete {};
 
 // ── Thread list ──────────────────────────────────────────────────────────
 struct OpenThreadList {};
 struct CloseThreadList {};
 struct ThreadListMove { int delta; };
-// Absolute-jump nav for long thread histories. See FusedPickerJump.
+// Absolute-jump nav for long thread histories. See ModelsJump.
 struct ThreadListJump  { enum class Where { Home, End, PageUp, PageDown }; Where where; };
 struct ThreadListSelect {};
 // `d` / `D` in the thread picker — two-press delete with confirm_remove.
@@ -520,28 +520,28 @@ struct ThreadsLoaded    { std::vector<Thread> threads; };
 struct ThreadLoaded     { Thread thread; };
 
 // ── Command palette ──────────────────────────────────────────────────────
-struct OpenCommandPalette {};
-struct CloseCommandPalette {};
-struct CommandPaletteInput { char32_t ch; };
-struct CommandPaletteBackspace {};
-struct CommandPaletteMove { int delta; };
-struct CommandPaletteSelect {};
+struct OpenPalette {};
+struct ClosePalette {};
+struct PaletteInput { char32_t ch; };
+struct PaletteBackspace {};
+struct PaletteMove { int delta; };
+struct PaletteSelect {};
 
 // ── @file mention picker ────────────────────────────────────────────────
-struct OpenMentionPalette {};
-struct CloseMentionPalette {};
-struct MentionPaletteInput { char32_t ch; };
-struct MentionPaletteBackspace {};
-struct MentionPaletteMove { int delta; };
-struct MentionPaletteSelect {};
+struct OpenMention {};
+struct CloseMention {};
+struct MentionInput { char32_t ch; };
+struct MentionBackspace {};
+struct MentionMove { int delta; };
+struct MentionSelect {};
 
 // ── #symbol picker (parallel to @file) ────────────────────────────────────
-struct OpenSymbolPalette {};
-struct CloseSymbolPalette {};
-struct SymbolPaletteInput { char32_t ch; };
-struct SymbolPaletteBackspace {};
-struct SymbolPaletteMove { int delta; };
-struct SymbolPaletteSelect {};
+struct OpenSymbol {};
+struct CloseSymbol {};
+struct SymbolInput { char32_t ch; };
+struct SymbolBackspace {};
+struct SymbolMove { int delta; };
+struct SymbolSelect {};
 
 // ── Code-block picker (Ctrl+G — run AI-suggested commands) ──────────
 // Open scans the newest assistant reply for fenced ``` blocks; the modal
@@ -557,16 +557,16 @@ struct SymbolPaletteSelect {};
 // opens the RESULT card (exit code + tail preview) where the user
 // decides: a = attach to composer as an Output chip, y = copy clean,
 // Esc = discard (the live transcript already sits in scrollback).
-struct OpenCodeBlockPicker {};
-struct CloseCodeBlockPicker {};
-struct CodeBlockPickerMove { int delta; };
+struct OpenCodeBlocks {};
+struct CloseCodeBlocks {};
+struct CodeBlocksMove { int delta; };
 // Select a code block. `index` absent = act on the row under the cursor
 // (Enter); engaged = a direct 1-9 number key naming a row. It was
 // `int = -1`, so "no override" and "row -1" were the same value and every
 // reader had to remember which one it meant.
-struct CodeBlockPickerSelect { std::optional<int> index; };
-struct CodeBlockPickerEdit {};
-struct CodeBlockPickerCopy {};
+struct CodeBlocksSelect { std::optional<int> index; };
+struct CodeBlocksEdit {};
+struct CodeBlocksCopy {};
 struct CodeBlockRunFinished {
     std::string command;
     std::string output;
@@ -585,15 +585,15 @@ struct CodeBlockResultDiscard {};
 // live viewport. Open snapshots the entries; Move drives the list cursor
 // (or the body scroll in the viewing stage); Select enters the body
 // stage; Close = Esc (body → back to list, list → closed); Copy = y.
-struct OpenToolOutputViewer {};
-struct CloseToolOutputViewer {};
-struct ToolViewerMove { int delta; };
-struct ToolViewerSelect {};
-struct ToolViewerCopy {};
+struct OpenToolOutput {};
+struct CloseToolOutput {};
+struct ToolOutputMove { int delta; };
+struct ToolOutputSelect {};
+struct ToolOutputCopy {};
 // ←/→: in the body stage, jump straight to the previous/next entry's
 // output without bouncing through the list; in the list stage ←/→ are
 // unbound (the viewer swallows all keys while open, so they simply no-op).
-struct ToolViewerStep { int delta; };
+struct ToolOutputStep { int delta; };
 
 // ── Todo modal ───────────────────────────────────────────────────────────
 struct OpenTodoModal {};
@@ -764,14 +764,14 @@ struct ProactiveContextReady { std::string block; double confidence = -1.0; };
 // ── RAG mode picker ────────────────────────────────────────────────
 // One decision: how proactive (pre-turn) retrieval behaves — On / First turn
 // only / Off. Selecting commits the mode (persist + live-apply) and closes.
-struct OpenRagSettings {};
-struct CloseRagSettings {};
-struct RagSettingsMove   { int delta; };   // move the row cursor
-struct RagSettingsAdjust {};               // select the highlighted mode
-struct RagSettingsReset  {};               // back to default (On)
+struct OpenRag {};
+struct CloseRag {};
+struct RagMove   { int delta; };   // move the row cursor
+struct RagAdjust {};               // select the highlighted mode
+struct RagReset  {};               // back to default (On)
 // Reveal/hide the Tier::Advanced rows (^A). The pane rebuilds its form; the
 // flag is view state, not config, so it is not persisted.
-struct RagSettingsAdvanced {};
+struct RagAdvanced {};
 
 // ── Embeddings sub-form (RAG picker → Embeddings) ──────────────────
 // Which embedder retrieval uses, configured entirely in the TUI.
@@ -824,9 +824,9 @@ struct SettingsListCancelInput{};              // Esc in add-mode → back to li
 // how proactive RAG behaves in the fork. The parent's transcript is written
 // to disk and the fork carries a read-on-demand pointer to it — no copy, no
 // summary. ForkThread does the branch. See docs/FORK.md.
-struct OpenForkPicker  {};
-struct CloseForkPicker {};
-struct ForkPickerMove  { int delta; };
+struct OpenFork  {};
+struct CloseFork {};
+struct ForkMove  { int delta; };
 // Fork with the CURRENTLY-highlighted choice (the reducer reads the picker's
 // cursor). A leaf with no payload keeps the key handler from needing Model.
 struct ForkThread      {};
@@ -878,10 +878,10 @@ struct CheckpointRestored { CheckpointId id; bool ok = false; std::string error;
 // newest). Open builds the entry list from messages carrying a
 // checkpoint_id and kicks an async diff-summary per entry; Select maps the
 // highlighted entry onto the existing RestoreCheckpoint flow.
-struct OpenCheckpointPicker {};
-struct CloseCheckpointPicker {};
-struct CheckpointPickerMove { int delta; };
-struct CheckpointPickerSelect {};
+struct OpenCheckpoints {};
+struct CloseCheckpoints {};
+struct CheckpointsMove { int delta; };
+struct CheckpointsSelect {};
 // One entry's async "what changed since here" summary landed. `index` is
 // the entry's position in Open::entries at dispatch time; the reducer
 // re-validates it against the current list (an open/close race can't
@@ -975,58 +975,58 @@ using StreamMsg = std::variant<
 using ToolMsg = std::variant<
     ToolExecOutput, ToolExecProgress, ToolTimeoutCheck,
     PermissionApprove, PermissionReject, PermissionApproveAlways,
-    OpenToolOutputViewer, CloseToolOutputViewer,
-    ToolViewerMove, ToolViewerSelect, ToolViewerCopy, ToolViewerStep>;
+    OpenToolOutput, CloseToolOutput,
+    ToolOutputMove, ToolOutputSelect, ToolOutputCopy, ToolOutputStep>;
 
-using ProviderPickerMsg = std::variant<
-    OpenProviderPicker, CloseProviderPicker, ProviderPickerMove,
-    ProviderPickerJump, ProviderPickerSelect,
-    ProviderPickerFilterInput, ProviderPickerFilterBackspace,
-    ProviderPickerDelete>;
+using ProvidersMsg = std::variant<
+    OpenProviders, CloseProviders, ProvidersMove,
+    ProvidersJump, ProvidersSelect,
+    ProvidersFilterInput, ProvidersFilterBackspace,
+    ProvidersDelete>;
 
 // The ONE model surface: browse/filter every provider's models, tune effort,
 // and (in Smart Mode slot-assign mode) pin a role→model. `ModelsLoaded` is
 // the active provider's catalog fetch; `FusedCatalogLoaded` is a background
 // per-provider one.
-using FusedPickerMsg = std::variant<
-    OpenFusedPicker, CloseFusedPicker, FusedPickerMove, FusedPickerJump,
-    FusedPickerSelect, FusedPickerToggleFavorite,
-    FusedPickerCycleEffort, FusedPickerToggleReasoning,
-    FusedPickerToggleShowReasoning,
-    FusedPickerScopeProvider,
-    FusedPickerFilterInput, FusedPickerFilterBackspace,
+using ModelsMsg = std::variant<
+    OpenModels, CloseModels, ModelsMove, ModelsJump,
+    ModelsSelect, ModelsToggleFavorite,
+    ModelsCycleEffort, ModelsToggleReasoning,
+    ModelsToggleShowReasoning,
+    ModelsScopeProvider,
+    ModelsFilterInput, ModelsFilterBackspace,
     ModelsLoaded, FusedCatalogLoaded, SwitchToPreviousModel, FusedRefreshOthers,
-    FusedPickerRefresh>;
+    ModelsRefresh>;
 
 using ThreadListMsg = std::variant<
     OpenThreadList, CloseThreadList, ThreadListMove, ThreadListJump,
     ThreadListSelect, ThreadListDelete, ThreadCycle, NewThread, ThreadsLoaded, ThreadLoaded>;
 
-using CommandPaletteMsg = std::variant<
-    OpenCommandPalette, CloseCommandPalette, CommandPaletteInput,
-    CommandPaletteBackspace, CommandPaletteMove, CommandPaletteSelect>;
+using PaletteMsg = std::variant<
+    OpenPalette, ClosePalette, PaletteInput,
+    PaletteBackspace, PaletteMove, PaletteSelect>;
 
-using MentionPaletteMsg = std::variant<
-    OpenMentionPalette, CloseMentionPalette, MentionPaletteInput,
-    MentionPaletteBackspace, MentionPaletteMove, MentionPaletteSelect>;
+using MentionMsg = std::variant<
+    OpenMention, CloseMention, MentionInput,
+    MentionBackspace, MentionMove, MentionSelect>;
 
-using SymbolPaletteMsg = std::variant<
-    OpenSymbolPalette, CloseSymbolPalette, SymbolPaletteInput,
-    SymbolPaletteBackspace, SymbolPaletteMove, SymbolPaletteSelect>;
+using SymbolMsg = std::variant<
+    OpenSymbol, CloseSymbol, SymbolInput,
+    SymbolBackspace, SymbolMove, SymbolSelect>;
 
 using CodeBlockMsg = std::variant<
-    OpenCodeBlockPicker, CloseCodeBlockPicker, CodeBlockPickerMove,
-    CodeBlockPickerSelect, CodeBlockPickerEdit, CodeBlockPickerCopy,
+    OpenCodeBlocks, CloseCodeBlocks, CodeBlocksMove,
+    CodeBlocksSelect, CodeBlocksEdit, CodeBlocksCopy,
     CodeBlockRunFinished,
     CodeBlockResultAttach, CodeBlockResultCopy, CodeBlockResultDiscard>;
 
 using CheckpointMsg = std::variant<
-    OpenCheckpointPicker, CloseCheckpointPicker, CheckpointPickerMove,
-    CheckpointPickerSelect, CheckpointDiffLoaded>;
+    OpenCheckpoints, CloseCheckpoints, CheckpointsMove,
+    CheckpointsSelect, CheckpointDiffLoaded>;
 
-using RagSettingsMsg = std::variant<
-    OpenRagSettings, CloseRagSettings, RagSettingsMove,
-    RagSettingsAdjust, RagSettingsReset, RagSettingsAdvanced,
+using RagMsg = std::variant<
+    OpenRag, CloseRag, RagMove,
+    RagAdjust, RagReset, RagAdvanced,
     RagEmbedOpen, RagEmbedClose, RagEmbedKey,
     RagEmbedTest, RagEmbedTestDone, RagEmbedSave, RagEmbedRevert>;
 
@@ -1037,7 +1037,7 @@ using SettingsListMsg = std::variant<
     SettingsListSubmitInput, SettingsListCancelInput>;
 
 using ForkMsg = std::variant<
-    OpenForkPicker, CloseForkPicker, ForkPickerMove, ForkThread>;
+    OpenFork, CloseFork, ForkMove, ForkThread>;
 
 using TodoMsg = std::variant<
     OpenTodoModal, CloseTodoModal, UpdateTodos>;
@@ -1082,15 +1082,15 @@ using Msg = std::variant<
     msg::ComposerMsg,
     msg::StreamMsg,
     msg::ToolMsg,
-    msg::ProviderPickerMsg,
-    msg::FusedPickerMsg,
+    msg::ProvidersMsg,
+    msg::ModelsMsg,
     msg::ThreadListMsg,
-    msg::CommandPaletteMsg,
-    msg::MentionPaletteMsg,
-    msg::SymbolPaletteMsg,
+    msg::PaletteMsg,
+    msg::MentionMsg,
+    msg::SymbolMsg,
     msg::CodeBlockMsg,
     msg::CheckpointMsg,
-    msg::RagSettingsMsg,
+    msg::RagMsg,
     msg::SettingsListMsg,
     msg::ForkMsg,
     msg::TodoMsg,
@@ -1126,15 +1126,15 @@ consteval int leaf_domain_count() {
     return int{in_variant_v<L, msg::ComposerMsg>}
          + int{in_variant_v<L, msg::StreamMsg>}
          + int{in_variant_v<L, msg::ToolMsg>}
-         + int{in_variant_v<L, msg::ProviderPickerMsg>}
-         + int{in_variant_v<L, msg::FusedPickerMsg>}
+         + int{in_variant_v<L, msg::ProvidersMsg>}
+         + int{in_variant_v<L, msg::ModelsMsg>}
          + int{in_variant_v<L, msg::ThreadListMsg>}
-         + int{in_variant_v<L, msg::CommandPaletteMsg>}
-         + int{in_variant_v<L, msg::MentionPaletteMsg>}
-         + int{in_variant_v<L, msg::SymbolPaletteMsg>}
+         + int{in_variant_v<L, msg::PaletteMsg>}
+         + int{in_variant_v<L, msg::MentionMsg>}
+         + int{in_variant_v<L, msg::SymbolMsg>}
          + int{in_variant_v<L, msg::CodeBlockMsg>}
          + int{in_variant_v<L, msg::CheckpointMsg>}
-         + int{in_variant_v<L, msg::RagSettingsMsg>}
+         + int{in_variant_v<L, msg::RagMsg>}
          + int{in_variant_v<L, msg::ForkMsg>}
          + int{in_variant_v<L, msg::TodoMsg>}
          + int{in_variant_v<L, msg::LoginMsg>}
@@ -1155,26 +1155,26 @@ static_assert(leaf_domain_count<StreamTextDelta>()           == 1,
               "StreamTextDelta must belong to exactly one Msg domain");
 static_assert(leaf_domain_count<ToolExecOutput>()            == 1,
               "ToolExecOutput must belong to exactly one Msg domain");
-static_assert(leaf_domain_count<OpenFusedPicker>()            == 1,
-              "OpenFusedPicker must belong to exactly one Msg domain");
+static_assert(leaf_domain_count<OpenModels>()            == 1,
+              "OpenModels must belong to exactly one Msg domain");
 static_assert(leaf_domain_count<ModelsLoaded>()               == 1,
               "ModelsLoaded must belong to exactly one Msg domain");
-static_assert(leaf_domain_count<OpenProviderPicker>()        == 1,
-              "OpenProviderPicker must belong to exactly one Msg domain");
+static_assert(leaf_domain_count<OpenProviders>()        == 1,
+              "OpenProviders must belong to exactly one Msg domain");
 static_assert(leaf_domain_count<NewThread>()                 == 1,
               "NewThread must belong to exactly one Msg domain");
-static_assert(leaf_domain_count<CommandPaletteSelect>()      == 1,
-              "CommandPaletteSelect must belong to exactly one Msg domain");
-static_assert(leaf_domain_count<MentionPaletteSelect>()      == 1,
-              "MentionPaletteSelect must belong to exactly one Msg domain");
-static_assert(leaf_domain_count<SymbolPaletteSelect>()       == 1,
-              "SymbolPaletteSelect must belong to exactly one Msg domain");
-static_assert(leaf_domain_count<CodeBlockPickerSelect>()     == 1,
-              "CodeBlockPickerSelect must belong to exactly one Msg domain");
-static_assert(leaf_domain_count<CheckpointPickerSelect>()    == 1,
-              "CheckpointPickerSelect must belong to exactly one Msg domain");
-static_assert(leaf_domain_count<OpenRagSettings>()           == 1,
-              "OpenRagSettings must belong to exactly one Msg domain");
+static_assert(leaf_domain_count<PaletteSelect>()      == 1,
+              "PaletteSelect must belong to exactly one Msg domain");
+static_assert(leaf_domain_count<MentionSelect>()      == 1,
+              "MentionSelect must belong to exactly one Msg domain");
+static_assert(leaf_domain_count<SymbolSelect>()       == 1,
+              "SymbolSelect must belong to exactly one Msg domain");
+static_assert(leaf_domain_count<CodeBlocksSelect>()     == 1,
+              "CodeBlocksSelect must belong to exactly one Msg domain");
+static_assert(leaf_domain_count<CheckpointsSelect>()    == 1,
+              "CheckpointsSelect must belong to exactly one Msg domain");
+static_assert(leaf_domain_count<OpenRag>()           == 1,
+              "OpenRag must belong to exactly one Msg domain");
 static_assert(leaf_domain_count<ForkThread>()                == 1,
               "ForkThread must belong to exactly one Msg domain");
 static_assert(leaf_domain_count<UpdateTodos>()               == 1,

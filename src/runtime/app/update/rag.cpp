@@ -173,15 +173,15 @@ void refresh_status(rs::EmbedForm& f) {
 }
 
 [[nodiscard]] rs::EmbedForm* form_of(Model& m) {
-    auto* o = m.ui.panel.get<pn::RagSettings>();
+    auto* o = m.ui.panel.get<pn::Rag>();
     return o ? &o->embed : nullptr;
 }
 
 } // namespace
 
-Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
+Step rag_settings_update(Model m, msg::RagMsg rm) {
     return std::visit(overload{
-        [&](OpenRagSettings) -> Step {
+        [&](OpenRag) -> Step {
             // ONE pane. The overlay used to open a three-row mode list, with
             // the embedder settings hidden behind a second keypress that
             // nothing advertised. Mode and embedder are two halves of one
@@ -196,10 +196,10 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             const auto s = deps().load_settings();
             const auto mode = s.rag.configured ? s.rag.mode : store::RagMode::On;
             m.ui.panel.descend(
-                pn::RagSettings{{mode, mode, make_embed_form(mode)}});
+                pn::Rag{{mode, mode, make_embed_form(mode)}});
             return {std::move(m), Cmd<Msg>::none()};
         },
-        [&](CloseRagSettings) -> Step {
+        [&](CloseRag) -> Step {
             // Esc unwinds ONE level: the parent snapshot (palette or settings
             // list, full state intact) or the thread when there is none.
             // (Selecting a mode, below, commits and drops to the thread —
@@ -207,21 +207,21 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             ascend(m);
             return {std::move(m), Cmd<Msg>::none()};
         },
-        [&](RagSettingsMove& e) -> Step {
+        [&](RagMove& e) -> Step {
             // Legacy entry point. The pane's own keys arrive as RagEmbedKey;
             // this survives only for callers that synthesise a move.
             if (auto* f = form_of(m)) form::move(f->form, e.delta);
             return {std::move(m), Cmd<Msg>::none()};
         },
-        [&](RagSettingsAdjust&) -> Step {
+        [&](RagAdjust&) -> Step {
             if (auto* f = form_of(m)) (void)form::activate(f->form);
             return {std::move(m), Cmd<Msg>::none()};
         },
-        [&](RagSettingsAdvanced) -> Step {
+        [&](RagAdvanced) -> Step {
             // Reveal/hide the Tier::Advanced rows. The form is rebuilt because
             // the row SET changes; the cursor is kept where it was so the
             // toggle does not also move the selection out from under the user.
-            if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
+            if (auto* o = m.ui.panel.get<pn::Rag>()) {
                 o->advanced = !o->advanced;
                 const int cursor = o->embed.form.cursor;
                 o->embed.form = rs::build_form(o->embed.cfg, o->cursor,
@@ -233,9 +233,9 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             }
             return {std::move(m), Cmd<Msg>::none()};
         },
-        [&](RagSettingsReset) -> Step {
+        [&](RagReset) -> Step {
             commit_mode(store::RagMode::On);
-            if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
+            if (auto* o = m.ui.panel.get<pn::Rag>()) {
                 o->cursor = store::RagMode::On;
                 o->active = store::RagMode::On;
                 o->embed  = make_embed_form(store::RagMode::On, o->advanced);
@@ -248,7 +248,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             // Idempotent re-seed. Nothing defers to this any more (the pane is
             // built on open), but a caller that wants a fresh probe state can
             // still ask for one.
-            if (auto* o = m.ui.panel.get<pn::RagSettings>())
+            if (auto* o = m.ui.panel.get<pn::Rag>())
                 o->embed = make_embed_form(o->cursor, o->advanced);
             return {std::move(m), Cmd<Msg>::none()};
         },
@@ -260,10 +260,10 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
             // clear `embed` instead, which left the pane open holding no form
             // — a state that swallows every key including the Esc that would
             // have escaped it.
-            if (auto* o = m.ui.panel.get<pn::RagSettings>())
+            if (auto* o = m.ui.panel.get<pn::Rag>())
                 if (!form::escape(o->embed.form))
                     return {std::move(m), Cmd<Msg>::none()};   // unwound a level
-            return agentty::app::update(std::move(m), Msg{CloseRagSettings{}});
+            return agentty::app::update(std::move(m), Msg{CloseRag{}});
         },
 
         // Every navigation/editing key arrives here. The shared reducer does
@@ -285,7 +285,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
                 // nothing to validate and no probe to invalidate, so making the
                 // user press ^S for it would be ceremony.
                 if (on_mode) {
-                    if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
+                    if (auto* o = m.ui.panel.get<pn::Rag>()) {
                         o->cursor = rs::mode_from_form(f->form, o->cursor);
                         o->active = o->cursor;
                         commit_mode(o->cursor);
@@ -293,7 +293,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
                 } else {
                     invalidate_probe(*f);
                     if (on_backend) {
-                        auto* o = m.ui.panel.get<pn::RagSettings>();
+                        auto* o = m.ui.panel.get<pn::Rag>();
                         const auto mode = o ? o->cursor : store::RagMode::On;
                         resync_rows(*f, mode, o && o->advanced);
                     } else {
@@ -390,7 +390,7 @@ Step rag_settings_update(Model m, msg::RagSettingsMsg rm) {
                                      std::chrono::seconds{4})};
         },
         [&](RagEmbedRevert) -> Step {
-            if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
+            if (auto* o = m.ui.panel.get<pn::Rag>()) {
                 auto& f = o->embed;
                 f.cfg   = current_embed_config();
                 f.form  = rs::build_form(f.cfg, o->cursor, deps().load_settings());

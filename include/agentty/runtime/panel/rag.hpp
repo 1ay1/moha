@@ -152,18 +152,18 @@ inline constexpr int kModeCount =
 
 } // namespace rag_settings
 
-using RagSettingsState =
+using RagState =
     std::variant<rag_settings::Closed, rag_settings::Open>;
 
-[[nodiscard]] inline bool rag_settings_is_open(const RagSettingsState& s) noexcept {
+[[nodiscard]] inline bool rag_settings_is_open(const RagState& s) noexcept {
     return std::holds_alternative<rag_settings::Open>(s);
 }
 [[nodiscard]] inline rag_settings::Open*
-rag_settings_opened(RagSettingsState& s) noexcept {
+rag_settings_opened(RagState& s) noexcept {
     return std::get_if<rag_settings::Open>(&s);
 }
 [[nodiscard]] inline const rag_settings::Open*
-rag_settings_opened(const RagSettingsState& s) noexcept {
+rag_settings_opened(const RagState& s) noexcept {
     return std::get_if<rag_settings::Open>(&s);
 }
 

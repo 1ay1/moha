@@ -475,7 +475,7 @@ TEST_CASE("tool timeline adapter") {
     // Exercise the real overlay adapter, not only the generic Picker. Its old
     // 60-column floor overflowed phone/SSH terminals before flex could help.
     A::Model viewer_model;
-    A::tool_viewer::Entry viewer_entry;
+    A::tool_output::Entry viewer_entry;
     viewer_entry.name = "shell";
     viewer_entry.title = "Diagnostics";
     viewer_entry.detail = "cmake --build a-very-long-target-name";
@@ -483,7 +483,7 @@ TEST_CASE("tool timeline adapter") {
     viewer_entry.output = "line one\nline two\nline three";
     viewer_entry.is_live = true;
     viewer_entry.call = make_tool("shell", A::ToolUse::Running{});
-    viewer_model.ui.panel = A::ui::panel::ToolViewer{{{viewer_entry}, 0, false}};
+    viewer_model.ui.panel = A::ui::panel::ToolOutput{{{viewer_entry}, 0, false}};
     int list_height = -1;
     for (int width = 8; width <= 120; ++width) {
         auto viewer = U::tool_output_viewer(viewer_model);
@@ -496,7 +496,7 @@ TEST_CASE("tool timeline adapter") {
         check(measured.height.value == list_height,
               "tool viewer list never wraps at width " + std::to_string(width));
     }
-    viewer_model.ui.panel.get<A::ui::panel::ToolViewer>()->viewing = true;
+    viewer_model.ui.panel.get<A::ui::panel::ToolOutput>()->viewing = true;
     int body_height = -1;
     for (int width = 8; width <= 120; ++width) {
         auto viewer = U::tool_output_viewer(viewer_model);
@@ -529,7 +529,7 @@ TEST_CASE("tool timeline adapter") {
 
     static constexpr std::array<int, 7> viewer_widths = {8, 12, 20, 32, 48, 80, 120};
     for (auto& call : structured_calls) {
-        A::tool_viewer::Entry entry;
+        A::tool_output::Entry entry;
         entry.name = call.name.value;
         entry.title = U::tool_display_name(entry.name);
         entry.detail = "structured output";
@@ -538,7 +538,7 @@ TEST_CASE("tool timeline adapter") {
         entry.call = call;
         A::Model structured_model;
         structured_model.ui.panel =
-            A::ui::panel::ToolViewer{{{std::move(entry)}, 0, true}};
+            A::ui::panel::ToolOutput{{{std::move(entry)}, 0, true}};
         int expected_height = -1;
         for (int width : viewer_widths) {
             auto viewer = U::tool_output_viewer(structured_model);
@@ -554,7 +554,7 @@ TEST_CASE("tool timeline adapter") {
     }
 
     for (bool live : {false, true}) {
-        A::tool_viewer::Entry empty;
+        A::tool_output::Entry empty;
         empty.name = "mcp__example__silent";
         empty.title = "Silent MCP Operation";
         empty.detail = "waiting for remote service";
@@ -565,7 +565,7 @@ TEST_CASE("tool timeline adapter") {
             : make_tool(empty.name, A::ToolUse::Done{});
         A::Model empty_model;
         empty_model.ui.panel =
-            A::ui::panel::ToolViewer{{{std::move(empty)}, 0, true}};
+            A::ui::panel::ToolOutput{{{std::move(empty)}, 0, true}};
         int expected_height = -1;
         for (int width : viewer_widths) {
             auto viewer = U::tool_output_viewer(empty_model);
@@ -585,7 +585,7 @@ TEST_CASE("tool timeline adapter") {
     // bounds, including the old inherited four-row-floor failure at 10/11.
     const char* old_lines_raw = std::getenv("LINES");
     const std::string old_lines = old_lines_raw ? old_lines_raw : "";
-    A::tool_viewer::Entry long_entry;
+    A::tool_output::Entry long_entry;
     long_entry.name = "shell";
     long_entry.title = "Bash";
     long_entry.detail = "long output";
@@ -596,7 +596,7 @@ TEST_CASE("tool timeline adapter") {
         A::ToolUse::Done{{}, {}, long_entry.output});
     A::Model short_terminal_model;
     short_terminal_model.ui.panel =
-        A::ui::panel::ToolViewer{{{std::move(long_entry)}, 0, true}};
+        A::ui::panel::ToolOutput{{{std::move(long_entry)}, 0, true}};
     static constexpr std::array<int, 4> short_heights = {8, 10, 11, 12};
     for (int height : short_heights) {
         const auto height_text = std::to_string(height);
@@ -613,9 +613,9 @@ TEST_CASE("tool timeline adapter") {
               "long body fits a " + height_text + "-row terminal");
     }
 
-    std::vector<A::tool_viewer::Entry> short_list_entries;
+    std::vector<A::tool_output::Entry> short_list_entries;
     for (int i = 0; i < 4; ++i) {
-        A::tool_viewer::Entry entry;
+        A::tool_output::Entry entry;
         entry.name = "shell";
         entry.title = "Diagnostics";
         entry.detail = "operation " + std::to_string(i);
@@ -625,7 +625,7 @@ TEST_CASE("tool timeline adapter") {
     }
     A::Model short_list_model;
     short_list_model.ui.panel =
-        A::ui::panel::ToolViewer{{std::move(short_list_entries), 0, false}};
+        A::ui::panel::ToolOutput{{std::move(short_list_entries), 0, false}};
     for (int height : short_heights) {
         const auto height_text = std::to_string(height);
 #ifdef _WIN32

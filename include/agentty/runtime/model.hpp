@@ -347,7 +347,7 @@ struct Model {
 
     struct UI {
         ComposerState       composer;
-        // ── THE exclusive overlay slot ─────────────────────────────
+        // ── THE exclusive panel slot ─────────────────────────────
         // Every modal overlay (pickers, palettes, viewers, diff review)
         // lives in this ONE variant: opening is assignment, which
         // structurally closes whatever was open — "two overlays open" is
@@ -382,7 +382,7 @@ struct Model {
         bool                clipboard_wanted_image = false;
         // When the model picker was opened to ASSIGN a Smart Mode role slot
         // (not to switch the active model), this names the target slot.
-        // FusedPickerSelect writes the chosen model into that slot and
+        // ModelsSelect writes the chosen model into that slot and
         // clears this instead of switching models. Absent = normal switch.
         //
         // Was `int = -1` with the roles encoded as 0/1/2, so it was cast to
@@ -404,7 +404,7 @@ struct Model {
         // Effort tier changed via ←/→ in the model picker but not yet
         // flushed to disk. Persisting per keystroke is a synchronous
         // load+fsync+rename on the UI thread; instead the CycleEffort arm
-        // sets this and CloseFusedPicker/Select flush once.
+        // sets this and CloseModels/Select flush once.
         bool                effort_dirty = false;
         // Plugins/MCP connection snapshot — OWNED BY THE MODEL, not read from
         // the global pool at render time. This is the architectural fix for
@@ -575,8 +575,8 @@ struct Model {
         // the filter query changes the match set).
         //
         // auto_dispatch = false: these pickers are selection-driven. The
-        // reducer owns the cursor (FusedPickerMove / ThreadListMove /
-        // CommandPaletteMove / …) and the Picker widget auto-scrolls the
+        // reducer owns the cursor (ModelsMove / ThreadListMove /
+        // PaletteMove / …) and the Picker widget auto-scrolls the
         // viewport to keep the selected row visible every build. Leaving
         // auto_dispatch on (the default) would ALSO feed every ↑/↓/PageUp
         // arrow straight into ScrollState::handle, bumping scroll.y in
@@ -632,7 +632,7 @@ struct Model {
     // (does the spinner advance) and app/program.hpp (does the frame change
     // the visual hash).
     [[nodiscard]] bool loading_spinner_visible() const noexcept {
-        return ui.panel.is<ui::panel::FusedPicker>()
+        return ui.panel.is<ui::panel::Models>()
             && d.any_catalog_loading();
     }
 };

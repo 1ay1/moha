@@ -167,7 +167,7 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/app/update/symbol.cpp
     src/runtime/app/update/codeblock.cpp
     src/runtime/app/update/checkpoint.cpp
-    src/runtime/app/update/rag_settings.cpp
+    src/runtime/app/update/rag.cpp
     src/runtime/app/update/settings_list.cpp
     src/runtime/panel/settings_items.cpp
     src/runtime/panel/form.cpp

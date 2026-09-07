@@ -151,11 +151,11 @@ std::optional<Msg> on_command_palette(const KeyEvent& ev) {
     // type into the query). Ctrl chords other than the toggle are eaten —
     // they must never become query text.
     nav::NavSpec s;
-    s.close     = [] { return Msg{CloseCommandPalette{}}; };
-    s.select    = [] { return Msg{CommandPaletteSelect{}}; };
-    s.move      = [](int d) { return Msg{CommandPaletteMove{d}}; };
-    s.filter_bs = [] { return Msg{CommandPaletteBackspace{}}; };
-    s.filter_ch = [](char32_t c) { return Msg{CommandPaletteInput{c}}; };
+    s.close     = [] { return Msg{ClosePalette{}}; };
+    s.select    = [] { return Msg{PaletteSelect{}}; };
+    s.move      = [](int d) { return Msg{PaletteMove{d}}; };
+    s.filter_bs = [] { return Msg{PaletteBackspace{}}; };
+    s.filter_ch = [](char32_t c) { return Msg{PaletteInput{c}}; };
     s.toggle_close_chord = U'k';
     return nav::translate(s, ev);
 }
@@ -164,13 +164,13 @@ std::optional<Msg> on_mention_palette(const KeyEvent& ev) {
     // @-mention list rides the composer: every CharKey (even ctrl'd) goes
     // to the palette's own input handling, so `extra` claims chars first.
     nav::NavSpec s;
-    s.close     = [] { return Msg{CloseMentionPalette{}}; };
-    s.select    = [] { return Msg{MentionPaletteSelect{}}; };
-    s.move      = [](int d) { return Msg{MentionPaletteMove{d}}; };
-    s.filter_bs = [] { return Msg{MentionPaletteBackspace{}}; };
+    s.close     = [] { return Msg{CloseMention{}}; };
+    s.select    = [] { return Msg{MentionSelect{}}; };
+    s.move      = [](int d) { return Msg{MentionMove{d}}; };
+    s.filter_bs = [] { return Msg{MentionBackspace{}}; };
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         if (auto* ck = std::get_if<CharKey>(&e.key))
-            return Msg{MentionPaletteInput{ck->codepoint}};
+            return Msg{MentionInput{ck->codepoint}};
         return std::nullopt;
     };
     return nav::translate(s, ev);
@@ -178,13 +178,13 @@ std::optional<Msg> on_mention_palette(const KeyEvent& ev) {
 
 std::optional<Msg> on_symbol_palette(const KeyEvent& ev) {
     nav::NavSpec s;
-    s.close     = [] { return Msg{CloseSymbolPalette{}}; };
-    s.select    = [] { return Msg{SymbolPaletteSelect{}}; };
-    s.move      = [](int d) { return Msg{SymbolPaletteMove{d}}; };
-    s.filter_bs = [] { return Msg{SymbolPaletteBackspace{}}; };
+    s.close     = [] { return Msg{CloseSymbol{}}; };
+    s.select    = [] { return Msg{SymbolSelect{}}; };
+    s.move      = [](int d) { return Msg{SymbolMove{d}}; };
+    s.filter_bs = [] { return Msg{SymbolBackspace{}}; };
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         if (auto* ck = std::get_if<CharKey>(&e.key))
-            return Msg{SymbolPaletteInput{ck->codepoint}};
+            return Msg{SymbolInput{ck->codepoint}};
         return std::nullopt;
     };
     return nav::translate(s, ev);
@@ -196,19 +196,19 @@ std::optional<Msg> on_symbol_palette(const KeyEvent& ev) {
 // composer for editing, `y` copies clean.
 std::optional<Msg> on_code_block_picker(const KeyEvent& ev) {
     nav::NavSpec s;
-    s.close  = [] { return Msg{CloseCodeBlockPicker{}}; };
-    s.select = [] { return Msg{CodeBlockPickerSelect{}}; };
-    s.move   = [](int d) { return Msg{CodeBlockPickerMove{d}}; };
+    s.close  = [] { return Msg{CloseCodeBlocks{}}; };
+    s.select = [] { return Msg{CodeBlocksSelect{}}; };
+    s.move   = [](int d) { return Msg{CodeBlocksMove{d}}; };
     s.toggle_close_chord = U'g';
     s.extra  = [](const KeyEvent& e) -> std::optional<Msg> {
         const auto v = nav::char_view(e);
         if (!v) return std::nullopt;
         if (!v->ctrl && v->c >= U'1' && v->c <= U'9')
-            return Msg{CodeBlockPickerSelect{static_cast<int>(v->c - U'1')}};
+            return Msg{CodeBlocksSelect{static_cast<int>(v->c - U'1')}};
         if (!v->ctrl) switch (v->c) {
-            case U'e': case U'E': return Msg{CodeBlockPickerEdit{}};
-            case U'y': case U'Y': return Msg{CodeBlockPickerCopy{}};
-            case U'q': case U'Q': return Msg{CloseCodeBlockPicker{}};
+            case U'e': case U'E': return Msg{CodeBlocksEdit{}};
+            case U'y': case U'Y': return Msg{CodeBlocksCopy{}};
+            case U'q': case U'Q': return Msg{CloseCodeBlocks{}};
             default: break;
         }
         return std::nullopt;
@@ -224,7 +224,7 @@ std::optional<Msg> on_code_block_result(const KeyEvent& ev) {
     nav::NavSpec s;
     s.close     = [] { return Msg{CodeBlockResultDiscard{}}; };
     s.select    = [] { return Msg{CodeBlockResultDiscard{}}; };   // safe default
-    s.move      = [](int d) { return Msg{CodeBlockPickerMove{d}}; };
+    s.move      = [](int d) { return Msg{CodeBlocksMove{d}}; };
     s.page_step = 10;
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         const auto v = nav::char_view(e);
@@ -243,9 +243,9 @@ std::optional<Msg> on_code_block_result(const KeyEvent& ev) {
 // Rewind checkpoint picker: shared grammar + vim nav; read-only list.
 std::optional<Msg> on_checkpoint_picker(const KeyEvent& ev) {
     nav::NavSpec s;
-    s.close     = [] { return Msg{CloseCheckpointPicker{}}; };
-    s.select    = [] { return Msg{CheckpointPickerSelect{}}; };
-    s.move      = [](int d) { return Msg{CheckpointPickerMove{d}}; };
+    s.close     = [] { return Msg{CloseCheckpoints{}}; };
+    s.select    = [] { return Msg{CheckpointsSelect{}}; };
+    s.move      = [](int d) { return Msg{CheckpointsMove{d}}; };
     s.vim_nav   = true;
     s.page_step = 10;
     return nav::translate(s, ev);
@@ -290,7 +290,7 @@ template <class Wrap>
 std::optional<Msg> on_rag_settings(const FormFocus& f, const KeyEvent& ev) {
     if (f.open && !f.editing)
         if (const auto v = nav::char_view(ev); v && !v->ctrl && v->c == U'a')
-            return Msg{RagSettingsAdvanced{}};
+            return Msg{RagAdvanced{}};
     return on_form(f, ev, [](form::keys::Action a) { return Msg{RagEmbedKey{a}}; });
 }
 
@@ -328,9 +328,9 @@ std::optional<Msg> on_settings_list(const KeyEvent& ev, bool input_active) {
 // Fork picker: a pure list — each row is a distinct RAG mode for the fork.
 std::optional<Msg> on_fork_picker(const KeyEvent& ev) {
     nav::NavSpec s;
-    s.close   = [] { return Msg{CloseForkPicker{}}; };
+    s.close   = [] { return Msg{CloseFork{}}; };
     s.select  = [] { return Msg{ForkThread{}}; };
-    s.move    = [](int d) { return Msg{ForkPickerMove{d}}; };
+    s.move    = [](int d) { return Msg{ForkMove{d}}; };
     s.vim_nav = true;
     return nav::translate(s, ev);
 }
@@ -340,23 +340,23 @@ std::optional<Msg> on_fork_picker(const KeyEvent& ev) {
 // ^L force-refreshes every catalog. There is exactly one model surface.
 std::optional<Msg> on_fused_picker(const KeyEvent& ev) {
     nav::NavSpec s;
-    s.close     = [] { return Msg{CloseFusedPicker{}}; };
-    s.select    = [] { return Msg{FusedPickerSelect{}}; };
-    s.move      = [](int d) { return Msg{FusedPickerMove{d}}; };
+    s.close     = [] { return Msg{CloseModels{}}; };
+    s.select    = [] { return Msg{ModelsSelect{}}; };
+    s.move      = [](int d) { return Msg{ModelsMove{d}}; };
     s.jump      = [](nav::Jump j) {
-        using W = FusedPickerJump::Where;
-        return Msg{FusedPickerJump{j == nav::Jump::Home ? W::Home
+        using W = ModelsJump::Where;
+        return Msg{ModelsJump{j == nav::Jump::Home ? W::Home
                                  : j == nav::Jump::End  ? W::End
                                  : j == nav::Jump::PageUp ? W::PageUp
                                                           : W::PageDown}};
     };
-    s.filter_bs = [] { return Msg{FusedPickerFilterBackspace{}}; };
-    s.filter_ch = [](char32_t c) { return Msg{FusedPickerFilterInput{c}}; };
+    s.filter_bs = [] { return Msg{ModelsFilterBackspace{}}; };
+    s.filter_ch = [](char32_t c) { return Msg{ModelsFilterInput{c}}; };
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         if (const auto* sk = std::get_if<SpecialKey>(&e.key)) {
             // ←/→ cycle the highlighted model's reasoning-effort tier.
-            if (*sk == SpecialKey::Left)  return Msg{FusedPickerCycleEffort{-1}};
-            if (*sk == SpecialKey::Right) return Msg{FusedPickerCycleEffort{+1}};
+            if (*sk == SpecialKey::Left)  return Msg{ModelsCycleEffort{-1}};
+            if (*sk == SpecialKey::Right) return Msg{ModelsCycleEffort{+1}};
             return std::nullopt;
         }
         const auto v = nav::char_view(e);
@@ -366,13 +366,13 @@ std::optional<Msg> on_fused_picker(const KeyEvent& ev) {
         // Close is Esc (the fused picker is the only model surface now, so ^/
         // no longer needs to toggle a second one shut).
         if (v->raw == 0x1F || (v->ctrl && v->c == U'/'))
-            return Msg{FusedPickerScopeProvider{}};
+            return Msg{ModelsScopeProvider{}};
         if (v->ctrl) {
             switch (v->c) {
-                case U'p': return Msg{OpenProviderPicker{}};   // cross-hop
-                case U'f': return Msg{FusedPickerToggleFavorite{}};
-                case U'r': return Msg{FusedPickerToggleShowReasoning{}};
-                case U'l': return Msg{FusedPickerRefresh{}};
+                case U'p': return Msg{OpenProviders{}};   // cross-hop
+                case U'f': return Msg{ModelsToggleFavorite{}};
+                case U'r': return Msg{ModelsToggleShowReasoning{}};
+                case U'l': return Msg{ModelsRefresh{}};
                 default:   break;
             }
             // Fall through to nullopt: translate() never types ctrl'd
@@ -390,32 +390,32 @@ std::optional<Msg> on_fused_picker(const KeyEvent& ev) {
 // a provider name starting with 'd' (deepseek…).
 std::optional<Msg> on_provider_picker(const KeyEvent& ev) {
     nav::NavSpec s;
-    s.close     = [] { return Msg{CloseProviderPicker{}}; };
-    s.select    = [] { return Msg{ProviderPickerSelect{}}; };
-    s.move      = [](int d) { return Msg{ProviderPickerMove{d}}; };
+    s.close     = [] { return Msg{CloseProviders{}}; };
+    s.select    = [] { return Msg{ProvidersSelect{}}; };
+    s.move      = [](int d) { return Msg{ProvidersMove{d}}; };
     s.jump      = [](nav::Jump j) {
-        using W = ProviderPickerJump::Where;
-        return Msg{ProviderPickerJump{j == nav::Jump::Home ? W::Home
+        using W = ProvidersJump::Where;
+        return Msg{ProvidersJump{j == nav::Jump::Home ? W::Home
                                     : j == nav::Jump::End  ? W::End
                                     : j == nav::Jump::PageUp ? W::PageUp
                                                              : W::PageDown}};
     };
-    s.filter_bs = [] { return Msg{ProviderPickerFilterBackspace{}}; };
-    s.filter_ch = [](char32_t c) { return Msg{ProviderPickerFilterInput{c}}; };
+    s.filter_bs = [] { return Msg{ProvidersFilterBackspace{}}; };
+    s.filter_ch = [](char32_t c) { return Msg{ProvidersFilterInput{c}}; };
     s.toggle_close_chord = U'p';
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         if (const auto* sk = std::get_if<SpecialKey>(&e.key)) {
             // Forward-Delete removes; Mac laptops lack the key (their
             // "delete" sends Backspace) — ^D below is the reachable twin.
-            if (*sk == SpecialKey::Delete) return Msg{ProviderPickerDelete{}};
+            if (*sk == SpecialKey::Delete) return Msg{ProvidersDelete{}};
             return std::nullopt;
         }
         const auto v = nav::char_view(e);
         if (!v) return std::nullopt;
         if (v->raw == 0x1F || (v->ctrl && v->c == U'/'))
-            return Msg{OpenFusedPicker{}};                       // cross-hop
+            return Msg{OpenModels{}};                       // cross-hop
         if (v->ctrl && (v->c == U'd' || v->c == U'D'))
-            return Msg{ProviderPickerDelete{}};
+            return Msg{ProvidersDelete{}};
         return std::nullopt;
     };
     return nav::translate(s, ev);
@@ -553,24 +553,24 @@ std::optional<Msg> on_todo_modal(const KeyEvent& ev) {
 // Copy msgs serve both stages. h/l (and ←/→) step between entries.
 std::optional<Msg> on_tool_viewer(const KeyEvent& ev) {
     nav::NavSpec s;
-    s.close     = [] { return Msg{CloseToolOutputViewer{}}; };
-    s.select    = [] { return Msg{ToolViewerSelect{}}; };
-    s.move      = [](int d) { return Msg{ToolViewerMove{d}}; };
+    s.close     = [] { return Msg{CloseToolOutput{}}; };
+    s.select    = [] { return Msg{ToolOutputSelect{}}; };
+    s.move      = [](int d) { return Msg{ToolOutputMove{d}}; };
     s.vim_nav   = true;
     s.page_step = 10;
     s.toggle_close_chord = U'o';
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         if (const auto* sk = std::get_if<SpecialKey>(&e.key)) {
-            if (*sk == SpecialKey::Left)  return Msg{ToolViewerStep{-1}};
-            if (*sk == SpecialKey::Right) return Msg{ToolViewerStep{+1}};
+            if (*sk == SpecialKey::Left)  return Msg{ToolOutputStep{-1}};
+            if (*sk == SpecialKey::Right) return Msg{ToolOutputStep{+1}};
             return std::nullopt;
         }
         const auto v = nav::char_view(e);
         if (!v || v->ctrl) return std::nullopt;
         switch (v->c) {
-            case U'h': case U'H': return Msg{ToolViewerStep{-1}};
-            case U'l': case U'L': return Msg{ToolViewerStep{+1}};
-            case U'y': case U'Y': return Msg{ToolViewerCopy{}};
+            case U'h': case U'H': return Msg{ToolOutputStep{-1}};
+            case U'l': case U'L': return Msg{ToolOutputStep{+1}};
+            case U'y': case U'Y': return Msg{ToolOutputCopy{}};
             default: return std::nullopt;
         }
     };
@@ -754,10 +754,10 @@ std::optional<Msg> on_global(const KeyEvent& ev) {
         if (ctrl) {
             switch (c) {
                 case U'c': case U'C': return Quit{};
-                case U'/':           return OpenFusedPicker{};
+                case U'/':           return OpenModels{};
                 case U'j': case U'J': return OpenThreadList{};
-                case U'k': case U'K': return OpenCommandPalette{};
-                case U'p': case U'P': return OpenProviderPicker{};
+                case U'k': case U'K': return OpenPalette{};
+                case U'p': case U'P': return OpenProviders{};
                 case U'l': case U'L': return RedrawScreen{};
                 case U'r': case U'R': return OpenDiffReview{};
                 case U'n': case U'N': return NewThread{};
@@ -768,8 +768,8 @@ std::optional<Msg> on_global(const KeyEvent& ev) {
                 // composer-local) so it can also be disarmed mid-stream,
                 // when the composer isn't the thing taking keys.
                 case U'b': case U'B': return ComposerToggleLoop{};
-                case U'g': case U'G': return OpenCodeBlockPicker{};
-                case U'o': case U'O': return OpenToolOutputViewer{};
+                case U'g': case U'G': return OpenCodeBlocks{};
+                case U'o': case U'O': return OpenToolOutput{};
                 case U's': case U'S': return OpenSmartMode{};
                 default: break;
             }
@@ -959,8 +959,8 @@ Sub<Msg> subscribe(const Model& m) {
     // view uses to decide what renders, so keys and pixels can never go to
     // different surfaces (the old twin if-chains could, and did, disagree
     // on order).
-    const auto active_overlay = ui::panel::top(m);
-    const bool in_login = active_overlay == ui::panel::Kind::Login;
+    const auto active_panel = ui::panel::top(m);
+    const bool in_login = active_panel == ui::panel::Kind::Login;
     const bool settings_list_adding = [&] {
         const auto* so = m.ui.panel.get<pn::SettingsList>();
         return so && so->input_active;
@@ -998,7 +998,7 @@ Sub<Msg> subscribe(const Model& m) {
     // Which mode each form-backed pane is in. Three bools per pane — NOT the
     // pane's rows, which would be a per-frame deep copy on the input path.
     FormFocus rag_form, smart_form_snap;
-    if (const auto* o = m.ui.panel.get<ui::panel::RagSettings>())
+    if (const auto* o = m.ui.panel.get<ui::panel::Rag>())
         rag_form = focus_of(o->embed.form);
     if (const auto* o = m.ui.panel.get<ui::panel::SmartMode>())
         smart_form_snap = focus_of(o->form);
@@ -1045,22 +1045,22 @@ Sub<Msg> subscribe(const Model& m) {
             // Ambient overlays (Todo) are exempt by construction — they fall
             // through to global handling and never swallow anything.
             const auto dispatch = [&]() -> std::optional<Msg> {
-                switch (active_overlay) {
+                switch (active_panel) {
                     case OK::Login:          return on_login(login_state, ev);
                     case OK::Permission:     return on_permission(ev);
-                    case OK::CommandPalette: return on_command_palette(ev);
+                    case OK::Palette: return on_command_palette(ev);
                     case OK::Mention:        return on_mention_palette(ev);
                     case OK::Symbol:         return on_symbol_palette(ev);
                     case OK::CodeBlocks:     return on_code_block_picker(ev);
                     case OK::CodeBlockResult: return on_code_block_result(ev);
-                    case OK::ToolViewer:     return on_tool_viewer(ev);
+                    case OK::ToolOutput:     return on_tool_viewer(ev);
                     case OK::Checkpoints:    return on_checkpoint_picker(ev);
-                    case OK::RagSettings:    return on_rag_settings(rag_form, ev);
+                    case OK::Rag:    return on_rag_settings(rag_form, ev);
                     case OK::SettingsList:
                         return on_settings_list(ev, settings_list_adding);
                     case OK::Fork:           return on_fork_picker(ev);
-                    case OK::FusedPicker:    return on_fused_picker(ev);
-                    case OK::ProviderPicker: return on_provider_picker(ev);
+                    case OK::Models:    return on_fused_picker(ev);
+                    case OK::Providers: return on_provider_picker(ev);
                     case OK::ThreadList:     return on_thread_list(ev);
                     case OK::SmartMode:      return on_smart_mode(smart_form_snap, ev);
                     case OK::DiffReview:     return on_diff_review(ev);
@@ -1075,10 +1075,10 @@ Sub<Msg> subscribe(const Model& m) {
             // Todo is ambient: unclaimed keys fall THROUGH to global handling
             // below rather than being swallowed, so the guarantee (and the
             // swallow) do not apply to it.
-            if (active_overlay != OK::None && active_overlay != OK::Todo) {
+            if (active_panel != OK::None && active_panel != OK::Todo) {
                 if (std::holds_alternative<SpecialKey>(ev.key)
                     && std::get<SpecialKey>(ev.key) == SpecialKey::Escape)
-                    return ui::panel::close_msg(active_overlay);
+                    return ui::panel::close_msg(active_panel);
                 // Exclusive overlay, unclaimed non-Esc key: swallow it, as
                 // modality requires.
                 return Msg{NoOp{}};

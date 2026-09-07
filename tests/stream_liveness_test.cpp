@@ -320,7 +320,7 @@ TEST_CASE("freeze gated on reveal drain") {
 //        phase has left Streaming (e.g. a mid-run tool round-trip:
 //        Streaming → ExecutingTool → Streaming) AND the reveal cursor
 //        has caught up to the live edge. In that pinned-but-live window
-//        render_live_overlay_ still animates the scramble/gradient/
+//        render_live_panel_ still animates the scramble/gradient/
 //        pulsing caret every frame, so the RAF must keep firing or the
 //        turn looks frozen mid-response. is_streaming() is false here, so
 //        the phase gate (wire_streaming_here) does NOT cover it; the

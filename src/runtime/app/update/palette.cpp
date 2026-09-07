@@ -75,9 +75,9 @@ template <class T, class V>
 
         // ── Thread ──
         add(Command::NewThread,        emit<NewThread>());
-        add(Command::ForkThread,       emit<OpenForkPicker>());
+        add(Command::ForkThread,       emit<OpenFork>());
         add(Command::CompactContext,   emit<CompactContext>());
-        add(Command::RewindCheckpoint, emit<OpenCheckpointPicker>());
+        add(Command::RewindCheckpoint, emit<OpenCheckpoints>());
         // ── Changes ──
         add(Command::ReviewChanges,    emit<OpenDiffReview>());
         add(Command::ToggleChangesStrip, [](Model m) -> Step {
@@ -95,15 +95,15 @@ template <class T, class V>
         // ── Go ──
         add(Command::OpenThreads,      emit<OpenThreadList>());
         add(Command::OpenPlan,         emit<OpenTodoModal>());
-        add(Command::InspectToolOutputs, emit<OpenToolOutputViewer>());
-        add(Command::RunCodeBlock,     emit<OpenCodeBlockPicker>());
+        add(Command::InspectToolOutputs, emit<OpenToolOutput>());
+        add(Command::RunCodeBlock,     emit<OpenCodeBlocks>());
         // ── Config ──
         add(Command::CycleProfile,     emit<CycleProfile>());
-        add(Command::OpenModels,       emit<OpenFusedPicker>());
+        add(Command::OpenModels,       emit<OpenModels>());
         add(Command::SwapModel,        emit<SwitchToPreviousModel>());
-        add(Command::OpenProviders,    emit<OpenProviderPicker>());
+        add(Command::OpenProviders,    emit<OpenProviders>());
         add(Command::SmartMode,        emit<OpenSmartMode>());
-        add(Command::OpenRagSettings,  emit<OpenRagSettings>());
+        add(Command::OpenRag,  emit<OpenRag>());
         add(Command::OpenPlugins,      emit_val<OpenSettingsList>(settings::Category::Plugins));
         add(Command::OpenCommands,     emit_val<OpenSettingsList>(settings::Category::Commands));
         add(Command::OpenAgents,       emit_val<OpenSettingsList>(settings::Category::Agents));
@@ -135,18 +135,18 @@ template <class T, class V>
     return done(std::move(m));
 }
 
-Step palette_update(Model m, msg::CommandPaletteMsg pm) {
+Step palette_update(Model m, msg::PaletteMsg pm) {
     return std::visit(overload{
-        [&](OpenCommandPalette) -> Step {
-            m.ui.panel = pn::CommandPalette{};
+        [&](OpenPalette) -> Step {
+            m.ui.panel = pn::Palette{};
             return done(std::move(m));
         },
-        [&](CloseCommandPalette) -> Step {
-            m.ui.panel.close<pn::CommandPalette>();
+        [&](ClosePalette) -> Step {
+            m.ui.panel.close<pn::Palette>();
             return done(std::move(m));
         },
-        [&](CommandPaletteInput& e) -> Step {
-            auto* o = m.ui.panel.get<pn::CommandPalette>();
+        [&](PaletteInput& e) -> Step {
+            auto* o = m.ui.panel.get<pn::Palette>();
             if (o && static_cast<uint32_t>(e.ch) < 0x80) {
                 o->query.push_back(static_cast<char>(e.ch));
                 // Reset cursor to the top of the (newly filtered) list so
@@ -155,16 +155,16 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             }
             return done(std::move(m));
         },
-        [&](CommandPaletteBackspace) -> Step {
-            auto* o = m.ui.panel.get<pn::CommandPalette>();
+        [&](PaletteBackspace) -> Step {
+            auto* o = m.ui.panel.get<pn::Palette>();
             if (o && !o->query.empty()) {
                 o->query.pop_back();
                 o->index = 0;
             }
             return done(std::move(m));
         },
-        [&](CommandPaletteMove& e) -> Step {
-            auto* o = m.ui.panel.get<pn::CommandPalette>();
+        [&](PaletteMove& e) -> Step {
+            auto* o = m.ui.panel.get<pn::Palette>();
             if (!o) return done(std::move(m));
             // Clamp against the *visible* row count, not kCommands.size().
             // Without the upper bound the cursor used to walk off-screen
@@ -175,8 +175,8 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             o->index = std::clamp(o->index + e.delta, 0, sz - 1);
             return done(std::move(m));
         },
-        [&](CommandPaletteSelect) -> Step {
-            auto* o = m.ui.panel.get<pn::CommandPalette>();
+        [&](PaletteSelect) -> Step {
+            auto* o = m.ui.panel.get<pn::Palette>();
             if (!o) return done(std::move(m));
             // Resolve cursor → typed Command via the SAME filtered list
             // the view rendered. The previous design switched on the raw
@@ -190,7 +190,7 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             if (matches.empty()
                 || idx < 0
                 || idx >= static_cast<int>(matches.size())) {
-                m.ui.panel.close<pn::CommandPalette>();
+                m.ui.panel.close<pn::Palette>();
                 return done(std::move(m));
             }
             const Command sel = matches[static_cast<std::size_t>(idx)]->id;
@@ -200,7 +200,7 @@ Step palette_update(Model m, msg::CommandPaletteMsg pm) {
             // origin plumbing, and a command that opens nothing leaves the
             // slot None, where adopt() is a no-op.
             auto parent = pn::From::of(pn::Snapshot{m.ui.panel.raw()});
-            m.ui.panel.close<pn::CommandPalette>();
+            m.ui.panel.close<pn::Palette>();
             // Behaviour lives in the command registry (dispatch_command), not
             // an inline switch — one declarative table, no drift, and adding a
             // command never touches this arm.

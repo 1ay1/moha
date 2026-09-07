@@ -586,7 +586,7 @@ Step composer_update(Model m, msg::ComposerMsg cm) {
                 return prev == '\n';
             };
             if (e.ch == U'/' && at_line_start()) {
-                m.ui.panel = pn::CommandPalette{};
+                m.ui.panel = pn::Palette{};
                 return done(std::move(m));
             }
             // '@' opens the file mention picker. Unlike '/' this is
@@ -625,7 +625,7 @@ Step composer_update(Model m, msg::ComposerMsg cm) {
             // otherwise open with an empty snapshot + "indexing…" hint and
             // fill on the first keystroke. Never blocks the UI on the scan.
             if (e.ch == U'#' && at_word_boundary()) {
-                symbol_palette::Open o;
+                symbol::Open o;
                 if (symbols_ready()) o.entries = list_workspace_symbols();
                 m.ui.panel = pn::Symbol{std::move(o)};
                 return done(std::move(m));

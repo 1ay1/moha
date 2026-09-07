@@ -11,7 +11,7 @@
 
 #include <string_view>
 
-namespace cbp = agentty::code_block_picker;
+namespace cbp = agentty::code_blocks;
 
 
 TEST_CASE("code block extract") {

@@ -18,7 +18,7 @@ namespace agentty::ui {
 // what the worktree has changed SINCE that point so the rewind is never
 // blind. Enter rewinds; the destructive files+transcript revert is the
 // existing RestoreCheckpoint flow.
-Element checkpoint_picker(const Model& m) {
+Element checkpoints(const Model& m) {
     auto* o = m.ui.panel.get<pn::Checkpoints>();
     if (!o) return nothing();
 
@@ -40,7 +40,7 @@ Element checkpoint_picker(const Model& m) {
     cfg.title      = " Rewind to Checkpoint ";
     cfg.accent     = warn;
     cfg.min_width  = kPanelStandard;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.checkpoints_scroll;
     cfg.selected   = o->entries.empty() ? -1 : o->index;
 
@@ -56,13 +56,13 @@ Element checkpoint_picker(const Model& m) {
         std::string when = ago(e.timestamp_ms);
         std::string stat;
         switch (e.diff_state) {
-            case checkpoint_picker::Entry::DiffState::Loading:
+            case checkpoints::Entry::DiffState::Loading:
                 stat = "\xe2\x80\xa6";   // …
                 break;
-            case checkpoint_picker::Entry::DiffState::Failed:
+            case checkpoints::Entry::DiffState::Failed:
                 stat = "";
                 break;
-            case checkpoint_picker::Entry::DiffState::Ready:
+            case checkpoints::Entry::DiffState::Ready:
                 if (e.clean) {
                     stat = "no changes";
                 } else {
@@ -79,7 +79,7 @@ Element checkpoint_picker(const Model& m) {
         row.trailing = std::move(trailing);
         // Green when a real rewind (has changes), dim when clean/no-stat.
         const bool has_changes =
-            e.diff_state == checkpoint_picker::Entry::DiffState::Ready && !e.clean;
+            e.diff_state == checkpoints::Entry::DiffState::Ready && !e.clean;
         row.trailing_style = has_changes ? fg_of(success) : fg_dim(muted);
         cfg.items.push_back(std::move(row));
     }
@@ -104,7 +104,7 @@ Element todo_modal(const Model& m) {
     cfg.title      = " Plan ";
     cfg.accent     = info;
     cfg.min_width  = kPanelNarrow;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.todo_scroll;
     // No selection cursor in the todo modal — read-only. Pass -1
     // so the auto-scroll-to-selection is a no-op and the user's

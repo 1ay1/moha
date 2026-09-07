@@ -172,20 +172,20 @@ const std::vector<Axis>& visual_axes() {
             m.ui.frozen_turn = 7;
         }},
         {"model_picker opens", [](Model& m) {
-            m.ui.panel = pn::FusedPicker{{0, ""}};
+            m.ui.panel = pn::Models{{0, ""}};
         }},
         {"model_picker cursor move", [](Model& m) {
-            m.ui.panel = pn::FusedPicker{{3}};
+            m.ui.panel = pn::Models{{3}};
         }},
         {"model_picker query", [](Model& m) {
             agentty::ui::pick::OpenAt o; o.index = 0; o.query = "free";
-            m.ui.panel = pn::FusedPicker{std::move(o)};
+            m.ui.panel = pn::Models{std::move(o)};
         }},
         {"provider_picker opens", [](Model& m) {
-            m.ui.panel = pn::ProviderPicker{{0}};
+            m.ui.panel = pn::Providers{{0}};
         }},
         {"provider_picker cursor move", [](Model& m) {
-            m.ui.panel = pn::ProviderPicker{{2}};
+            m.ui.panel = pn::Providers{{2}};
         }},
         {"thread_list opens", [](Model& m) {
             m.ui.panel = pn::ThreadList{{0}};
@@ -205,55 +205,55 @@ const std::vector<Axis>& visual_axes() {
             m.ui.panel = pn::DiffReview{{1, 2}};
         }},
         {"command_palette opens", [](Model& m) {
-            m.ui.panel = pn::CommandPalette{{}};
+            m.ui.panel = pn::Palette{{}};
         }},
         {"command_palette query", [](Model& m) {
-            m.ui.panel = pn::CommandPalette{{"git", 0}};
+            m.ui.panel = pn::Palette{{"git", 0}};
         }},
         {"command_palette index", [](Model& m) {
-            m.ui.panel = pn::CommandPalette{{"git", 5}};
+            m.ui.panel = pn::Palette{{"git", 5}};
         }},
-        {"mention_palette opens", [](Model& m) {
+        {"mention opens", [](Model& m) {
             m.ui.panel = agentty::ui::panel::Mention{};
         }},
-        {"mention_palette query", [](Model& m) {
+        {"mention query", [](Model& m) {
             agentty::mention::Open o; o.query = "src"; o.index = 0;
             m.ui.panel = pn::Mention{std::move(o)};
         }},
-        {"mention_palette index", [](Model& m) {
+        {"mention index", [](Model& m) {
             agentty::mention::Open o; o.query = "src"; o.index = 3;
             m.ui.panel = pn::Mention{std::move(o)};
         }},
-        {"symbol_palette opens", [](Model& m) {
+        {"symbol opens", [](Model& m) {
             m.ui.panel = agentty::ui::panel::Symbol{};
         }},
-        {"symbol_palette query", [](Model& m) {
-            agentty::symbol_palette::Open o; o.query = "foo"; o.index = 0;
+        {"symbol query", [](Model& m) {
+            agentty::symbol::Open o; o.query = "foo"; o.index = 0;
             m.ui.panel = pn::Symbol{std::move(o)};
         }},
-        {"symbol_palette index", [](Model& m) {
-            agentty::symbol_palette::Open o; o.query = "foo"; o.index = 2;
+        {"symbol index", [](Model& m) {
+            agentty::symbol::Open o; o.query = "foo"; o.index = 2;
             m.ui.panel = pn::Symbol{std::move(o)};
         }},
         {"todo modal opens", [](Model& m) {
             m.ui.todo.open = agentty::ui::pick::OpenModal{};
         }},
         {"tool viewer opens", [](Model& m) {
-            m.ui.panel = pn::ToolViewer{{{}, 0, false}};
+            m.ui.panel = pn::ToolOutput{{{}, 0, false}};
         }},
         {"tool viewer list cursor move", [](Model& m) {
-            m.ui.panel = pn::ToolViewer{{{}, 2, false}};
+            m.ui.panel = pn::ToolOutput{{{}, 2, false}};
         }},
         {"tool viewer list -> body stage", [](Model& m) {
-            m.ui.panel = pn::ToolViewer{{{}, 0, true}};
+            m.ui.panel = pn::ToolOutput{{{}, 0, true}};
         }},
         {"tool viewer body scroll", [](Model& m) {
-            m.ui.panel = pn::ToolViewer{{{}, 0, true}};
+            m.ui.panel = pn::ToolOutput{{{}, 0, true}};
             m.ui.tool_viewer_scroll.y = 5;
         }},
         {"tool viewer live tail toggled", [](Model& m) {
-            m.ui.panel = pn::ToolViewer{{
-                {agentty::tool_viewer::Entry{}}, 0, /*viewing=*/true}};
+            m.ui.panel = pn::ToolOutput{{
+                {agentty::tool_output::Entry{}}, 0, /*viewing=*/true}};
             m.ui.tool_viewer_tail = false;
         }},
         {"code block picker opens", [](Model& m) {
@@ -318,18 +318,18 @@ const std::vector<Axis>& visual_axes() {
         }},
         {"rag picker opens", [](Model& m) {
             agentty::rag_settings::Open o;
-            m.ui.panel = agentty::ui::panel::RagSettings{o};
+            m.ui.panel = agentty::ui::panel::Rag{o};
         }},
         {"rag picker cursor move", [](Model& m) {
             agentty::rag_settings::Open o;
             o.cursor = agentty::store::RagMode::Off;
-            m.ui.panel = agentty::ui::panel::RagSettings{o};
+            m.ui.panel = agentty::ui::panel::Rag{o};
         }},
         {"fork picker opens", [](Model& m) {
-            m.ui.panel = pn::Fork{{agentty::fork_picker::Choice::RagPerTurn}};
+            m.ui.panel = pn::Fork{{agentty::fork_panel::Choice::RagPerTurn}};
         }},
         {"fork picker cursor move", [](Model& m) {
-            m.ui.panel = pn::Fork{{agentty::fork_picker::Choice::RagOff}};
+            m.ui.panel = pn::Fork{{agentty::fork_panel::Choice::RagOff}};
         }},
     };
     return axes;
@@ -482,7 +482,7 @@ TEST_CASE("visual hash: spinner animates while a PICKER catalog loads") {
     c.provider_id = "openai";
     c.state = agentty::ProviderCatalog::State::Loading;
     m.d.provider_catalogs.push_back(std::move(c));
-    m.ui.panel = agentty::ui::panel::FusedPicker{};
+    m.ui.panel = agentty::ui::panel::Models{};
     REQUIRE(m.loading_spinner_visible());
 
     const auto h0 = agentty::app::AgenttyApp::visual_hash(m);
@@ -498,7 +498,7 @@ TEST_CASE("visual hash: a READY catalog does not animate") {
     c.provider_id = "openai";
     c.state = agentty::ProviderCatalog::State::Ready;
     m.d.provider_catalogs.push_back(std::move(c));
-    m.ui.panel = agentty::ui::panel::FusedPicker{};
+    m.ui.panel = agentty::ui::panel::Models{};
     REQUIRE(!m.loading_spinner_visible());
 
     const auto h0 = agentty::app::AgenttyApp::visual_hash(m);

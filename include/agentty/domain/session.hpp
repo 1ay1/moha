@@ -668,7 +668,7 @@ struct StreamState {
     // queue multiple loads behind each other.
     bool thread_loading = false;
     // True while a background model-list fetch is in flight (kicked off
-    // by init(), OpenFusedPicker, a provider switch, or a login). The
+    // by init(), OpenModels, a provider switch, or a login). The
     // model picker view consults this to render "Loading models…" vs.
     // "No models available" — without it, a fetch that throws or
     // returns an empty list would leave the picker stuck on the

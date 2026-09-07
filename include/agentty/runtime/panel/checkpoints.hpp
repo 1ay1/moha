@@ -35,7 +35,7 @@
 
 namespace agentty {
 
-namespace checkpoint_picker {
+namespace checkpoints {
 
 // One restorable point — a checkpointed user turn.
 struct Entry {
@@ -74,22 +74,22 @@ struct Open {
     int                index = 0;
 };
 
-} // namespace checkpoint_picker
+} // namespace checkpoints
 
-using CheckpointPickerState =
-    std::variant<checkpoint_picker::Closed, checkpoint_picker::Open>;
+using CheckpointsState =
+    std::variant<checkpoints::Closed, checkpoints::Open>;
 
 [[nodiscard]] inline bool checkpoint_picker_is_open(
-        const CheckpointPickerState& s) noexcept {
-    return std::holds_alternative<checkpoint_picker::Open>(s);
+        const CheckpointsState& s) noexcept {
+    return std::holds_alternative<checkpoints::Open>(s);
 }
-[[nodiscard]] inline checkpoint_picker::Open*
-checkpoint_picker_opened(CheckpointPickerState& s) noexcept {
-    return std::get_if<checkpoint_picker::Open>(&s);
+[[nodiscard]] inline checkpoints::Open*
+checkpoint_picker_opened(CheckpointsState& s) noexcept {
+    return std::get_if<checkpoints::Open>(&s);
 }
-[[nodiscard]] inline const checkpoint_picker::Open*
-checkpoint_picker_opened(const CheckpointPickerState& s) noexcept {
-    return std::get_if<checkpoint_picker::Open>(&s);
+[[nodiscard]] inline const checkpoints::Open*
+checkpoint_picker_opened(const CheckpointsState& s) noexcept {
+    return std::get_if<checkpoints::Open>(&s);
 }
 
 } // namespace agentty

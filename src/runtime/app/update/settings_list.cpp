@@ -204,12 +204,12 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
                 case se::Action::CycleProfile:
                     return agentty::app::update(std::move(m), Msg{CycleProfile{}});
                 case se::Action::OpenRag: {
-                    // Descending, not jumping: OpenRagSettings runs with the
+                    // Descending, not jumping: OpenRag runs with the
                     // list still open, so descend() stashes it — category,
                     // cursor and its own parent chain — as the pane's Esc
                     // target. No hand-stamped origin, nothing to forget.
                     return agentty::app::update(std::move(m),
-                                                Msg{OpenRagSettings{}});
+                                                Msg{OpenRag{}});
                 }
                 case se::Action::OpenSmart: {
                     return agentty::app::update(std::move(m),

@@ -1,4 +1,4 @@
-// symbol_update — reducer for `msg::SymbolPaletteMsg`. Parallel to
+// symbol_update — reducer for `msg::SymbolMsg`. Parallel to
 // mention.cpp (the @file picker); the only differences are the
 // candidate type (SymbolEntry vs string) and the chip kind appended on
 // select (Attachment::Symbol vs FileRef).
@@ -21,23 +21,23 @@ namespace agentty::app::detail {
 
 using maya::overload;
 
-Step symbol_update(Model m, msg::SymbolPaletteMsg sm) {
+Step symbol_update(Model m, msg::SymbolMsg sm) {
     return std::visit(overload{
-        [&](OpenSymbolPalette) -> Step {
+        [&](OpenSymbol) -> Step {
             // First call walks the workspace; cached after that. The
             // const-ref view is copied into the picker state so that
             // queries don't keep the global cache pinned (the cache
             // outlives the picker by design).
-            symbol_palette::Open o;
+            symbol::Open o;
             o.entries = list_workspace_symbols();
             m.ui.panel = pn::Symbol{std::move(o)};
             return done(std::move(m));
         },
-        [&](CloseSymbolPalette) -> Step {
+        [&](CloseSymbol) -> Step {
             m.ui.panel.close<pn::Symbol>();
             return done(std::move(m));
         },
-        [&](SymbolPaletteInput& e) -> Step {
+        [&](SymbolInput& e) -> Step {
             auto* o = m.ui.panel.get<pn::Symbol>();
             if (o && static_cast<uint32_t>(e.ch) < 0x80
                   && e.ch >= 0x20) {
@@ -49,7 +49,7 @@ Step symbol_update(Model m, msg::SymbolPaletteMsg sm) {
             }
             return done(std::move(m));
         },
-        [&](SymbolPaletteBackspace) -> Step {
+        [&](SymbolBackspace) -> Step {
             auto* o = m.ui.panel.get<pn::Symbol>();
             if (!o) return done(std::move(m));
             if (o->query.empty()) {
@@ -60,7 +60,7 @@ Step symbol_update(Model m, msg::SymbolPaletteMsg sm) {
             o->index = 0;
             return done(std::move(m));
         },
-        [&](SymbolPaletteMove& e) -> Step {
+        [&](SymbolMove& e) -> Step {
             auto* o = m.ui.panel.get<pn::Symbol>();
             if (!o) return done(std::move(m));
             int sz = static_cast<int>(symbol_filtered(*o).size());
@@ -68,7 +68,7 @@ Step symbol_update(Model m, msg::SymbolPaletteMsg sm) {
             o->index = std::clamp(o->index + e.delta, 0, sz - 1);
             return done(std::move(m));
         },
-        [&](SymbolPaletteSelect) -> Step {
+        [&](SymbolSelect) -> Step {
             auto* o = m.ui.panel.get<pn::Symbol>();
             if (!o) return done(std::move(m));
             const auto& matches = symbol_filtered(*o);

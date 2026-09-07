@@ -1,4 +1,4 @@
-// fused_picker_update + thread_list_update — reducers for the model and
+// models_update + thread_list_update — reducers for the model and
 // thread pickers (and the related async loads, ModelsLoaded / ThreadsLoaded).
 // Both are list-modal pickers that the user opens with a key shortcut, moves
 // through with Up/Down, and confirms with Enter; the underlying data comes
@@ -107,7 +107,7 @@ using maya::Cmd;
     // from, plus the palette / code-block picker whose contents belonged to
     // the departing thread's last reply.
     m.ui.panel.close<pn::ThreadList>();
-    m.ui.panel.close<pn::CommandPalette>();
+    m.ui.panel.close<pn::Palette>();
     m.ui.panel.close<pn::CodeBlocks>(); m.ui.panel.close<pn::CodeBlockResult>();
     // Wipe the whole composer draft — a pasted-but-unsent image (or any
     // chip / queued message) belongs to the thread we're leaving. Leaking
@@ -149,13 +149,13 @@ using maya::Cmd;
 // into a Selection, install it (process-global), persist it, swap the
 // Deps auth to the new provider's resolved credentials, and kick a fresh
 // model fetch so the model list reflects the new backend. No restart.
-Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
+Step providers_update(Model m, msg::ProvidersMsg pm) {
     // The picker's rows are ONE ordered list (presets + ACP agents + saved
     // custom hosts + "Custom host…" sentinel), built once from the current
     // search query. The cursor is an index into THIS list — no offset math,
     // and the same list the view renders (see build_provider_rows).
     const std::string query = [&] {
-        const auto* p = m.ui.panel.get<pn::ProviderPicker>();
+        const auto* p = m.ui.panel.get<pn::Providers>();
         return p ? p->query : std::string{};
     }();
     auto settings = deps().load_settings();
@@ -165,12 +165,12 @@ Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
     const int n = static_cast<int>(rows.size());
 
     return std::visit(overload{
-        [&](OpenProviderPicker) -> Step {
+        [&](OpenProviders) -> Step {
             // Close the model picker if the user cross-hopped here from it
             // (^P in the model picker). Without this the model picker stays
-            // open and wins pick_overlay's priority order (checked first), so
+            // open and wins pick_panel's priority order (checked first), so
             // the hop would render nothing new. Flush any pending effort-tier
-            // change first — the same persist CloseFusedPicker does on Esc,
+            // change first — the same persist CloseModels does on Esc,
             // so a hop doesn't silently drop it.
             if (m.ui.effort_dirty) {
                 persist_settings(m);
@@ -181,7 +181,7 @@ Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
             // behind, or the NEXT regular model pick silently lands in the
             // smart slot instead of switching the model.
             m.ui.smart_assign_slot.reset();
-            m.ui.panel.close<pn::FusedPicker>();
+            m.ui.panel.close<pn::Models>();
             // Open at the row matching the currently-active provider. Fresh
             // rows with an empty query (so every provider is present to match).
             const auto fresh = ui::build_provider_rows(saved_custom_hosts, "");
@@ -197,25 +197,25 @@ Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
                 if (const auto* ag = row.acp();    ag && ag->id == active_label) { idx = i; break; }
                 if (const auto* ch = row.custom_host(); ch && *ch == active_label) { idx = i; break; }
             }
-            m.ui.panel = pn::ProviderPicker{{idx}};
+            m.ui.panel = pn::Providers{{idx}};
             return done(std::move(m));
         },
-        [&](CloseProviderPicker) -> Step {
-            m.ui.panel.close<pn::ProviderPicker>();
+        [&](CloseProviders) -> Step {
+            m.ui.panel.close<pn::Providers>();
             return done(std::move(m));
         },
-        [&](ProviderPickerMove& e) -> Step {
-            auto* p = m.ui.panel.get<pn::ProviderPicker>();
+        [&](ProvidersMove& e) -> Step {
+            auto* p = m.ui.panel.get<pn::Providers>();
             if (!p || n == 0) return done(std::move(m));
             p->confirm_remove.clear();   // navigating disarms a pending delete
             p->index = (p->index + e.delta + n) % n;
             return done(std::move(m));
         },
-        [&](ProviderPickerJump& e) -> Step {
-            auto* p = m.ui.panel.get<pn::ProviderPicker>();
+        [&](ProvidersJump& e) -> Step {
+            auto* p = m.ui.panel.get<pn::Providers>();
             if (!p || n == 0) return done(std::move(m));
             p->confirm_remove.clear();   // navigating disarms a pending delete
-            using W = ProviderPickerJump::Where;
+            using W = ProvidersJump::Where;
             constexpr int kPage = 14;  // matches kViewportH in pickers.cpp
             switch (e.where) {
                 case W::Home:     p->index = 0; break;
@@ -225,8 +225,8 @@ Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
             }
             return done(std::move(m));
         },
-        [&](ProviderPickerFilterInput& e) -> Step {
-            auto* p = m.ui.panel.get<pn::ProviderPicker>();
+        [&](ProvidersFilterInput& e) -> Step {
+            auto* p = m.ui.panel.get<pn::Providers>();
             if (!p) return done(std::move(m));
             p->confirm_remove.clear();   // typing disarms a pending ^D delete
             // Append the typed codepoint (UTF-8) and reset the cursor to the
@@ -253,8 +253,8 @@ Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
             p->index = 0;
             return done(std::move(m));
         },
-        [&](ProviderPickerFilterBackspace) -> Step {
-            auto* p = m.ui.panel.get<pn::ProviderPicker>();
+        [&](ProvidersFilterBackspace) -> Step {
+            auto* p = m.ui.panel.get<pn::Providers>();
             if (!p || p->query.empty()) return done(std::move(m));
             // Pop one UTF-8 codepoint (trim continuation bytes then the lead).
             while (!p->query.empty()
@@ -264,8 +264,8 @@ Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
             p->index = 0;
             return done(std::move(m));
         },
-        [&](ProviderPickerDelete) -> Step {
-            auto* p = m.ui.panel.get<pn::ProviderPicker>();
+        [&](ProvidersDelete) -> Step {
+            auto* p = m.ui.panel.get<pn::Providers>();
             if (!p || p->index < 0 || p->index >= n)
                 return done(std::move(m));
             const ui::ProviderRow& row =
@@ -335,19 +335,19 @@ Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
                                       : "signed out of ") + removed);
             return {std::move(m), std::move(toast)};
         },
-        [&](ProviderPickerSelect) -> Step {
+        [&](ProvidersSelect) -> Step {
             // Capture the cursor before closing: assigning Closed destroys the
             // OpenAt alternative, so keeping a pointer into it would dangle.
-            const auto* p = m.ui.panel.get<pn::ProviderPicker>();
+            const auto* p = m.ui.panel.get<pn::Providers>();
             const int selected = p ? p->index : -1;
-            m.ui.panel.close<pn::ProviderPicker>();
+            m.ui.panel.close<pn::Providers>();
             if (selected < 0 || selected >= n) return done(std::move(m));
             const ui::ProviderRow& chosen = rows[static_cast<std::size_t>(selected)];
 
             // "Custom host…" sentinel: hand off to the free-text endpoint modal.
             if (chosen.is_new_custom_host()) {
                 ui::login::CustomHostInput ch;
-                ch.origin = ui::login::origin::ProviderPicker{};  // Esc = one step back
+                ch.origin = ui::login::origin::Providers{};  // Esc = one step back
                 m.ui.login = std::move(ch);
                 return done(std::move(m));
             }
@@ -394,7 +394,7 @@ Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
             // the switch. Esc from the account list steps back to this picker.
             if (provider::credentials::add_method(preset.id)
                     != provider::credentials::AddMethod::None) {
-                m.ui.panel.close<pn::ProviderPicker>();
+                m.ui.panel.close<pn::Providers>();
                 return agentty::app::update(
                     std::move(m), Msg{OpenAccounts{std::string{preset.id}}});
             }
@@ -420,7 +420,7 @@ Step provider_picker_update(Model m, msg::ProviderPickerMsg pm) {
                     .cursor         = 0,
                     .provider       = spec,
                     .provider_label = std::string{preset.label},
-                    .origin         = ui::login::origin::ProviderPicker{},
+                    .origin         = ui::login::origin::Providers{},
                 };
                 return done(std::move(m));
             }
@@ -606,7 +606,7 @@ void refresh_fused_sources(Model& m) {
             // clutters the browse view (build_fused_rows hides offers while
             // the query is empty), but typing "mistral" with no Mistral
             // account surfaces one "Mistral — sign in" row instead of a DEAD
-            // END. Enter routes into its auth flow (origin::FusedPicker) and
+            // END. Enter routes into its auth flow (origin::Models) and
             // returns here with the catalog loading — search is the single
             // verb: find model → maybe sign in → pick.
             m.d.fused_offers.push_back(SigninOffer{src.id, src.label});
@@ -684,7 +684,7 @@ std::vector<FusedRow> fused_rows_for_model(const Model& m) {
     // Smart Mode slot-assign pins a model that will be dispatched to the
     // ACTIVE provider, so only its models may appear. See the Select arm.
     if (m.ui.smart_assign_slot) in.only_provider = active_provider_id();
-    if (auto* c = m.ui.panel.get<pn::FusedPicker>()) {
+    if (auto* c = m.ui.panel.get<pn::Models>()) {
         in.query = c->query;
         // ^/ scope: restrict the list to one provider's models. Smart-assign
         // scoping (above) wins when both are set — the slot constraint is
@@ -716,7 +716,7 @@ void rebuild_fused_rows(Model& m, bool sync_sources) {
     // strings + ModelInfo) ran per keystroke; two strings carry the same
     // information.
     std::string prev_provider, prev_model;
-    if (auto* c = m.ui.panel.get<pn::FusedPicker>();
+    if (auto* c = m.ui.panel.get<pn::Models>();
         c && c->index >= 0
         && c->index < static_cast<int>(m.d.fused_rows.size())) {
         const auto& r = m.d.fused_rows[static_cast<std::size_t>(c->index)];
@@ -785,7 +785,7 @@ void rebuild_fused_rows(Model& m, bool sync_sources) {
     // the old index may now be a DIFFERENT model — a subsequent ^E/^F/effort
     // edit would hit the wrong one. Re-find the snapshotted (provider, model)
     // after the rebuild; fall back to a clamped index.
-    if (auto* c = m.ui.panel.get<pn::FusedPicker>()) {
+    if (auto* c = m.ui.panel.get<pn::Models>()) {
         const int n = static_cast<int>(m.d.fused_rows.size());
         if (n == 0) { c->index = 0; return; }
         if (!prev_model.empty()) {
@@ -857,7 +857,7 @@ Step switch_to_model_ref(Model m, const ModelRef& ref, bool record = true) {
 
 // Route to the login flow for `provider_id`, popping to `origin` on Esc.
 // Used by a fused sign-in offer (un-authed provider row). Mirrors the entry
-// points ProviderPickerSelect uses for each auth style.
+// points ProvidersSelect uses for each auth style.
 Step open_login_for(Model m, const std::string& provider_id,
                     const std::string& label, ui::login::Origin origin) {
     const provider::ProviderPreset* p = provider::preset_for(provider_id);
@@ -882,13 +882,13 @@ Step open_login_for(Model m, const std::string& provider_id,
 
 } // namespace
 
-Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
+Step models_update(Model m, msg::ModelsMsg pm) {
     using namespace agentty::msg;
     auto done = [](Model mm) -> Step { return {std::move(mm), maya::Cmd<Msg>::none()}; };
 
     // Clamp the cursor to the current row count after any list change.
     auto clamp_cursor = [](Model& mm) {
-        if (auto* c = mm.ui.panel.get<pn::FusedPicker>()) {
+        if (auto* c = mm.ui.panel.get<pn::Models>()) {
             const int n = static_cast<int>(mm.d.fused_rows.size());
             if (n == 0) { c->index = 0; return; }
             if (c->index < 0)  c->index = 0;
@@ -897,9 +897,9 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
     };
 
     return std::visit(overload{
-        [&](OpenFusedPicker) -> Step {
+        [&](OpenModels) -> Step {
             hydrate_recents(m);
-            m.ui.panel = pn::FusedPicker{{0, ""}};
+            m.ui.panel = pn::Models{{0, ""}};
             // ONE expensive pass: enumerate providers, read settings, seed
             // every authed provider's catalog from its bundled list so the
             // picker opens instantly full.
@@ -928,11 +928,11 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                                                  Msg{FusedRefreshOthers{}}));
             return {std::move(m), maya::Cmd<Msg>::batch(std::move(boot))};
         },
-        [&](FusedPickerRefresh) -> Step {
+        [&](ModelsRefresh) -> Step {
             // ^L — force a full live refresh: reset every catalog's freshness so
             // the active + deferred waves all refetch, regardless of TTL. The
             // manual escape hatch when the user wants the very latest now.
-            if (!m.ui.panel.get<pn::FusedPicker>()) return done(std::move(m));
+            if (!m.ui.panel.get<pn::Models>()) return done(std::move(m));
             for (auto& c : m.d.provider_catalogs) c.loaded_at_ms = 0;
             const std::string apid = active_provider_id();
             std::vector<maya::Cmd<Msg>> boot;
@@ -954,7 +954,7 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             // picker rapidly doesn't re-hammer every provider — but a catalog
             // that's been Ready a while IS refetched, so the list stays current
             // instead of freezing after its first load. No-op if closed.
-            if (!m.ui.panel.get<pn::FusedPicker>()) return done(std::move(m));
+            if (!m.ui.panel.get<pn::Models>()) return done(std::move(m));
             const std::string active_pid = active_provider_id();
             const std::int64_t t = now_ms();
             std::vector<maya::Cmd<Msg>> fetches;
@@ -972,8 +972,8 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             if (fetches.empty()) return done(std::move(m));
             return {std::move(m), maya::Cmd<Msg>::batch(std::move(fetches))};
         },
-        [&](CloseFusedPicker) -> Step {
-            m.ui.panel.close<pn::FusedPicker>();
+        [&](CloseModels) -> Step {
+            m.ui.panel.close<pn::Models>();
             m.d.fused_rows.clear();       // release the cache while closed
             if (m.ui.effort_dirty) { persist_settings(m); m.ui.effort_dirty = false; }
             // Slot-assign mode: Esc is BACK, not exit. Pop one level up the
@@ -996,21 +996,21 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             }
             return done(std::move(m));
         },
-        [&](FusedPickerMove e) -> Step {
-            if (auto* c = m.ui.panel.get<pn::FusedPicker>()) {
+        [&](ModelsMove e) -> Step {
+            if (auto* c = m.ui.panel.get<pn::Models>()) {
                 c->index += e.delta;
                 clamp_cursor(m);
             }
             return done(std::move(m));
         },
-        [&](FusedPickerJump e) -> Step {
-            if (auto* c = m.ui.panel.get<pn::FusedPicker>()) {
+        [&](ModelsJump e) -> Step {
+            if (auto* c = m.ui.panel.get<pn::Models>()) {
                 const int n = static_cast<int>(m.d.fused_rows.size());
                 // Page by a full viewport so PageUp/Down lands a screen away
                 // (matches the other pickers' kPage), not a fixed 10 that
                 // under-shoots the ~14-row viewport.
                 constexpr int page = 14;  // matches kViewportH in pickers.cpp
-                using W = FusedPickerJump::Where;
+                using W = ModelsJump::Where;
                 switch (e.where) {
                     case W::Home:     c->index = 0; break;
                     case W::End:      c->index = n - 1; break;
@@ -1021,8 +1021,8 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             }
             return done(std::move(m));
         },
-        [&](FusedPickerFilterInput e) -> Step {
-            if (auto* c = m.ui.panel.get<pn::FusedPicker>()) {
+        [&](ModelsFilterInput e) -> Step {
+            if (auto* c = m.ui.panel.get<pn::Models>()) {
                 // Every printable — digits included — types into the query.
                 // ASCII only — model/provider ids are ASCII in practice.
                 if (e.ch >= 0x20 && e.ch < 0x7f) {
@@ -1036,8 +1036,8 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             }
             return done(std::move(m));
         },
-        [&](FusedPickerFilterBackspace) -> Step {
-            if (auto* c = m.ui.panel.get<pn::FusedPicker>(); c && !c->query.empty()) {
+        [&](ModelsFilterBackspace) -> Step {
+            if (auto* c = m.ui.panel.get<pn::Models>(); c && !c->query.empty()) {
                 c->query.pop_back();
                 c->index = 0;
                 rebuild_fused_rows(m, /*sync_sources=*/false);   // re-rank only
@@ -1066,14 +1066,14 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             // rebuild it (cheap, once per resolving provider) if it's open. A
             // catalog arrival didn't change AUTH, so skip the source re-sync
             // (prune + per-provider auth stat) — just re-rank + rebuild keys.
-            if (m.ui.panel.is<pn::FusedPicker>()) {
+            if (m.ui.panel.is<pn::Models>()) {
                 rebuild_fused_rows(m, /*sync_sources=*/false);
                 clamp_cursor(m);
             }
             return done(std::move(m));
         },
-        [&](FusedPickerToggleFavorite) -> Step {
-            auto* c = m.ui.panel.get<pn::FusedPicker>();
+        [&](ModelsToggleFavorite) -> Step {
+            auto* c = m.ui.panel.get<pn::Models>();
             if (!c || c->index < 0
                 || c->index >= static_cast<int>(m.d.fused_rows.size()))
                 return done(std::move(m));
@@ -1093,14 +1093,14 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 if (r.model.id == mid) r.model.favorite = now_fav;
             return done(std::move(m));
         },
-        [&](FusedPickerCycleEffort e) -> Step {
+        [&](ModelsCycleEffort e) -> Step {
             // ←/→ walks the reasoning-effort ladder of the HIGHLIGHTED model
             // (off → low → medium → high … within its caps), mutating the
             // GLOBAL m.d.effort LIVE — exactly like the classic model picker's
-            // FusedPickerCycleEffort. Both surfaces share m.d.effort, so a
+            // ModelsCycleEffort. Both surfaces share m.d.effort, so a
             // change here shows everywhere at once (no staging split, no
             // "off in one, on in the other"). Persisted lazily via effort_dirty.
-            auto* c = m.ui.panel.get<pn::FusedPicker>();
+            auto* c = m.ui.panel.get<pn::Models>();
             if (!c || c->index < 0
                 || c->index >= static_cast<int>(m.d.fused_rows.size()))
                 return done(std::move(m));
@@ -1116,11 +1116,11 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             m.ui.effort_dirty = true;
             return done(std::move(m));
         },
-        [&](FusedPickerToggleReasoning) -> Step {
+        [&](ModelsToggleReasoning) -> Step {
             // ^E flips the highlighted model's per-model reasoning OVERRIDE
             // through its tri-state (auto → ON → OFF → auto). Mirrors the
             // model picker so tuning survives the move to the fused surface.
-            auto* c = m.ui.panel.get<pn::FusedPicker>();
+            auto* c = m.ui.panel.get<pn::Models>();
             if (!c || c->index < 0
                 || c->index >= static_cast<int>(m.d.fused_rows.size()))
                 return done(std::move(m));
@@ -1165,7 +1165,7 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             // active, and capability facts are keyed "provider/model".
             // Using the ambient scope here (as this arm used to) resolved
             // a non-active row's effort ladder against the CURRENT
-            // provider's facts — the sibling FusedPickerCycleEffort arm
+            // provider's facts — the sibling ModelsCycleEffort arm
             // already passes row.provider_id for exactly this reason.
             m.d.effort = clamp_effort(m.d.effort,
                                       resolved_caps(id, row.provider_id));
@@ -1204,13 +1204,13 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             if (target.empty()) return done(std::move(m));
             return switch_to_model_ref(std::move(m), target, /*record=*/false);
         },
-        [&](FusedPickerSelect) -> Step {
-            auto* c = m.ui.panel.get<pn::FusedPicker>();
+        [&](ModelsSelect) -> Step {
+            auto* c = m.ui.panel.get<pn::Models>();
             if (!c || c->index < 0
                 || c->index >= static_cast<int>(m.d.fused_rows.size()))
                 return done(std::move(m));
             const FusedRow row = m.d.fused_rows[static_cast<std::size_t>(c->index)];
-            m.ui.panel.close<pn::FusedPicker>();
+            m.ui.panel.close<pn::Models>();
             m.d.fused_rows.clear();
             // ←/→ already mutated m.d.effort live;
             // the switch below persists settings, so no separate apply needed.
@@ -1220,7 +1220,7 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // Route to login for that provider, returning here after.
                 return open_login_for(std::move(m), row.provider_id,
                                       row.label,
-                                      ui::login::origin::FusedPicker{});
+                                      ui::login::origin::Models{});
             }
 
             // Smart Mode slot-assign mode: write the chosen model into the
@@ -1262,7 +1262,7 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                 // `task` keep using the old one is exactly what the open-coded
                 // persist_settings here used to do.
                 apply_smart(m, std::move(cfg));
-                m.ui.panel.close<pn::FusedPicker>();
+                m.ui.panel.close<pn::Models>();
                 m.d.fused_rows.clear();
                 // Pop back to the parent Smart Mode picker, cursor on the
                 // slot we just set — not out to the thread. You came from
@@ -1386,7 +1386,7 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             // into the active catalog and re-ranks, so a newly-listed model
             // (e.g. one the live /v1/models fetch just added) appears without
             // reopening the picker. Clamp the cursor to the new row count.
-            if (auto* c = m.ui.panel.get<pn::FusedPicker>()) {
+            if (auto* c = m.ui.panel.get<pn::Models>()) {
                 // The active provider's live catalog just completed — mark its
                 // catalog fresh so the TTL refresh doesn't immediately refetch
                 // it, then rebuild the open rows.
@@ -1401,7 +1401,7 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
             }
             return done(std::move(m));
         },
-        [&](FusedPickerToggleShowReasoning&) -> Step {
+        [&](ModelsToggleShowReasoning&) -> Step {
             // Flip whether the model's reasoning/thinking is SHOWN. Global (all
             // providers): renders the transcript reasoning block AND makes the
             // Anthropic transport request VISIBLE thinking. Persisted so it
@@ -1428,11 +1428,11 @@ Step fused_picker_update(Model m, msg::FusedPickerMsg pm) {
                     : "reasoning: shown (live thinking + \xe2\x9c\xa6 summary)");
             return {std::move(m), std::move(toast)};
         },
-        [&](FusedPickerScopeProvider&) -> Step {
+        [&](ModelsScopeProvider&) -> Step {
             // ^/ — restrict the list to ONLY the highlighted row's provider,
             // or clear the scope if it is already active. The selected row's
             // provider is "the current selection's provider" the user means.
-            auto* c = m.ui.panel.get<pn::FusedPicker>();
+            auto* c = m.ui.panel.get<pn::Models>();
             if (!c) return done(std::move(m));
             if (!c->provider_scope.empty()) {
                 // Already scoped — toggle back to all providers.

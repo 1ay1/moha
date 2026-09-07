@@ -47,13 +47,13 @@ struct Open {
 
 } // namespace mention
 
-using MentionPaletteState = std::variant<mention::Closed, mention::Open>;
+using MentionState = std::variant<mention::Closed, mention::Open>;
 
-[[nodiscard]] inline bool mention_is_open(const MentionPaletteState& s) noexcept {
+[[nodiscard]] inline bool mention_is_open(const MentionState& s) noexcept {
     return std::holds_alternative<mention::Open>(s);
 }
-[[nodiscard]] inline       mention::Open* mention_opened(MentionPaletteState& s)       noexcept { return std::get_if<mention::Open>(&s); }
-[[nodiscard]] inline const mention::Open* mention_opened(const MentionPaletteState& s) noexcept { return std::get_if<mention::Open>(&s); }
+[[nodiscard]] inline       mention::Open* mention_opened(MentionState& s)       noexcept { return std::get_if<mention::Open>(&s); }
+[[nodiscard]] inline const mention::Open* mention_opened(const MentionState& s) noexcept { return std::get_if<mention::Open>(&s); }
 
 // Memoised filter accessor. Refreshes the open palette's cache iff
 // `query` changed since the last call; otherwise returns the stored

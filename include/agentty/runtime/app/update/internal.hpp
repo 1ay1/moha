@@ -141,7 +141,7 @@ std::string    model_for_provider(std::string_view spec);
 commit_provider_switch(Model m, std::string_view spec,
                        auth::AuthHeader new_auth, std::string_view label,
                        std::string_view desired_model = {},
-                       bool open_picker = true);
+                       bool open_panel = true);
 
 // ── Frozen-scrollback prefix helpers (frozen.cpp) ────────────────────────
 //
@@ -327,20 +327,20 @@ bool with_live_tool(Model& m, const ToolCallId& id, F&& f) {
 Step composer_update      (Model m, msg::ComposerMsg       cm);
 Step stream_update        (Model m, msg::StreamMsg         sm);
 Step tool_update          (Model m, msg::ToolMsg           tm);
-Step provider_picker_update(Model m, msg::ProviderPickerMsg pm);
-Step fused_picker_update  (Model m, msg::FusedPickerMsg     pm);
+Step providers_update(Model m, msg::ProvidersMsg pm);
+Step models_update  (Model m, msg::ModelsMsg     pm);
 // Shared fused-row builder (SSOT for reducer + view): enumerates authed
 // providers into catalogs (+ un-authed sign-in offers), applies the current
 // fused_picker query, and returns the ordered/sectioned FusedRow list. The
 // view renders it and derives the visual cursor; the reducer selects from it.
 [[nodiscard]] std::vector<FusedRow> fused_rows_for_model(const Model& m);
 Step thread_list_update   (Model m, msg::ThreadListMsg     tm);
-Step palette_update       (Model m, msg::CommandPaletteMsg pm);
-Step mention_update       (Model m, msg::MentionPaletteMsg mm);
-Step symbol_update        (Model m, msg::SymbolPaletteMsg  sm);
+Step palette_update       (Model m, msg::PaletteMsg pm);
+Step mention_update       (Model m, msg::MentionMsg mm);
+Step symbol_update        (Model m, msg::SymbolMsg  sm);
 Step codeblock_update     (Model m, msg::CodeBlockMsg      cm);
 Step checkpoint_update    (Model m, msg::CheckpointMsg     cm);
-Step rag_settings_update  (Model m, msg::RagSettingsMsg    rm);
+Step rag_settings_update  (Model m, msg::RagMsg    rm);
 Step settings_list_update (Model m, msg::SettingsListMsg   sm);
 Step fork_update          (Model m, msg::ForkMsg           fm);
 Step todo_update          (Model m, msg::TodoMsg           tm);

@@ -1,9 +1,9 @@
 #pragma once
-// agentty::ui::pick — picker state machines as sum types.
+// agentty::ui::pick — panel cursor state machines as sum types.
 //
 // Replaces the canonical anti-pattern this codebase used to have:
 //
-//     struct FusedPickerState { bool open = false; int index = 0; };
+//     struct ModelsState { bool open = false; int index = 0; };
 //
 // where `index` is meaningless when `open == false`. A reader had to
 // remember which fields were valid in which combination; a writer had to

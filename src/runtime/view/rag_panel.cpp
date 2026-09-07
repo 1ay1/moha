@@ -28,7 +28,7 @@ using namespace maya::dsl;
 namespace rs = agentty::rag_settings;
 
 Element rag_settings_picker(const Model& m) {
-    const auto* o = m.ui.panel.get<pn::RagSettings>();
+    const auto* o = m.ui.panel.get<pn::Rag>();
     if (!o) return nothing();
 
     // ONE pane, always the form. Mode and embedder are two rows of the same
@@ -39,8 +39,8 @@ Element rag_settings_picker(const Model& m) {
     // scrolls — same viewport arithmetic every other picker uses.
     return maya::Panel{form_config(o->embed.form, info,
                                   &m.ui.rag_settings_scroll,
-                                  picker_detail::picker_viewport_h(),
-                                  picker_detail::picker_terminal_cols())}.build();
+                                  panel_detail::panel_viewport_h(),
+                                  panel_detail::panel_terminal_cols())}.build();
 }
 
 } // namespace agentty::ui

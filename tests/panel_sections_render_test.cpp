@@ -1,4 +1,4 @@
-// picker_sections_render_test — the fused model picker's SECTION HEADERS,
+// panel_sections_render_test — the fused model picker's SECTION HEADERS,
 // asserted against real rendered cells.
 //
 // Browse is a two-section layout ("recent" / "all providers"); there is no
@@ -47,7 +47,7 @@ ProviderCatalog cat(std::string id, std::string label,
 // Render ONLY the picker element (not the whole app layout) and flatten the
 // canvas to text. Non-ASCII folds to '?' — the section titles are ASCII, and
 // the badge/■ chrome around them is not what we're asserting on.
-std::string render_picker(const Model& m, int width = 100, int height = 200) {
+std::string render_panel(const Model& m, int width = 100, int height = 200) {
     auto root = ui::fused_picker(m);
     maya::StylePool pool;
     maya::Canvas canvas(width, height, &pool);
@@ -84,7 +84,7 @@ Model picker_model(const std::vector<ProviderCatalog>& cats,
     in.catalogs = &cats;
     in.active   = active;
     m.d.fused_rows = ui::build_fused_rows(in);
-    m.ui.panel = pn::FusedPicker{};
+    m.ui.panel = pn::Models{};
     return m;
 }
 
@@ -101,7 +101,7 @@ TEST_CASE("picker: browse lists every provider under one 'all providers' header"
         cat("openai", "OpenAI", {mk("gpt-5", "GPT-5", "openai")}),
     };
     const Model m = picker_model(cats, ModelRef{"anthropic", "claude-opus-4-5"});
-    const std::string screen = render_picker(m);
+    const std::string screen = render_panel(m);
 
     INFO(screen);
     // One flat section — no per-provider split.
@@ -122,7 +122,7 @@ TEST_CASE("picker: with NO active provider, the header is still 'all providers'"
         cat("openai", "OpenAI", {mk("gpt-5", "GPT-5", "openai")}),
     };
     const Model m = picker_model(cats);           // active left EMPTY
-    const std::string screen = render_picker(m);
+    const std::string screen = render_panel(m);
 
     INFO(screen);
     CHECK_FALSE(has(screen, "from this provider"));
@@ -152,9 +152,9 @@ TEST_CASE("picker: the active model leads, and its row is on screen") {
     in.recents  = &recents;
     in.active   = ModelRef{"anthropic", "claude-opus-4-5"};
     m.d.fused_rows = ui::build_fused_rows(in);
-    m.ui.panel = pn::FusedPicker{};
+    m.ui.panel = pn::Models{};
 
-    const std::string screen = render_picker(m);
+    const std::string screen = render_panel(m);
     INFO(screen);
     CHECK(has(screen, "RECENT"));   // ┌─ RECENT divider (^K-style, uppercased)
     // Haiku sorts before Opus alphabetically; the active Opus must still be

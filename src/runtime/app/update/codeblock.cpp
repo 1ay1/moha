@@ -65,7 +65,7 @@ namespace pn = agentty::ui::panel;
 namespace agentty::app::detail {
 
 using maya::overload;
-namespace cbp = agentty::code_block_picker;
+namespace cbp = agentty::code_blocks;
 
 namespace {
 
@@ -545,7 +545,7 @@ namespace runner_ui {
 
 Step codeblock_update(Model m, msg::CodeBlockMsg cm) {
     return std::visit(overload{
-        [&](OpenCodeBlockPicker) -> Step {
+        [&](OpenCodeBlocks) -> Step {
             // Mid-stream is allowed: the network stream runs on a background
             // worker (StreamDelta posts back to the UI thread), so suspending
             // the TUI to run a block does NOT pause the reply — deltas keep
@@ -575,11 +575,11 @@ Step codeblock_update(Model m, msg::CodeBlockMsg cm) {
             m.ui.code_blocks_scroll.y = 0;
             return done(std::move(m));
         },
-        [&](CloseCodeBlockPicker) -> Step {
+        [&](CloseCodeBlocks) -> Step {
             m.ui.panel.close<pn::CodeBlocks>(); m.ui.panel.close<pn::CodeBlockResult>();
             return done(std::move(m));
         },
-        [&](CodeBlockPickerMove& e) -> Step {
+        [&](CodeBlocksMove& e) -> Step {
             if (auto* o = m.ui.panel.get<pn::CodeBlocks>()) {
                 int sz = static_cast<int>(o->blocks.size());
                 if (sz <= 0) return done(std::move(m));
@@ -596,7 +596,7 @@ Step codeblock_update(Model m, msg::CodeBlockMsg cm) {
             }
             return done(std::move(m));
         },
-        [&](CodeBlockPickerSelect& e) -> Step {
+        [&](CodeBlocksSelect& e) -> Step {
             auto* o = m.ui.panel.get<pn::CodeBlocks>();
             if (!o) return done(std::move(m));
             const int idx = e.index.value_or(o->index);
@@ -618,7 +618,7 @@ Step codeblock_update(Model m, msg::CodeBlockMsg cm) {
             m.ui.panel.close<pn::CodeBlocks>(); m.ui.panel.close<pn::CodeBlockResult>();
             return {std::move(m), run_block_cmd(std::move(block.body), shell)};
         },
-        [&](CodeBlockPickerEdit) -> Step {
+        [&](CodeBlocksEdit) -> Step {
             auto* o = m.ui.panel.get<pn::CodeBlocks>();
             if (!o) return done(std::move(m));
             const int idx = o->index;
@@ -634,7 +634,7 @@ Step codeblock_update(Model m, msg::CodeBlockMsg cm) {
             m.ui.composer.cursor += static_cast<int>(body.size());
             return done(std::move(m));
         },
-        [&](CodeBlockPickerCopy) -> Step {
+        [&](CodeBlocksCopy) -> Step {
             auto* o = m.ui.panel.get<pn::CodeBlocks>();
             if (!o) return done(std::move(m));
             const int idx = o->index;

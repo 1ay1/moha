@@ -1,5 +1,5 @@
 #pragma once
-// agentty::ui::panel — THE routing function for overlay priority.
+// agentty::ui::panel — THE routing function for panel priority.
 //
 // The overlay state itself lives in ONE variant slot (m.ui.panel — see
 // overlay_state.hpp): opening is assignment, exclusivity is structural.
@@ -26,7 +26,7 @@ namespace agentty::ui::panel {
 // The active (topmost) overlay, in canonical priority order:
 //   1. login       — owns the whole keyboard until auth completes.
 //   2. permission  — a blocked tool's y/n must be answerable over anything.
-//   3. the slot    — whatever exclusive overlay is open (at most one, by
+//   3. the slot    — whatever exclusive panel is open (at most one, by
 //                    construction).
 //   4. todo        — ambient; lowest priority, most keys fall through.
 [[nodiscard]] inline Kind top(const Model& m) noexcept {

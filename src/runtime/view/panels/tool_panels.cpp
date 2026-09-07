@@ -16,7 +16,7 @@ namespace agentty::ui {
 // index + language tag + first-line preview + line count. The digit
 // shortcut in the key handler maps 1-based onto these rows, so the
 // leading number is the affordance that teaches the fast path.
-Element code_block_picker(const Model& m) {
+Element code_blocks(const Model& m) {
     auto* o = m.ui.panel.get<pn::CodeBlocks>();
     if (!o) return nothing();
 
@@ -24,7 +24,7 @@ Element code_block_picker(const Model& m) {
     cfg.title      = " Run Code Block ";
     cfg.accent     = success;
     cfg.min_width  = kPanelWide;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.code_blocks_scroll;
     cfg.selected   = o->blocks.empty() ? -1 : o->index;
 
@@ -35,7 +35,7 @@ Element code_block_picker(const Model& m) {
     // output viewer's badge alignment.
     int badge_w = 0;
     for (const auto& b : o->blocks) {
-        const bool runnable = code_block_picker::is_shell_language(b.language);
+        const bool runnable = code_blocks::is_shell_language(b.language);
         const std::string lang = b.language.empty() ? std::string{"sh"} : b.language;
         const std::string bd = runnable ? std::string{" \xe2\x96\xb6 "}
                                         : " " + lang + " ";
@@ -53,7 +53,7 @@ Element code_block_picker(const Model& m) {
         auto eol = body.find('\n');
         std::string preview{body.substr(0, eol == std::string_view::npos
                                              ? body.size() : eol)};
-        const bool runnable = code_block_picker::is_shell_language(b.language);
+        const bool runnable = code_blocks::is_shell_language(b.language);
         const std::string lang = b.language.empty() ? std::string{"sh"}
                                                     : b.language;
 
@@ -112,7 +112,7 @@ Element code_block_result_card(const Model& m) {
     cfg.title      = " Run Result ";
     cfg.accent     = ok_exit ? success : danger;
     cfg.min_width  = kPanelWide;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.code_blocks_scroll;
     cfg.selected   = -1;   // read-only — no cursor row
 
@@ -257,7 +257,7 @@ Element code_block_result_card(const Model& m) {
 // would rewrite committed rows (HardReset corruption class). The overlay
 // paints strictly over the live viewport, same as every other picker.
 Element tool_output_viewer(const Model& m) {
-    const auto* o = m.ui.panel.get<pn::ToolViewer>();
+    const auto* o = m.ui.panel.get<pn::ToolOutput>();
     if (!o) return nothing();
 
     const int sz = static_cast<int>(o->entries.size());
@@ -271,7 +271,7 @@ Element tool_output_viewer(const Model& m) {
     // output is arbitrary-width content, so "how narrow may this get" is
     // answered by the terminal, not by the shape of a label column.
     cfg.min_width  = 1;
-    cfg.viewport_h = picker_viewport_h();
+    cfg.viewport_h = panel_viewport_h();
     cfg.scroll     = &m.ui.tool_viewer_scroll;
 
     // "n/N" position — shown in both stages so the user always knows
@@ -287,7 +287,7 @@ Element tool_output_viewer(const Model& m) {
         // LIST chrome is border+padding (4) plus blank+hint footer (2).
         // At truly tiny heights, drop the optional footer and devote every
         // remaining row to selectable outputs.
-        const int list_term_rows = picker_terminal_rows();
+        const int list_term_rows = panel_terminal_rows();
         const bool compact_list = list_term_rows < 7;
         cfg.viewport_h = std::clamp(
             list_term_rows - (compact_list ? 4 : 6), 1, kViewportH);
@@ -365,7 +365,7 @@ Element tool_output_viewer(const Model& m) {
     // identity and every remaining row goes to output. This keeps the modal
     // inside all viable terminal heights (5+ rows) instead of inheriting the
     // shared picker's four-row viewport floor.
-    const int body_term_rows = picker_terminal_rows();
+    const int body_term_rows = panel_terminal_rows();
     const bool compact_body = body_term_rows < 10;
     cfg.viewport_h = std::clamp(
         body_term_rows - (compact_body ? 4 : 9), 1, kViewportH);
@@ -539,7 +539,7 @@ Element tool_output_viewer(const Model& m) {
 
     // Window the cached rows to the viewport. No scroll container — the
     // picker paints the slice inline; scroll bounds are maintained here
-    // so the reducer's clamp (ToolViewerMove) stays correct.
+    // so the reducer's clamp (ToolOutputMove) stays correct.
     const int total_rows = static_cast<int>(cache.rows.size());
     const int vh = std::max(1, cfg.viewport_h);
     auto& sc = m.ui.tool_viewer_scroll;

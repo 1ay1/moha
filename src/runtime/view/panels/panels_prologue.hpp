@@ -5,7 +5,7 @@
 // pickers.cpp used to be one TU with a single big include block feeding every
 // picker. When the views were split into sibling files they all still need
 // that same set of headers (maya widgets, the provider/auth surface, workspace
-// lookups) plus the `namespace ov` alias and the shared picker_detail helpers
+// lookups) plus the `namespace ov` alias and the shared panel_detail helpers
 // in scope. Rather than copy 40 include lines into four files (and risk them
 // drifting), each split file includes THIS once. Over-including is harmless;
 // the win is one place to edit when the dependency set changes.
@@ -60,21 +60,21 @@ using namespace maya::dsl;
 // The shared picker helpers live in pickers_common.hpp; pull the ones the
 // split files use into scope so call sites read exactly as they did in the
 // original single-TU pickers.cpp.
-using picker_detail::split_name_dir;
-using picker_detail::parent_segment;
-using picker_detail::kViewportH;
-using picker_detail::kPanelNarrow;
-using picker_detail::kPanelStandard;
-using picker_detail::kPanelWide;
-using picker_detail::kPickerChromeRows;
-using picker_detail::picker_terminal_rows;
-using picker_detail::picker_viewport_h;
-using picker_detail::picker_terminal_cols;
-using picker_detail::picker_badge_max_cols;
-using picker_detail::tier_hue;
-using picker_detail::active_provider_id;
-using picker_detail::reasoning_effort_footer;
-using picker_detail::section_header;
-using picker_detail::SectionHeader;
+using panel_detail::split_name_dir;
+using panel_detail::parent_segment;
+using panel_detail::kViewportH;
+using panel_detail::kPanelNarrow;
+using panel_detail::kPanelStandard;
+using panel_detail::kPanelWide;
+using panel_detail::kPickerChromeRows;
+using panel_detail::panel_terminal_rows;
+using panel_detail::panel_viewport_h;
+using panel_detail::panel_terminal_cols;
+using panel_detail::panel_badge_max_cols;
+using panel_detail::tier_hue;
+using panel_detail::active_provider_id;
+using panel_detail::reasoning_effort_footer;
+using panel_detail::section_header;
+using panel_detail::SectionHeader;
 
 }  // namespace agentty::ui

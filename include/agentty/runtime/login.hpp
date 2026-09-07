@@ -46,16 +46,16 @@ struct Closed {};
 // Esc provably returns there.
 namespace origin {
     struct Nowhere {};                            // no parent — close the modal.
-    struct ProviderPicker {};                     // reopen the provider picker.
-    struct FusedPicker {};                         // reopen the fused model picker.
+    struct Providers {};                     // reopen the provider picker.
+    struct Models {};                         // reopen the fused model picker.
     struct Accounts { std::string provider; };     // reopen THIS provider's accounts.
     struct Method   { std::string provider; };     // the sign-in method menu (Picking).
     struct HostInput { std::string spec; };        // restore the typed custom host.
 }
 // A self-contained "where I came from". Every enterable sub-state stores one;
 // LoginBack std::visits it — no side-channel params, no active-provider guess.
-using Origin = std::variant<origin::Nowhere, origin::ProviderPicker,
-                            origin::FusedPicker, origin::Accounts,
+using Origin = std::variant<origin::Nowhere, origin::Providers,
+                            origin::Models, origin::Accounts,
                             origin::Method, origin::HostInput>;
 
 // True when Esc should read "back" (has a parent) rather than "cancel".

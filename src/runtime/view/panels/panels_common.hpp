@@ -1,5 +1,5 @@
 #pragma once
-// agentty::ui::picker_detail — shared building blocks for the overlay pickers.
+// agentty::ui::panel_detail — shared building blocks for the overlay pickers.
 //
 // pickers.cpp was one 2000-line translation unit holding every picker view
 // AND their shared helpers in an anonymous namespace. Splitting the views
@@ -29,7 +29,7 @@
 #include "agentty/provider/registry.hpp"    // wire_streams_reasoning_text
 #include "agentty/provider/selection.hpp"
 
-namespace agentty::ui::picker_detail {
+namespace agentty::ui::panel_detail {
 
 using namespace maya;
 using namespace maya::dsl;
@@ -112,7 +112,7 @@ inline constexpr int kViewportH = 14;
 // wordmark. Clamping the list so the WHOLE picker fits avoids the overflow.
 inline constexpr int kPickerChromeRows = 7;
 
-[[nodiscard]] inline int picker_terminal_rows() {
+[[nodiscard]] inline int panel_terminal_rows() {
     const auto sz = maya::platform::query_terminal_size(
         maya::platform::stdout_handle());
     // Prefer the real ioctl height. When it's unavailable (no tty: a pipe, a
@@ -132,8 +132,8 @@ inline constexpr int kPickerChromeRows = 7;
     return term_rows;
 }
 
-[[nodiscard]] inline int picker_viewport_h() {
-    const int term_rows = picker_terminal_rows();
+[[nodiscard]] inline int panel_viewport_h() {
+    const int term_rows = panel_terminal_rows();
     // Leave the chrome plus a small breathing margin so the picker's top
     // border sits strictly below the viewport top with the base behind it.
     const int avail = term_rows - kPickerChromeRows - 1;
@@ -142,9 +142,9 @@ inline constexpr int kPickerChromeRows = 7;
     return std::clamp(avail, 4, kViewportH);
 }
 
-// Terminal WIDTH, resolved the same way picker_terminal_rows() resolves
+// Terminal WIDTH, resolved the same way panel_terminal_rows() resolves
 // height: real ioctl first, COLUMNS only when there is no tty.
-[[nodiscard]] inline int picker_terminal_cols() {
+[[nodiscard]] inline int panel_terminal_cols() {
     const auto sz = maya::platform::query_terminal_size(
         maya::platform::stdout_handle());
     int cols = sz.width.value;
@@ -171,8 +171,8 @@ inline constexpr int kPickerChromeRows = 7;
 // the column grow to fit the longest actual label, but never let it eat
 // more than half the picker's horizontal space so the model name column
 // still has usable room on narrow terminals.
-[[nodiscard]] inline int picker_badge_max_cols() {
-    const int cols = picker_terminal_cols();
+[[nodiscard]] inline int panel_badge_max_cols() {
+    const int cols = panel_terminal_cols();
     // Reserve at least ~half the width for the model NAME column. On a very
     // narrow terminal (≤ 40 cols) the badge cap bottoms out at 8 (the old
     // "abbreviate hard" floor); on wider terminals it tracks half the
@@ -309,4 +309,4 @@ reasoning_effort_footer(const Model& m, std::string_view model_id,
     return out;
 }
 
-}  // namespace agentty::ui::picker_detail
+}  // namespace agentty::ui::panel_detail

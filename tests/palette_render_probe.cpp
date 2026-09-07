@@ -30,7 +30,7 @@ static int count_of(const std::string& h, const std::string& n) {
 
 static void palette_checks() {
     Model m;
-    m.ui.panel = pn::CommandPalette{{}};
+    m.ui.panel = pn::Palette{{}};
     m.d.pending_changes.push_back(FileChange{});
     auto rend = [&]{ return maya::render_to_string(ui::command_palette(m), 82); };
     std::string out = rend();
@@ -47,7 +47,7 @@ static void palette_checks() {
     check(has(out, "\xe2\x94\x80\xe2\x94\x80"), "palette: header rule");
     check(!has(out, "\xe2\x94\x8c\xe2\x94\x80 THREAD"), "palette: no bracket header");
     check(!has_mojibake(out), "palette: no mojibake");
-    auto* o = m.ui.panel.get<agentty::ui::panel::CommandPalette>();
+    auto* o = m.ui.panel.get<agentty::ui::panel::Palette>();
     o->query = "rev";
     std::string ansi = maya::render_to_string_ansi(ui::command_palette(m), 82);
     // Locate the Review row and confirm it carries a distinct highlight style.

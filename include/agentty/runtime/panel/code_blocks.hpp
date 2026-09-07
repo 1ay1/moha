@@ -52,7 +52,7 @@ struct CodeBlock {
     int         line_count = 0;
 };
 
-namespace code_block_picker {
+namespace code_blocks {
 
 // Which interpreter should run a given fence language — and, implicitly,
 // whether the block is runnable at all on THIS platform. The set is
@@ -314,21 +314,21 @@ struct Result {
     bool        timed_out = false;
 };
 
-} // namespace code_block_picker
+} // namespace code_blocks
 
-using CodeBlockPickerState =
-    std::variant<code_block_picker::Closed, code_block_picker::Open,
-                 code_block_picker::Result>;
+using CodeBlocksState =
+    std::variant<code_blocks::Closed, code_blocks::Open,
+                 code_blocks::Result>;
 
-[[nodiscard]] inline bool code_block_picker_is_open(const CodeBlockPickerState& s) noexcept {
-    return std::holds_alternative<code_block_picker::Open>(s);
+[[nodiscard]] inline bool code_block_picker_is_open(const CodeBlocksState& s) noexcept {
+    return std::holds_alternative<code_blocks::Open>(s);
 }
-[[nodiscard]] inline bool code_block_result_is_open(const CodeBlockPickerState& s) noexcept {
-    return std::holds_alternative<code_block_picker::Result>(s);
+[[nodiscard]] inline bool code_block_result_is_open(const CodeBlocksState& s) noexcept {
+    return std::holds_alternative<code_blocks::Result>(s);
 }
-[[nodiscard]] inline       code_block_picker::Open* code_block_picker_opened(CodeBlockPickerState& s)       noexcept { return std::get_if<code_block_picker::Open>(&s); }
-[[nodiscard]] inline const code_block_picker::Open* code_block_picker_opened(const CodeBlockPickerState& s) noexcept { return std::get_if<code_block_picker::Open>(&s); }
-[[nodiscard]] inline       code_block_picker::Result* code_block_result(CodeBlockPickerState& s)       noexcept { return std::get_if<code_block_picker::Result>(&s); }
-[[nodiscard]] inline const code_block_picker::Result* code_block_result(const CodeBlockPickerState& s) noexcept { return std::get_if<code_block_picker::Result>(&s); }
+[[nodiscard]] inline       code_blocks::Open* code_block_picker_opened(CodeBlocksState& s)       noexcept { return std::get_if<code_blocks::Open>(&s); }
+[[nodiscard]] inline const code_blocks::Open* code_block_picker_opened(const CodeBlocksState& s) noexcept { return std::get_if<code_blocks::Open>(&s); }
+[[nodiscard]] inline       code_blocks::Result* code_block_result(CodeBlocksState& s)       noexcept { return std::get_if<code_blocks::Result>(&s); }
+[[nodiscard]] inline const code_blocks::Result* code_block_result(const CodeBlocksState& s) noexcept { return std::get_if<code_blocks::Result>(&s); }
 
 } // namespace agentty

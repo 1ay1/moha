@@ -6,7 +6,7 @@
 // row. Own TU, matching rag_settings_view.
 
 #include "agentty/runtime/view/panels.hpp"
-#include "panels/panels_common.hpp"   // kPanel* widths, picker_viewport_h
+#include "panels/panels_common.hpp"   // kPanel* widths, panel_viewport_h
 
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
@@ -22,7 +22,7 @@ namespace agentty::ui {
 
 using namespace maya;
 using namespace maya::dsl;
-namespace fp = agentty::fork_picker;
+namespace fp = agentty::fork_panel;
 
 namespace {
 
@@ -52,7 +52,7 @@ Element fork_picker_view(const Model& m) {
     Panel::Config cfg;
     cfg.title      = " Fork thread ";
     cfg.accent     = info;
-    cfg.min_width  = picker_detail::kPanelStandard;
+    cfg.min_width  = panel_detail::kPanelStandard;
     // Height is CONTENT-sized, not the shared viewport: this is a fixed,
     // four-choice menu with nothing to scroll, so clamping it to a scrollable
     // list's height would leave dead rows under the last choice.

@@ -129,9 +129,9 @@ void arm_reconcile_cooldown(Model& m) {
 // Snapshotting (copying the output bytes) makes the overlay immune to the
 // transcript mutating underneath it — each stored output is already
 // clamped to 256 KiB upstream, so the copies are cheap and bounded.
-[[nodiscard]] std::vector<tool_viewer::Entry> collect_viewer_entries(const Model& m) {
-    std::vector<tool_viewer::Entry> out;
-    std::size_t budget = tool_viewer::kSnapshotBudget;
+[[nodiscard]] std::vector<tool_output::Entry> collect_viewer_entries(const Model& m) {
+    std::vector<tool_output::Entry> out;
+    std::size_t budget = tool_output::kSnapshotBudget;
 
     // Row 0 is the LIVE tool, if one is active right now: this includes
     // argument streaming / permission (Pending or Approved) as well as local
@@ -145,7 +145,7 @@ void arm_reconcile_cooldown(Model& m) {
              tit != mit->tool_calls.rend(); ++tit) {
             const auto* run = std::get_if<ToolUse::Running>(&tit->status);
             if (!run && !tit->is_pending() && !tit->is_approved()) continue;
-            tool_viewer::Entry e;
+            tool_output::Entry e;
             e.is_live  = true;
             e.name     = tit->name.value;
             e.title    = ui::tool_display_name(tit->name.value);
@@ -194,10 +194,10 @@ void arm_reconcile_cooldown(Model& m) {
             while (!body.empty() && (body.back() == '\n' || body.back() == ' '
                                   || body.back() == '\t' || body.back() == '\r'))
                 body.pop_back();
-            if (!body.empty() && out.size() < tool_viewer::kMaxEntries
+            if (!body.empty() && out.size() < tool_output::kMaxEntries
                 && body.size() <= budget) {
                 budget -= body.size();
-                tool_viewer::Entry e;
+                tool_output::Entry e;
                 e.name   = "retrieved_context";
                 e.title  = "Retrieved context";
                 e.output = std::move(body);
@@ -222,11 +222,11 @@ void arm_reconcile_cooldown(Model& m) {
             if (!tc.is_terminal()) continue;
             const auto& body = tc.output();
             if (body.empty()) continue;
-            if (out.size() >= tool_viewer::kMaxEntries) return out;
+            if (out.size() >= tool_output::kMaxEntries) return out;
             if (body.size() > budget) continue;   // skip, keep older smaller ones
             budget -= body.size();
 
-            tool_viewer::Entry e;
+            tool_output::Entry e;
             e.failed = tc.is_failed();
             e.output = body;
             // Raw name drives the category colour badge; display name +
@@ -257,7 +257,7 @@ void arm_reconcile_cooldown(Model& m) {
 // Keep the Ctrl+O snapshot synchronized from both stream.cpp (tool-input
 // deltas/snapshots) and this TU (execution progress/results).
 void resync_live_tool_viewer(Model& m) {
-    auto* o = m.ui.panel.get<pn::ToolViewer>();
+    auto* o = m.ui.panel.get<pn::ToolOutput>();
     if (!o) return;
     // Anchor: remember which entry the user is on by identity, not index —
     // prepending/removing the live row shifts indices under them.
@@ -624,29 +624,29 @@ Step tool_update(Model m, msg::ToolMsg tm) {
         },
 
         // ── Tool-output viewer ─────────────────────────
-        [&](OpenToolOutputViewer) -> Step {
+        [&](OpenToolOutput) -> Step {
             auto entries = collect_viewer_entries(m);
             if (entries.empty()) {
                 auto cmd = set_status_toast(m, "nothing to inspect yet");
                 return {std::move(m), std::move(cmd)};
             }
-            m.ui.panel = pn::ToolViewer{{std::move(entries), 0, false}};
+            m.ui.panel = pn::ToolOutput{{std::move(entries), 0, false}};
             m.ui.tool_viewer_scroll.y = 0;
             m.ui.tool_viewer_tail = true;
             return done(std::move(m));
         },
-        [&](CloseToolOutputViewer) -> Step {
+        [&](CloseToolOutput) -> Step {
             // Esc semantics: body stage → back to the list; list → closed.
-            if (auto* o = m.ui.panel.get<pn::ToolViewer>(); o && o->viewing) {
+            if (auto* o = m.ui.panel.get<pn::ToolOutput>(); o && o->viewing) {
                 o->viewing = false;
                 m.ui.tool_viewer_scroll.y = 0;
                 return done(std::move(m));
             }
-            m.ui.panel.close<pn::ToolViewer>();
+            m.ui.panel.close<pn::ToolOutput>();
             return done(std::move(m));
         },
-        [&](ToolViewerMove& e) -> Step {
-            auto* o = m.ui.panel.get<pn::ToolViewer>();
+        [&](ToolOutputMove& e) -> Step {
+            auto* o = m.ui.panel.get<pn::ToolOutput>();
             if (!o) return done(std::move(m));
             if (o->viewing) {
                 // Body stage: deltas scroll the output viewport directly.
@@ -664,8 +664,8 @@ Step tool_update(Model m, msg::ToolMsg tm) {
             }
             return done(std::move(m));
         },
-        [&](ToolViewerSelect) -> Step {
-            auto* o = m.ui.panel.get<pn::ToolViewer>();
+        [&](ToolOutputSelect) -> Step {
+            auto* o = m.ui.panel.get<pn::ToolOutput>();
             if (!o || o->viewing) return done(std::move(m));
             if (o->index < 0
                 || o->index >= static_cast<int>(o->entries.size()))
@@ -675,12 +675,12 @@ Step tool_update(Model m, msg::ToolMsg tm) {
             m.ui.tool_viewer_tail = true;
             return done(std::move(m));
         },
-        [&](ToolViewerStep& e) -> Step {
+        [&](ToolOutputStep& e) -> Step {
             // ←/→ while reading an output: hop to the neighbouring
             // entry's body directly. Clamped at the ends (no wrap — the
             // list is short and wrap-around disorients more than it
             // helps). List stage: no-op.
-            auto* o = m.ui.panel.get<pn::ToolViewer>();
+            auto* o = m.ui.panel.get<pn::ToolOutput>();
             if (!o || !o->viewing) return done(std::move(m));
             int sz = static_cast<int>(o->entries.size());
             if (sz <= 0) return done(std::move(m));
@@ -691,8 +691,8 @@ Step tool_update(Model m, msg::ToolMsg tm) {
             }
             return done(std::move(m));
         },
-        [&](ToolViewerCopy) -> Step {
-            auto* o = m.ui.panel.get<pn::ToolViewer>();
+        [&](ToolOutputCopy) -> Step {
+            auto* o = m.ui.panel.get<pn::ToolOutput>();
             if (!o) return done(std::move(m));
             if (o->index < 0
                 || o->index >= static_cast<int>(o->entries.size()))

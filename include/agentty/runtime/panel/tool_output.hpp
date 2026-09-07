@@ -21,7 +21,7 @@
 // snapshot is cheap.
 //
 // This header is UI state only. Reducer wiring lives in
-// update/tool_viewer.cpp, key dispatch in subscribe.cpp, the view in
+// update/tool_output.cpp, key dispatch in subscribe.cpp, the view in
 // view/pickers.cpp — the same file split as the other pickers.
 
 #include <string>
@@ -32,7 +32,7 @@
 
 namespace agentty {
 
-namespace tool_viewer {
+namespace tool_output {
 
 // Snapshot budget: newest-first collection stops once either cap trips.
 inline constexpr std::size_t kMaxEntries     = 50;
@@ -69,20 +69,20 @@ struct Open {
     bool               viewing = false;   // false = list, true = body stage
 };
 
-} // namespace tool_viewer
+} // namespace tool_output
 
-using ToolViewerState = std::variant<tool_viewer::Closed, tool_viewer::Open>;
+using ToolOutputState = std::variant<tool_output::Closed, tool_output::Open>;
 
-[[nodiscard]] inline bool tool_viewer_is_open(const ToolViewerState& s) noexcept {
-    return std::holds_alternative<tool_viewer::Open>(s);
+[[nodiscard]] inline bool tool_viewer_is_open(const ToolOutputState& s) noexcept {
+    return std::holds_alternative<tool_output::Open>(s);
 }
-[[nodiscard]] inline tool_viewer::Open*
-tool_viewer_opened(ToolViewerState& s) noexcept {
-    return std::get_if<tool_viewer::Open>(&s);
+[[nodiscard]] inline tool_output::Open*
+tool_viewer_opened(ToolOutputState& s) noexcept {
+    return std::get_if<tool_output::Open>(&s);
 }
-[[nodiscard]] inline const tool_viewer::Open*
-tool_viewer_opened(const ToolViewerState& s) noexcept {
-    return std::get_if<tool_viewer::Open>(&s);
+[[nodiscard]] inline const tool_output::Open*
+tool_viewer_opened(const ToolOutputState& s) noexcept {
+    return std::get_if<tool_output::Open>(&s);
 }
 
 } // namespace agentty

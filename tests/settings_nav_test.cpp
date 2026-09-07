@@ -4,7 +4,7 @@
 // palette row, and the settings list (Ctrl+K → Settings → Retrieval / Smart
 // Mode). Where Esc should land depends on which of those you used, so a pane
 // cannot answer it from a constant — and each close handler used to try:
-// CloseRagSettings always reopened the palette, CloseSmartMode always dropped
+// CloseRag always reopened the palette, CloseSmartMode always dropped
 // to the thread. Each was right for one entry point and wrong for the rest,
 // and the settings-list hand-offs were outright trapdoors (they closed the
 // list before opening the target, so Esc lost your place entirely).
@@ -60,9 +60,9 @@ Model press_escape(Model m) {
     const auto esc = form::keys::Action{form::keys::Intent::Close};
     if (m.ui.panel.is<pn::SmartMode>())
         return app::update(std::move(m), Msg{SmartModeKey{esc}}).first;
-    if (m.ui.panel.is<pn::RagSettings>()) {
+    if (m.ui.panel.is<pn::Rag>()) {
         m = app::update(std::move(m), Msg{RagEmbedKey{esc}}).first;
-        if (m.ui.panel.is<pn::RagSettings>())
+        if (m.ui.panel.is<pn::Rag>())
             m = app::update(std::move(m), Msg{RagEmbedClose{}}).first;
         return m;
     }
@@ -79,12 +79,12 @@ Model press_escape(Model m) {
 // and silently selects the wrong command, which is exactly what this helper
 // did on its first attempt.
 Model run_from_palette(Model m, std::string_view query, Command expect) {
-    m = app::update(std::move(m), Msg{OpenCommandPalette{}}).first;
+    m = app::update(std::move(m), Msg{OpenPalette{}}).first;
     for (char c : query)
         m = app::update(std::move(m),
-                        Msg{CommandPaletteInput{static_cast<char32_t>(c)}}).first;
+                        Msg{PaletteInput{static_cast<char32_t>(c)}}).first;
     (void)expect;   // named at the call site for readability
-    return app::update(std::move(m), Msg{CommandPaletteSelect{}}).first;
+    return app::update(std::move(m), Msg{PaletteSelect{}}).first;
 }
 
 } // namespace
@@ -111,8 +111,8 @@ TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
         REQUIRE(m.ui.panel.is<pn::SmartMode>());
 
         m = press_escape(std::move(m));
-        REQUIRE(m.ui.panel.is<pn::CommandPalette>());
-        const auto* p = m.ui.panel.get<pn::CommandPalette>();
+        REQUIRE(m.ui.panel.is<pn::Palette>());
+        const auto* p = m.ui.panel.get<pn::Palette>();
         CHECK(p->query == "smart mode");
         // The cursor must still land on the command that was run — resolved
         // through the SAME filtered list the view renders, against the LIVE
@@ -126,19 +126,19 @@ TEST_CASE("settings nav: palette → pane → Esc returns to the palette") {
               == Command::SmartMode);
     }
     {
-        Model m = run_from_palette(Model{}, "retrieval", Command::OpenRagSettings);
-        REQUIRE(m.ui.panel.is<pn::RagSettings>());
+        Model m = run_from_palette(Model{}, "retrieval", Command::OpenRag);
+        REQUIRE(m.ui.panel.is<pn::Rag>());
 
         m = press_escape(std::move(m));
-        REQUIRE(m.ui.panel.is<pn::CommandPalette>());
-        const auto* p = m.ui.panel.get<pn::CommandPalette>();
+        REQUIRE(m.ui.panel.is<pn::Palette>());
+        const auto* p = m.ui.panel.get<pn::Palette>();
         CHECK(p->query == "retrieval");
         const auto matches = filtered_commands(p->query, ui::palette_context(m));
         REQUIRE(!matches.empty());
         REQUIRE(p->index >= 0);
         REQUIRE(p->index < static_cast<int>(matches.size()));
         CHECK(matches[static_cast<std::size_t>(p->index)]->id
-              == Command::OpenRagSettings);
+              == Command::OpenRag);
     }
 }
 
@@ -161,7 +161,7 @@ TEST_CASE("settings nav: settings list → pane → Esc returns to the list") {
         const auto rows = settings::items_for(m, o->concern);
         int idx = -1;
         for (int i = 0; i < static_cast<int>(rows.size()); ++i)
-            if ((row == Command::OpenRagSettings
+            if ((row == Command::OpenRag
                     && rows[static_cast<std::size_t>(i)].action
                            == settings::Action::OpenRag)
              || (row == Command::SmartMode
@@ -187,8 +187,8 @@ TEST_CASE("settings nav: settings list → pane → Esc returns to the list") {
         CHECK(m.ui.panel.get<pn::SettingsList>()->index == idx);
     }
     {
-        auto [m, idx] = descend(Command::OpenRagSettings);
-        REQUIRE(m.ui.panel.is<pn::RagSettings>());
+        auto [m, idx] = descend(Command::OpenRag);
+        REQUIRE(m.ui.panel.is<pn::Rag>());
         m = press_escape(std::move(m));
         REQUIRE(m.ui.panel.is<pn::SettingsList>());
         CHECK(m.ui.panel.get<pn::SettingsList>()->concern
@@ -211,12 +211,12 @@ TEST_CASE("settings nav: the origin survives a slot round trip") {
     m.ui.smart_assign_advanced = m.ui.panel.get<pn::SmartMode>()->advanced;
     m.ui.smart_assign_from     = m.ui.panel.get<pn::SmartMode>()->from;
     m.ui.panel.close<pn::SmartMode>();
-    m = app::update(std::move(m), Msg{OpenFusedPicker{}}).first;
-    REQUIRE(m.ui.panel.is<pn::FusedPicker>());
-    m = app::update(std::move(m), Msg{CloseFusedPicker{}}).first;
+    m = app::update(std::move(m), Msg{OpenModels{}}).first;
+    REQUIRE(m.ui.panel.is<pn::Models>());
+    m = app::update(std::move(m), Msg{CloseModels{}}).first;
 
     // Back on the pane — and Esc must still know it came from the palette.
     REQUIRE(m.ui.panel.is<pn::SmartMode>());
     m = press_escape(std::move(m));
-    CHECK(m.ui.panel.is<pn::CommandPalette>());
+    CHECK(m.ui.panel.is<pn::Palette>());
 }

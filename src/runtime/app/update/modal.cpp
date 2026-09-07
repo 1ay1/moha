@@ -713,7 +713,7 @@ std::pair<Model, maya::Cmd<Msg>>
 commit_provider_switch(Model m, std::string_view spec,
                        auth::AuthHeader new_auth, std::string_view label,
                        std::string_view desired_model,
-                       bool open_picker) {
+                       bool open_panel) {
     using maya::Cmd;
     const std::string spec_s{spec};
 
@@ -820,9 +820,9 @@ commit_provider_switch(Model m, std::string_view spec,
     // choice already made. Skip it — the desired model installs on ModelsLoaded
     // — and give a "Switching to X…" toast instead.
     const bool have_desired = !desired_model.empty();
-    if (open_picker && provider::active().kind != provider::Kind::ExternalAcp
+    if (open_panel && provider::active().kind != provider::Kind::ExternalAcp
         && !have_desired)
-        m.ui.panel = pn::FusedPicker{{0, ""}};
+        m.ui.panel = pn::Models{{0, ""}};
 
     // Name the DERIVED wire endpoint for OpenAI-dialect hosts so the /v1
     // defaulting is visible, not magic — the custom-host dead-loop report

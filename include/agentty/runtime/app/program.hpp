@@ -145,7 +145,7 @@ struct AgenttyApp {
         // cursor/query must feed the hash. These pickers are
         // selection-driven — pressing ↑/↓ only mutates an index (or a
         // query string) inside the variant; nothing else in the model
-        // moves. If that index isn't hashed, FusedPickerMove produces a
+        // moves. If that index isn't hashed, ModelsMove produces a
         // model the gate considers visually identical, skip_render fires,
         // and the cursor doesn't repaint until some OTHER hashed axis
         // (caret-blink parity, status text) happens to flip ~265 ms later.
@@ -159,7 +159,7 @@ struct AgenttyApp {
         // alternative blocks below add cursor/query movement INSIDE the
         // open overlay.
         mix(static_cast<std::uint64_t>(m.ui.panel.raw().index()));
-        if (auto* pp = m.ui.panel.get<pn::ProviderPicker>()) {
+        if (auto* pp = m.ui.panel.get<pn::Providers>()) {
             mix(static_cast<std::uint64_t>(pp->index));
             mix_str(pp->query);
             mix_str(pp->confirm_remove);   // two-press ^D arm state
@@ -177,7 +177,7 @@ struct AgenttyApp {
             mix(static_cast<std::uint64_t>(sm->form.fields.size()));
             if (const auto* row = sm->form.focused()) mix_str(row->id);
         }
-        if (auto* fp = m.ui.panel.get<pn::FusedPicker>()) {
+        if (auto* fp = m.ui.panel.get<pn::Models>()) {
             mix(static_cast<std::uint64_t>(fp->index));
             mix_str(fp->query);   // live search buffer
             // Slot-assign mode retitles the picker, rewrites the footer
@@ -217,7 +217,7 @@ struct AgenttyApp {
             // Armed two-press ^X swaps the footer for a warning row.
             mix(c->confirm_reject_all ? 1ULL : 0ULL);
         }
-        if (auto* o = m.ui.panel.get<pn::CommandPalette>()) {
+        if (auto* o = m.ui.panel.get<pn::Palette>()) {
             mix_str(o->query);
             mix(static_cast<std::uint64_t>(o->index));
         }
@@ -239,7 +239,7 @@ struct AgenttyApp {
         // or every ↑/↓/PgDn in the body is gated away until the caret
         // parity flips ~265 ms later — the "viewer movement is laggy"
         // symptom, same class as the picker-cursor bug above.
-        if (auto* o = m.ui.panel.get<pn::ToolViewer>()) {
+        if (auto* o = m.ui.panel.get<pn::ToolOutput>()) {
             mix(static_cast<std::uint64_t>(o->index));
             mix(o->viewing ? 1ULL : 0ULL);
             mix(static_cast<std::uint64_t>(m.ui.tool_viewer_scroll.y));
@@ -316,7 +316,7 @@ struct AgenttyApp {
         // symptom. These three were entirely absent from the hash.
         //   • Smart Mode config overlay (Ctrl+S) — a OneAxis like the pickers.
         //   • RAG picker (Ctrl+K → RAG) — 3 rows; active marks the persisted mode.
-        if (auto* o = m.ui.panel.get<pn::RagSettings>()) {
+        if (auto* o = m.ui.panel.get<pn::Rag>()) {
             mix(static_cast<std::uint64_t>(o->cursor));
             mix(static_cast<std::uint64_t>(o->active));
         }

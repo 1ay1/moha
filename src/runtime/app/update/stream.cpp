@@ -926,11 +926,11 @@ maya::Cmd<Msg> finalize_turn(Model& m, StopReason stop_reason) {
         if (!m.d.current.messages.empty()
             && m.d.current.messages.back().role == Role::Assistant
             && !m.d.current.messages.back().text.empty()) {
-            const auto blocks = code_block_picker::extract_code_blocks(
+            const auto blocks = code_blocks::extract_code_blocks(
                 m.d.current.messages.back().text);
             int runnable = 0;
             for (const auto& b : blocks)
-                if (code_block_picker::is_shell_language(b.language)) ++runnable;
+                if (code_blocks::is_shell_language(b.language)) ++runnable;
             if (runnable > 0) {
                 block_toast = set_status_toast(m,
                     "\xe2\x96\xb6 " + std::to_string(runnable)

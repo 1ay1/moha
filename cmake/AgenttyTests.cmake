@@ -47,8 +47,8 @@ set(_AGENTTY_CONSOLIDATED
     plugin_config_test skills_engine_test slash_commands_test fuzzy_match_smoke
     provider_model_switch_test
     oauth_proactive_refresh_test maya_host_sequence_test
-    smart_slot_picker_stack_test account_switch_refresh_test fused_models_test
-    picker_sections_render_test
+    smart_slot_panel_stack_test account_switch_refresh_test fused_models_test
+    panel_sections_render_test
     credentials_test entitlement_test inflate_test)
 foreach(_t ${_AGENTTY_CONSOLIDATED})
     agentty_test(${_t} MODE consolidated)

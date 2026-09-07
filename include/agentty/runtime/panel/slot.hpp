@@ -1,22 +1,22 @@
 #pragma once
-// agentty::ui::panel — the EXCLUSIVE overlay slot, as a sum type.
+// agentty::ui::panel — the EXCLUSIVE panel slot, as a sum type.
 //
-// Model::UI used to carry 16 independent overlay fields (pick::OneAxis
+// Model::UI used to carry 16 independent panel fields (pick::OneAxis
 // here, an ad-hoc Closed|Open variant there). "Only one overlay open at
 // a time" was a CONVENTION enforced by ~17 scattered
 // `m.ui.X = pick::Closed{}` writes inside every Open* reducer — forget
 // one and two overlays were open at once, with the router (overlay.hpp)
 // papering over the ambiguity at dispatch time.
 //
-// Now every exclusive overlay lives in ONE slot:
+// Now every exclusive panel lives in ONE slot:
 //
-//     m.ui.panel = pn::FusedPicker{{.index = 3}};    // opens (closes rival)
-//     m.ui.panel.is<pn::FusedPicker>()               // open?
-//     m.ui.panel.get<pn::FusedPicker>()              // payload* or nullptr
-//     m.ui.panel.close<pn::FusedPicker>()            // close IF topmost
+//     m.ui.panel = pn::Models{{.index = 3}};    // opens (closes rival)
+//     m.ui.panel.is<pn::Models>()               // open?
+//     m.ui.panel.get<pn::Models>()              // payload* or nullptr
+//     m.ui.panel.close<pn::Models>()            // close IF topmost
 //
 // Opening is assignment — it structurally closes whatever was open,
-// because a variant holds one alternative. "Two exclusive overlays open"
+// because a variant holds one alternative. "Two exclusive panels open"
 // is not a bug we guard against anymore; it is UNREPRESENTABLE. All the
 // rival-closing writes are deleted, not relocated.
 //
@@ -105,9 +105,9 @@ private:
 // over the thread", so Esc closes.
 struct WithFrom { From from; };
 
-// ── The exclusive overlays: one distinct type each, payload inherited ───
-struct FusedPicker     : pick::OpenAt, WithFrom {};
-struct ProviderPicker  : pick::OpenAt, WithFrom {};
+// ── The exclusive panels: one distinct type each, payload inherited ───
+struct Models     : pick::OpenAt, WithFrom {};
+struct Providers  : pick::OpenAt, WithFrom {};
 struct ThreadList      : pick::OpenAt, WithFrom {};
 // Smart Mode carries a typed ROW, not an index. The other pickers list a
 // variable number of runtime-derived entries, so an int cursor is the honest
@@ -126,24 +126,24 @@ struct SmartMode : WithFrom {
     // rows would vanish the moment the user pinned a model.
     bool advanced = false;
 };
-struct CommandPalette  : agentty::palette::Open, WithFrom {};
+struct Palette  : agentty::palette::Open, WithFrom {};
 struct Mention         : agentty::mention::Open, WithFrom {};
-struct Symbol          : agentty::symbol_palette::Open, WithFrom {};
-struct CodeBlocks      : agentty::code_block_picker::Open, WithFrom {};
-struct CodeBlockResult : agentty::code_block_picker::Result, WithFrom {};
-struct ToolViewer      : agentty::tool_viewer::Open, WithFrom {};
-struct Checkpoints     : agentty::checkpoint_picker::Open, WithFrom {};
-struct RagSettings     : agentty::rag_settings::Open, WithFrom {};
+struct Symbol          : agentty::symbol::Open, WithFrom {};
+struct CodeBlocks      : agentty::code_blocks::Open, WithFrom {};
+struct CodeBlockResult : agentty::code_blocks::Result, WithFrom {};
+struct ToolOutput      : agentty::tool_output::Open, WithFrom {};
+struct Checkpoints     : agentty::checkpoints::Open, WithFrom {};
+struct Rag     : agentty::rag_settings::Open, WithFrom {};
 struct SettingsList    : agentty::settings::ListOpen, WithFrom {};
-struct Fork            : agentty::fork_picker::Open, WithFrom {};
+struct Fork            : agentty::fork_panel::Open, WithFrom {};
 struct DiffReview      : pick::OpenAtCell, WithFrom {};
 
 using Variant = std::variant<
     None,
-    FusedPicker, ProviderPicker, ThreadList, SmartMode,
-    CommandPalette, Mention, Symbol,
-    CodeBlocks, CodeBlockResult, ToolViewer, Checkpoints,
-    RagSettings, SettingsList, Fork,
+    Models, Providers, ThreadList, SmartMode,
+    Palette, Mention, Symbol,
+    CodeBlocks, CodeBlockResult, ToolOutput, Checkpoints,
+    Rag, SettingsList, Fork,
     DiffReview>;
 
 // The one indirection that lets the type refer to itself: a stashed parent
@@ -159,7 +159,7 @@ template <class K>
 concept Alternative = requires(Variant v) { std::holds_alternative<K>(v); };
 
 // The slot itself: a thin wrapper so call sites read as intent
-// (`m.ui.panel.is<pn::FusedPicker>()`) rather than as variant plumbing.
+// (`m.ui.panel.is<pn::Models>()`) rather than as variant plumbing.
 class State {
 public:
     State() = default;
@@ -185,7 +185,7 @@ public:
     }
 
     // Close K IF it is the open overlay; leave any other overlay alone.
-    // Mirrors the old per-field close semantics: a stale CloseFusedPicker
+    // Mirrors the old per-field close semantics: a stale CloseModels
     // arriving after the user hopped to the provider picker must not
     // close the provider picker.
     template <Alternative K>
@@ -256,18 +256,18 @@ enum class Kind {
     None,
     Login,
     Permission,
-    CommandPalette,
+    Palette,
     Mention,
     Symbol,
     CodeBlocks,
     CodeBlockResult,
-    ToolViewer,
+    ToolOutput,
     Checkpoints,
-    RagSettings,
+    Rag,
     SettingsList,
     Fork,
-    FusedPicker,
-    ProviderPicker,
+    Models,
+    Providers,
     ThreadList,
     SmartMode,
     DiffReview,
@@ -279,18 +279,18 @@ enum class Kind {
 [[nodiscard]] inline Kind kind_of(const State& s) noexcept {
     struct V {
         Kind operator()(const None&)            const { return Kind::None; }
-        Kind operator()(const FusedPicker&)     const { return Kind::FusedPicker; }
-        Kind operator()(const ProviderPicker&)  const { return Kind::ProviderPicker; }
+        Kind operator()(const Models&)     const { return Kind::Models; }
+        Kind operator()(const Providers&)  const { return Kind::Providers; }
         Kind operator()(const ThreadList&)      const { return Kind::ThreadList; }
         Kind operator()(const SmartMode&)       const { return Kind::SmartMode; }
-        Kind operator()(const CommandPalette&)  const { return Kind::CommandPalette; }
+        Kind operator()(const Palette&)  const { return Kind::Palette; }
         Kind operator()(const Mention&)         const { return Kind::Mention; }
         Kind operator()(const Symbol&)          const { return Kind::Symbol; }
         Kind operator()(const CodeBlocks&)      const { return Kind::CodeBlocks; }
         Kind operator()(const CodeBlockResult&) const { return Kind::CodeBlockResult; }
-        Kind operator()(const ToolViewer&)      const { return Kind::ToolViewer; }
+        Kind operator()(const ToolOutput&)      const { return Kind::ToolOutput; }
         Kind operator()(const Checkpoints&)     const { return Kind::Checkpoints; }
-        Kind operator()(const RagSettings&)     const { return Kind::RagSettings; }
+        Kind operator()(const Rag&)     const { return Kind::Rag; }
         Kind operator()(const SettingsList&)    const { return Kind::SettingsList; }
         Kind operator()(const Fork&)            const { return Kind::Fork; }
         Kind operator()(const DiffReview&)      const { return Kind::DiffReview; }

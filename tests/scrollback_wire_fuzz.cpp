@@ -511,11 +511,11 @@ static void run_walk(std::uint64_t seed, int width, int term_h) {
                 break;
             }
             case 2: {   // picker open → frames → close → frames
-                m.ui.panel = pn::FusedPicker{{0, ""}};
+                m.ui.panel = pn::Models{{0, ""}};
                 op("picker open");
                 h.frame(m, "popen" + st);
                 if (rng.chance(50)) h.frame(m, "popen2-" + st);
-                m.ui.panel.close<pn::FusedPicker>();
+                m.ui.panel.close<pn::Models>();
                 op("picker close");
                 h.frame(m, "pclose" + st);
                 break;
@@ -600,10 +600,10 @@ static void run_walk(std::uint64_t seed, int width, int term_h) {
                 break;
             }
             case 2: {   // picker over a live stream
-                m.ui.panel = pn::FusedPicker{{0, ""}};
+                m.ui.panel = pn::Models{{0, ""}};
                 op("picker open (streaming)");
                 h.frame(m, "spopen" + st);
-                m.ui.panel.close<pn::FusedPicker>();
+                m.ui.panel.close<pn::Models>();
                 op("picker close (streaming)");
                 h.frame(m, "spclose" + st);
                 break;

@@ -48,7 +48,7 @@ namespace pn = agentty::ui::panel;
 
 namespace agentty::app::detail {
 
-namespace fp   = agentty::fork_picker;
+namespace fp   = agentty::fork_panel;
 namespace pick = agentty::ui::pick;
 using maya::Cmd;
 using maya::overload;
@@ -78,21 +78,21 @@ const char* label_of(fp::Choice c) {
 
 Step fork_update(Model m, msg::ForkMsg fm) {
     return std::visit(overload{
-        [&](OpenForkPicker) -> Step {
+        [&](OpenFork) -> Step {
             if (m.d.current.messages.empty())
                 return {std::move(m), set_status_toast(m, "nothing to fork yet")};
             if (!m.s.is_idle() || m.s.compacting || m.s.thread_loading)
                 return {std::move(m),
                         set_status_toast(m, "cannot fork while the agent is working")};
             m.ui.panel = pn::Fork{{fp::Choice::RagPerTurn}};
-            m.ui.panel.close<pn::CommandPalette>();
+            m.ui.panel.close<pn::Palette>();
             return {std::move(m), Cmd<Msg>::none()};
         },
-        [&](CloseForkPicker) -> Step {
+        [&](CloseFork) -> Step {
             m.ui.panel.close<pn::Fork>();
             return {std::move(m), Cmd<Msg>::none()};
         },
-        [&](ForkPickerMove& e) -> Step {
+        [&](ForkMove& e) -> Step {
             if (auto* o = m.ui.panel.get<pn::Fork>())
                 o->choice = fp::next_choice(o->choice, e.delta);
             return {std::move(m), Cmd<Msg>::none()};

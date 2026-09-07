@@ -145,12 +145,12 @@ Step login_back(Model m) {
         return std::visit([&](auto&& o) -> Step {
             using T = std::decay_t<decltype(o)>;
             namespace og = login::origin;
-            if constexpr (std::is_same_v<T, og::ProviderPicker>) {
+            if constexpr (std::is_same_v<T, og::Providers>) {
                 m.ui.login = login::Closed{};
-                return agentty::app::update(std::move(m), Msg{OpenProviderPicker{}});
-            } else if constexpr (std::is_same_v<T, og::FusedPicker>) {
+                return agentty::app::update(std::move(m), Msg{OpenProviders{}});
+            } else if constexpr (std::is_same_v<T, og::Models>) {
                 m.ui.login = login::Closed{};
-                return agentty::app::update(std::move(m), Msg{OpenFusedPicker{}});
+                return agentty::app::update(std::move(m), Msg{OpenModels{}});
             } else if constexpr (std::is_same_v<T, og::Accounts>) {
                 // Return to the SPECIFIC provider's account list — the frame
                 // carries the provider, so this can't drift to the active one.
@@ -173,7 +173,7 @@ Step login_back(Model m) {
                 login::CustomHostInput ch;
                 ch.host_input = std::move(o.spec);
                 ch.cursor     = static_cast<int>(ch.host_input.size());
-                ch.origin     = login::origin::ProviderPicker{};
+                ch.origin     = login::origin::Providers{};
                 m.ui.login    = std::move(ch);
                 return done(std::move(m));
             } else {   // og::Nowhere
@@ -205,7 +205,7 @@ Step login_back(Model m) {
     // provider row), so Esc steps BACK there — keeping accounts → providers →
     // chat hierarchical.
     if (std::holds_alternative<login::AccountList>(m.ui.login))
-        return pop(login::origin::ProviderPicker{});
+        return pop(login::origin::Providers{});
     // Every other sub-state (OAuth waits, failures): Esc keeps its original
     // meaning — cancel/close outright.
     return close_login(std::move(m));
@@ -519,7 +519,7 @@ Step account_select(Model m) {
     // (Enter on a non-active provider row → its account list), selecting the
     // account SWITCHES to that provider too — provider + account + auth +
     // model recall + refetch, all atomically — and returns straight to chat
-    // (open_picker=false, so no model-picker pop). The recalled model is
+    // (open_panel=false, so no model-picker pop). The recalled model is
     // pre-stashed so commit_provider_switch doesn't open the picker.
     {
         const std::string active_pid =
@@ -540,7 +540,7 @@ Step account_select(Model m) {
                 ? deps().load_settings().provider_models.at(provider) : std::string{};
             return commit_provider_switch(std::move(m), provider,
                                           provider::credentials::resolve(provider),
-                                          plabel, recalled, /*open_picker=*/false);
+                                          plabel, recalled, /*open_panel=*/false);
         }
     }
     // Re-install the live auth header from the now-swapped active store.

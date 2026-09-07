@@ -442,7 +442,7 @@ static bool check_transcript(TermEmu& emu, const std::string& tag,
                     "           (expected '...assistant prose' or a clean wrap; a\n"
                     "            reveal scramble frame reached immutable scrollback\n"
                     "            — scramble_glyph_safe regressed, see\n"
-                    "            reveal_fx.cpp render_live_overlay_ / text_reveal.hpp)\n",
+                    "            reveal_fx.cpp render_live_panel_ / text_reveal.hpp)\n",
                     tag.c_str(), y, ln.c_str());
                 ++g_failures; failed = true;
                 break;

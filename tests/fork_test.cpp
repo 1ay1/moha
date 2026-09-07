@@ -65,10 +65,10 @@ Model make_parent() {
 }
 
 Model fork_with(Model m, int choice_index) {
-    auto s1 = detail::fork_update(std::move(m), OpenForkPicker{});
+    auto s1 = detail::fork_update(std::move(m), OpenFork{});
     Model m1 = std::move(s1.first);
     for (int i = 0; i < choice_index; ++i) {
-        auto s = detail::fork_update(std::move(m1), ForkPickerMove{+1});
+        auto s = detail::fork_update(std::move(m1), ForkMove{+1});
         m1 = std::move(s.first);
     }
     auto s2 = detail::fork_update(std::move(m1), ForkThread{});
