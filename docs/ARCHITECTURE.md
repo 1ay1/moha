@@ -54,10 +54,13 @@ types and inline logic; `src/` carries the heavier implementations.
   newtype is a compile error, not a debugging session.
 - **`runtime/`** — the application proper.
   - `model.hpp` — the composed `Model` plus UI-only sub-states (composer,
-    pickers, palette, modals) that belong to no domain.
+    the panel slot, modals) that belong to no domain.
+  - `panel/` — the panel subsystem: the exclusive slot, priority routing,
+    per-panel state, forms. See [`PANELS.md`](PANELS.md).
   - `msg.hpp` — the `Msg` sum, split into domain sub-variants (see §4).
   - `app/update/<domain>.cpp` — per-domain reducers.
-  - `view/` — the `Model -> Element` pipeline, one file per widget family.
+  - `view/` — the `Model -> Element` pipeline, one file per widget family;
+    every panel view under `view/panels/`.
 - **`provider/`** — the `Provider` concept and its implementations:
   `anthropic/transport.cpp` (HTTP/2 + SSE, the OAuth/Pro/Max default) and
   `openai/transport.cpp` (any OpenAI-compatible endpoint — openai, groq,

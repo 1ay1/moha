@@ -787,7 +787,7 @@ src/runtime/view/
 ├── changes_strip.cpp                 # ChangesStrip
 ├── composer.cpp                      # Composer
 ├── cache.cpp · helpers.cpp           # shared (not adapters)
-├── login.cpp · pickers/ · diff_review.cpp   # legacy modals (§26)
+├── login.cpp · panels/ · diff_review.cpp    # panel views — see docs/PANELS.md
 ├── thread/
 │   ├── thread.cpp                    # Thread
 │   ├── welcome_screen.cpp            # WelcomeScreen      (empty branch)
