@@ -51,11 +51,17 @@ std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev)
         return Action{Intent::None};
     }
 
-    // ── Editing: printable keys edit, they do not navigate ───────────
+    // ── Editing: printable keys edit, they do not navigate ─────────
     if (editing) {
         if (sk) switch (*sk) {
             case SpecialKey::Escape:
             case SpecialKey::Enter:     return Action{Intent::LeaveField};
+            // ↑/↓ leave the field AND move (apply() ends the edit first).
+            // Without this the editing table swallowed them — Enter on a
+            // text row then any arrow read as "the panel froze", because
+            // the only exits were the two keys nothing advertised.
+            case SpecialKey::Up:        return Action{Intent::MovePrev};
+            case SpecialKey::Down:      return Action{Intent::MoveNext};
             case SpecialKey::Backspace: return Action{Intent::Backspace};
             case SpecialKey::Delete:    return Action{Intent::DeleteForward};
             case SpecialKey::Left:      return Action{Intent::CaretLeft};
@@ -106,8 +112,15 @@ Applied apply(Form& f, Action a) {
     switch (a.intent) {
         case Intent::None: break;
 
-        case Intent::MovePrev: move(f, -1); break;
-        case Intent::MoveNext: move(f, +1); break;
+        case Intent::MovePrev:
+        case Intent::MoveNext:
+            // Arrows while EDITING: leave the field (commit what was typed —
+            // text edits are in-place, so "commit" is just dropping the
+            // caret), then move. Ending the edit first keeps the invariant
+            // that Editing focus always refers to the cursor row.
+            if (f.editing()) (void)escape(f);
+            move(f, a.intent == Intent::MovePrev ? -1 : +1);
+            break;
 
         case Intent::AdjustDown:
         case Intent::AdjustUp:
