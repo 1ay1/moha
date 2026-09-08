@@ -438,10 +438,27 @@ static json message_to_json(const Message& m) {
     // Adaptive-thinking block (Assistant turns under an effort setting).
     // Persisted so a reloaded thread can replay it on a follow-up turn —
     // Anthropic 400s a tool_use turn whose thinking block was dropped.
+    // Thinking payloads are the third bulk term in a long thread (4.2 MB of
+    // blocks + 2.6 MB of signatures in one real 32 MB thread). Signatures
+    // are opaque base64 blobs — hundreds of bytes each, never displayed,
+    // only replayed to the provider. Same treatment as tool output: the
+    // bytes go to the blob store verbatim and the message keeps a
+    // reference, so they leave the per-switch parse without being lost.
+    constexpr std::size_t kTextBlobMin = 8u * 1024u;
+    auto put_or_inline = [&](json& obj, const char* key, std::string text) {
+        if (text.size() >= kTextBlobMin) {
+            if (auto name = put_blob(text); !name.empty()) {
+                obj[std::string{key} + "_blob"] = std::move(name);
+                return;
+            }
+        }
+        obj[key] = std::move(text);
+    };
+
     if (!m.thinking.empty())
-        j["thinking"] = tools::util::to_valid_utf8(m.thinking);
+        put_or_inline(j, "thinking", tools::util::to_valid_utf8(m.thinking));
     if (!m.thinking_signature.empty())
-        j["thinking_signature"] = m.thinking_signature;
+        put_or_inline(j, "thinking_signature", m.thinking_signature);
     // Reasoning duration (ms) for the settled "· 3.2s" header meter.
     if (m.reasoning_ms > 0)
         j["reasoning_ms"] = m.reasoning_ms;
@@ -451,8 +468,9 @@ static json message_to_json(const Message& m) {
     if (!m.thinking_blocks.empty()) {
         json blocks = json::array();
         for (const auto& tb : m.thinking_blocks) {
-            json b{{"text", tools::util::to_valid_utf8(tb.text)},
-                   {"signature", tb.signature}};
+            json b;
+            put_or_inline(b, "text", tools::util::to_valid_utf8(tb.text));
+            put_or_inline(b, "signature", tb.signature);
             if (!tb.redacted_data.empty()) b["redacted_data"] = tb.redacted_data;
             blocks.push_back(std::move(b));
         }
@@ -574,14 +592,21 @@ static std::expected<Message, DeserializeError> parse_message(const json& j) {
     // live selection, which is what those turns used to render anyway.
     m.served_model = j.value("served_model", "");
     m.served_role  = j.value("served_role", "");
-    m.thinking = j.value("thinking", "");
-    m.thinking_signature = j.value("thinking_signature", "");
+    // Blob reference (current) or inline (older threads / fallback).
+    auto text_or_blob = [](const json& obj, const char* key) -> std::string {
+        if (auto it = obj.find(std::string{key} + "_blob");
+            it != obj.end() && it->is_string())
+            return get_blob(it->get<std::string>());
+        return obj.value(key, "");
+    };
+    m.thinking = text_or_blob(j, "thinking");
+    m.thinking_signature = text_or_blob(j, "thinking_signature");
     m.reasoning_ms = j.value("reasoning_ms", static_cast<std::int64_t>(0));
     if (auto it = j.find("thinking_blocks"); it != j.end() && it->is_array())
         for (const auto& tb : *it)
             if (tb.is_object())
                 m.thinking_blocks.push_back(Message::ThinkingBlock{
-                    tb.value("text", ""), tb.value("signature", ""),
+                    text_or_blob(tb, "text"), text_or_blob(tb, "signature"),
                     tb.value("redacted_data", "")});
     m.reasoning_summary = j.value("reasoning_summary", "");
     m.reasoning_encrypted = j.value("reasoning_encrypted", "");

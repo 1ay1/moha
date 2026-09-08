@@ -169,6 +169,47 @@ TEST_CASE("thread blobs: identical payloads share one file") {
     }
 }
 
+TEST_CASE("thread blobs: thinking payloads round-trip") {
+    // thinking_blocks + signatures were 6.8 MB of one real 32 MB thread.
+    // They are never displayed — only replayed to the provider — but
+    // Anthropic 400s a tool_use turn whose thinking block was dropped, so
+    // they must come back EXACTLY, not merely approximately.
+    Message a;
+    a.role = Role::Assistant;
+    a.text = "done";
+    std::string reasoning;
+    for (int i = 0; i < 3000; ++i)
+        reasoning += "considering branch " + std::to_string(i) + "\n";
+    std::string sig(12u * 1024u, 'S');   // opaque provider signature
+    a.thinking = reasoning;
+    a.thinking_signature = sig;
+    a.thinking_blocks.push_back(
+        Message::ThinkingBlock{reasoning, sig, ""});
+
+    Thread t{ThreadId{"blobthink"}, "thinking blob", {a}, {}, {}};
+    persistence::save_thread(t);
+    persistence::flush_pending_saves();
+
+    const std::string json_text =
+        read_file(persistence::threads_dir() / "blobthink.json");
+    CHECK_MESSAGE(json_text.size() < 8u * 1024u,
+                  "thinking payloads must not sit inline in the thread JSON");
+
+    auto loaded = load_t(ThreadId{"blobthink"});
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->messages.size() == 1u);
+    const auto& got = loaded->messages[0];
+    CHECK(got.thinking == reasoning);
+    CHECK(got.thinking_signature == sig);
+    REQUIRE(got.thinking_blocks.size() == 1u);
+    CHECK_MESSAGE(got.thinking_blocks[0].text == reasoning,
+                  "block text must replay verbatim");
+    CHECK_MESSAGE(got.thinking_blocks[0].signature == sig,
+                  "a mangled signature 400s the next turn");
+
+    persistence::delete_thread(ThreadId{"blobthink"});
+}
+
 TEST_CASE("thread blobs: a legacy inline thread still loads") {
     // Threads written before the blob store keep an inline base64 "data"
     // field. They must keep working with no migration step — otherwise
