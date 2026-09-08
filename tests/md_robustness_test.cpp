@@ -121,6 +121,100 @@ TEST_CASE("markdown: a pseudo-tag does not swallow the markdown after it") {
           "the pseudo-tag itself renders as literal text");
 }
 
+// ── In-body (inline) tags ──────────────────────────────────────────
+// The BLOCK path gates raw-HTML blocks on html::is_known_tag, so a line
+// starting with <shell> stays prose. Inline tags take a different route
+// (cm_inline's scan_html_tag, which has no such gate), and there a tag
+// that merely LOOKS like HTML used to be consumed as markup: a styling
+// tag emits no literal text, so "Set <var> to 3" rendered "Set  to 3".
+// Only names colliding with real HTML elements were affected, which is
+// exactly the set a model hits when it talks about markup or echoes
+// agentty's own prompt tags (<environment>, <output>, <summary>, <dir>).
+// Contract: a tag is silent only when it is BALANCED.
+TEST_CASE("markdown: an unbalanced in-body tag is never swallowed") {
+    // Names that collide with real HTML elements — the regression set.
+    for (const char* name : {"var", "cite", "code", "kbd", "q", "div", "p",
+                             "span", "font", "summary", "dir", "output",
+                             "data", "object", "b", "i", "em", "mark"}) {
+        const std::string doc =
+            std::string("Set <") + name + "> to three.";
+        const std::string out = render_md(doc, 70);
+        INFO("tag <", name, "> rendered: ", out);
+        CHECK_MESSAGE(out.find(std::string("<") + name + ">") != std::string::npos,
+                      "a lone opening tag must survive as literal text");
+        CHECK_MESSAGE(out.find("three") != std::string::npos,
+                      "surrounding prose must survive");
+
+        // A stray CLOSE tag belongs to no scope and must not delete itself.
+        const std::string cdoc =
+            std::string("Set </") + name + "> to three.";
+        const std::string cout_ = render_md(cdoc, 70);
+        INFO("close </", name, "> rendered: ", cout_);
+        CHECK(cout_.find(std::string("</") + name + ">") != std::string::npos);
+    }
+
+    // Pseudo-tags with no HTML twin were already fine; lock them in too.
+    for (const char* name : {"shell", "thinking", "environment", "cwd",
+                             "tool_call", "shell-notes", "memory-tools"}) {
+        const std::string doc = std::string("Use the <") + name + "> tool.";
+        const std::string out = render_md(doc, 70);
+        INFO("pseudo <", name, "> rendered: ", out);
+        CHECK(out.find(std::string("<") + name + ">") != std::string::npos);
+    }
+}
+
+TEST_CASE("markdown: balanced in-body HTML still styles rather than printing") {
+    // The other half of the contract — the fix must not turn real inline
+    // HTML into literal tag soup. A matched pair is consumed as markup and
+    // its CONTENT survives.
+    struct Case { const char* doc; const char* keep; };
+    for (auto c : {
+            Case{"Set <b>bold</b> here.", "bold"},
+            Case{"Set <em>emph</em> here.", "emph"},
+            Case{"Set <var>x</var> here.", "x"},
+            Case{"A <span style=\"color:red\">red</span> word.", "red"},
+            Case{"A <cite>source</cite> here.", "source"},
+         }) {
+        const std::string out = render_md(c.doc, 70);
+        INFO("doc: ", c.doc, " rendered: ", out);
+        CHECK_MESSAGE(out.find(c.keep) != std::string::npos,
+                      "content between a matched pair must render");
+        CHECK_MESSAGE(out.find("</") == std::string::npos,
+                      "a balanced pair must not print its own closing tag");
+    }
+}
+
+TEST_CASE("markdown: an unclosed inline tag does not bleed across blocks") {
+    // An unbalanced tag now stays literal, so it must also not leave a
+    // style scope open that colours later paragraphs.
+    const std::string doc =
+        "Para one has an unclosed <b>bold tag.\n\n"
+        "Para two is plain.\n\n"
+        "## Heading\n";
+    const std::string out = render_md(doc, 70);
+    CHECK(out.find("Para two is plain.") != std::string::npos);
+    CHECK(out.find("<b>") != std::string::npos);
+    CHECK(out.find("Heading") != std::string::npos);
+}
+
+TEST_CASE("markdown: in-body tags stream to the same result as one-shot") {
+    for (const char* doc : {"Use the <shell> tool now.",
+                            "Mixed <shell> and <b>bold</b> here.",
+                            "Set <var> to 3.",
+                            "A <div> mid-sentence."}) {
+        auto w = std::make_shared<maya::StreamingMarkdown>();
+        w->set_live(true);
+        w->set_reveal_fx(false);
+        w->set_reveal_decorate(false);
+        for (char ch : std::string(doc)) w->append(std::string(1, ch));
+        w->finish();
+        const std::string streamed = maya::render_to_string(w->build(), 70);
+        const std::string oneshot  = render_md(doc, 70);
+        INFO("doc: ", doc, "\n one-shot: ", oneshot, "\n streamed: ", streamed);
+        CHECK(visible_chars(streamed) == visible_chars(oneshot));
+    }
+}
+
 TEST_CASE("markdown: streaming a doc byte-by-byte never loses the settled text") {
     // Tags split ACROSS delta boundaries are the streaming hazard: the live
     // parser sees "<she" then "ll>" and must not latch a different block
