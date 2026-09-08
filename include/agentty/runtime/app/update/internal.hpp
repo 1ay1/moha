@@ -346,6 +346,7 @@ Step fork_update          (Model m, msg::ForkMsg           fm);
 Step todo_update          (Model m, msg::TodoMsg           tm);
 Step login_update         (Model m, msg::LoginMsg          lm);
 Step diff_review_update   (Model m, msg::DiffReviewMsg     dm);
+Step smart_mode_update    (Model m, msg::SmartModeMsg      sm);
 Step meta_update          (Model m, msg::MetaMsg           mm);
 
 // ── Esc: back one level ───────────────────────────────────────────────

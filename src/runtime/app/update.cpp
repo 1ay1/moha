@@ -72,6 +72,7 @@ std::pair<Model, Cmd<Msg>> update(Model m, Msg msg) {
         [&](msg::TodoMsg tm)           { return detail::todo_update         (std::move(m), std::move(tm)); },
         [&](msg::LoginMsg lm)          { return detail::login_update        (std::move(m), std::move(lm)); },
         [&](msg::DiffReviewMsg dm)     { return detail::diff_review_update  (std::move(m), std::move(dm)); },
+        [&](msg::SmartModeMsg sm)      { return detail::smart_mode_update   (std::move(m), std::move(sm)); },
         [&](msg::MetaMsg mm)           { return detail::meta_update         (std::move(m), std::move(mm)); },
     }, msg);
 

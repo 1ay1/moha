@@ -1066,12 +1066,14 @@ using DiffReviewMsg = std::variant<
     DiffReviewNextFile, DiffReviewPrevFile,
     AcceptHunk, RejectHunk, AcceptAllChanges, RejectAllChanges>;
 
+using SmartModeMsg = std::variant<
+    OpenSmartMode, CloseSmartMode, SmartModeKey, SmartModePaste,
+    SmartModeAdvanced, SmartModeClearSlot>;
+
 using MetaMsg = std::variant<
     CompactContext, CycleProfile, RestoreCheckpoint, CheckpointRestored,
     ScrollThread, ToggleRetrievedExpanded,
     TerminalFocus,
-    OpenSmartMode, CloseSmartMode, SmartModeKey, SmartModePaste, SmartModeAdvanced,
-    SmartModeClearSlot,
     Tick, Quit, NoOp, ClearStatus, RedrawScreen,
     UpdateCheckDone, UpdateApplied>;
 
@@ -1106,6 +1108,7 @@ using Msg = std::variant<
     msg::TodoMsg,
     msg::LoginMsg,
     msg::DiffReviewMsg,
+    msg::SmartModeMsg,
     msg::MetaMsg
 >;
 
@@ -1149,6 +1152,7 @@ consteval int leaf_domain_count() {
          + int{in_variant_v<L, msg::TodoMsg>}
          + int{in_variant_v<L, msg::LoginMsg>}
          + int{in_variant_v<L, msg::DiffReviewMsg>}
+         + int{in_variant_v<L, msg::SmartModeMsg>}
          + int{in_variant_v<L, msg::MetaMsg>};
 }
 
@@ -1200,7 +1204,7 @@ static_assert(leaf_domain_count<Tick>()                      == 1,
 // they must also update the kDomains array used by the dispatcher in
 // update.cpp, which currently exhausts on 12 arms. Mismatch → dispatch
 // switch loses a domain silently.
-static_assert(std::variant_size_v<Msg> == 18,
+static_assert(std::variant_size_v<Msg> == 19,
               "Msg domain count changed — update the dispatcher in "
               "src/runtime/app/update.cpp and this proof to match");
 
