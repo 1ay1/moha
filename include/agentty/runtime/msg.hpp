@@ -984,7 +984,12 @@ using StreamMsg = std::variant<
 
 using ToolMsg = std::variant<
     ToolExecOutput, ToolExecProgress, ToolTimeoutCheck,
-    PermissionApprove, PermissionReject, PermissionApproveAlways,
+    PermissionApprove, PermissionReject, PermissionApproveAlways>;
+
+// The tool-output viewer PANEL's messages — split from ToolMsg so the
+// panel's reducer lives in its own file (update/tool_output.cpp), leaving
+// tool.cpp to the execution plumbing the name promises.
+using ToolOutputMsg = std::variant<
     OpenToolOutput, CloseToolOutput,
     ToolOutputMove, ToolOutputSelect, ToolOutputCopy, ToolOutputStep>;
 
@@ -1094,6 +1099,7 @@ using Msg = std::variant<
     msg::ComposerMsg,
     msg::StreamMsg,
     msg::ToolMsg,
+    msg::ToolOutputMsg,
     msg::ProvidersMsg,
     msg::ModelsMsg,
     msg::ThreadListMsg,
@@ -1153,6 +1159,7 @@ consteval int leaf_domain_count() {
          + int{in_variant_v<L, msg::LoginMsg>}
          + int{in_variant_v<L, msg::DiffReviewMsg>}
          + int{in_variant_v<L, msg::SmartModeMsg>}
+         + int{in_variant_v<L, msg::ToolOutputMsg>}
          + int{in_variant_v<L, msg::MetaMsg>};
 }
 
@@ -1204,7 +1211,7 @@ static_assert(leaf_domain_count<Tick>()                      == 1,
 // they must also update the kDomains array used by the dispatcher in
 // update.cpp, which currently exhausts on 12 arms. Mismatch → dispatch
 // switch loses a domain silently.
-static_assert(std::variant_size_v<Msg> == 19,
+static_assert(std::variant_size_v<Msg> == 20,
               "Msg domain count changed — update the dispatcher in "
               "src/runtime/app/update.cpp and this proof to match");
 

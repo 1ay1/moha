@@ -252,6 +252,10 @@ maya::Cmd<Msg> set_status_toast(Model& m, std::string text,
 // Rebuild the open Ctrl+O snapshot from current live tool state. Called by
 // both argument-stream and execution reducers; no-op while the viewer is closed.
 void resync_live_tool_viewer(Model& m);
+// Snapshot every finished/streaming tool call into viewer entries — used by
+// the panel's Open arm (update/tool_output.cpp) and by resync above.
+// Defined in tool.cpp beside the execution state it reads.
+[[nodiscard]] std::vector<tool_output::Entry> collect_viewer_entries(const Model& m);
 
 // ── update/tool.cpp helpers ──────────────────────────────────────────────
 void apply_tool_output(Model& m, const ToolCallId& id,
@@ -327,6 +331,7 @@ bool with_live_tool(Model& m, const ToolCallId& id, F&& f) {
 Step composer_update      (Model m, msg::ComposerMsg       cm);
 Step stream_update        (Model m, msg::StreamMsg         sm);
 Step tool_update          (Model m, msg::ToolMsg           tm);
+Step tool_output_update   (Model m, msg::ToolOutputMsg     tm);
 Step providers_update(Model m, msg::ProvidersMsg pm);
 Step models_update  (Model m, msg::ModelsMsg     pm);
 // Shared fused-row builder (SSOT for reducer + view): enumerates authed

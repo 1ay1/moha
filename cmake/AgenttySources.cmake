@@ -161,6 +161,7 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/app/update/submit.cpp
     src/runtime/app/update/frozen.cpp
     src/runtime/app/update/tool.cpp
+    src/runtime/app/update/tool_output.cpp
     src/runtime/app/update/login.cpp
     src/runtime/app/update/models.cpp
     src/runtime/app/update/providers.cpp
@@ -180,7 +181,7 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/settings_registry.cpp
     src/runtime/panel/smart_form.cpp
     src/runtime/app/update/fork.cpp
-    src/runtime/app/update/diff.cpp
+    src/runtime/app/update/diff_review.cpp
     src/runtime/app/update/meta.cpp
     src/runtime/app/subscribe.cpp
 
