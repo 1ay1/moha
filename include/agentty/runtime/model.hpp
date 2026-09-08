@@ -380,27 +380,13 @@ struct Model {
         // without this flag there is no moment at which anything can explain
         // what happened — the failure is invisible.
         bool                clipboard_wanted_image = false;
-        // When the model picker was opened to ASSIGN a Smart Mode role slot
-        // (not to switch the active model), this names the target slot.
-        // ModelsSelect writes the chosen model into that slot and
-        // clears this instead of switching models. Absent = normal switch.
-        //
-        // Was `int = -1` with the roles encoded as 0/1/2, so it was cast to
-        // ModelRole on the way out and back to int on the way in — two casts
-        // around a value that is a role the whole time, and a -1 that had to
-        // be remembered as "none" at every read.
-        std::optional<smart::ModelRole> smart_assign_slot;
-        // Whether the Smart Mode pane had its advanced rows open when it handed
-        // off to the model picker. The overlay that held the flag is DESTROYED
-        // by the hand-off, so without parking it here the pane comes back
-        // collapsed — pinning a slot would silently close the routing-policy
-        // section the user had just opened.
-        bool smart_assign_advanced = false;
-        // …and where THAT pane's Esc goes. Parked for the same reason: the
-        // overlay holding it is destroyed by the hand-off, and a pane that
-        // came back with an empty `from` would send Esc to the thread
-        // instead of to whatever the user descended from.
-        ui::panel::From smart_assign_from;
+        // (Smart-Mode slot-assign state used to be parked HERE as three
+        // fields — slot, advanced, from — because the hand-off destroyed the
+        // SmartMode overlay. It now rides ON the assign-mode Models panel
+        // (pn::Models::assign_slot) with the whole SmartMode pane in its
+        // `from` snapshot: abandoning the picker abandons the mode
+        // structurally, and ascend() restores the pane. Nothing to park.)
+
         // Effort tier changed via ←/→ in the model picker but not yet
         // flushed to disk. Persisting per keystroke is a synchronous
         // load+fsync+rename on the UI thread; instead the CycleEffort arm

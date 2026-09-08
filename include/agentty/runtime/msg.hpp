@@ -407,7 +407,8 @@ struct ModelsLoaded {
 // login. Opened with `^/` and the `/model` slash command.
 //
 // This is the ONE model surface. It also serves Smart Mode role→model
-// assignment: when Model::ui.smart_assign_slot >= 0 the list is scoped to
+// assignment: when the open Models panel carries assign_slot the list is
+// scoped to
 // the active provider and Select writes the slot instead of switching.
 struct OpenModels {};
 // Deferred lazy refresh: after the ACTIVE provider's fast refetch is issued on

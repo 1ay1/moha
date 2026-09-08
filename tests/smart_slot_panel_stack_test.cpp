@@ -65,14 +65,24 @@ ModelInfo mi(const char* id, const char* prov) {
 
 // A Model with a small catalog, opened through the REAL OpenModels
 // path in slot-assign mode for `slot` (0 strategic / 1 implementation /
-// 2 utility). This mirrors the state right after SmartModeSelect on a slot
-// row descends into the model chooser — which is exactly what meta.cpp does.
+// 2 utility). Mirrors meta.cpp's hand-off exactly: a SmartMode pane is
+// open, then an assign-mode Models descend()s over it — the pane rides
+// in the picker's `from` snapshot.
 Model in_slot_assign(int slot) {
     Model m;
     m.d.model_id = ModelId{"claude-opus-4-5"};
     m.d.available_models = { mi("claude-opus-4-5", "anthropic"),
                              mi("claude-haiku-4-5", "anthropic") };
-    m.ui.smart_assign_slot = static_cast<smart::ModelRole>(slot);
+    // The pane the hand-off leaves behind (what Esc must restore). In the
+    // real flow the user's cursor is ON the slot row when Enter fires the
+    // hand-off — the snapshot carries the form cursor-and-all — so focus
+    // the role before descending, exactly as meta.cpp finds it.
+    auto [m0, _open] = app::update(std::move(m), Msg{OpenSmartMode{}});
+    m = std::move(m0);
+    if (auto* sm = m.ui.panel.get<pn::SmartMode>())
+        smart_form::focus_role(sm->form, static_cast<smart::ModelRole>(slot));
+    pn::Models picker{{0, ""}, {}, static_cast<smart::ModelRole>(slot)};
+    m.ui.panel.descend(std::move(picker));
     auto [m1, _] = app::update(std::move(m), Msg{OpenModels{}});
     return std::move(m1);
 }
@@ -102,8 +112,8 @@ TEST_CASE("smart slot picker stack") {
               "Esc closes the model picker");
         CHECK(m2.ui.panel.is<pn::SmartMode>(),
               "Esc RE-OPENS Smart Mode — navigation is a stack, not a trapdoor");
-        CHECK(!m2.ui.smart_assign_slot,
-              "the pending slot-assign is cleared on back-out");
+        // The pending assign died WITH the picker value — structurally;
+        // there is no parked flag left to check, which is the point.
         if (auto* o = m2.ui.panel.get<pn::SmartMode>()) {
             const auto* row = o->form.focused();
             CHECK(row && row->id == smart_form::field_of_role(
@@ -140,7 +150,8 @@ TEST_CASE("smart slot picker stack") {
               "Enter closes the model picker");
         CHECK(m2.ui.panel.is<pn::SmartMode>(),
               "Enter returns to Smart Mode so sibling slots stay one step away");
-        CHECK(!m2.ui.smart_assign_slot, "slot-assign consumed");
+        // (slot-assign consumed structurally: the picker value — and its
+        // assign_slot — no longer exists)
         if (auto* o = m2.ui.panel.get<pn::SmartMode>()) {
             const auto* row = o->form.focused();
             CHECK(row && row->id == smart_form::field_of_role(
@@ -187,7 +198,11 @@ TEST_CASE("smart slot picker stack") {
             m.d.model_id = ModelId{"claude-opus-4-5"};
             m.d.available_models = { mi("claude-opus-4-5", "anthropic"),
                                      mi("claude-haiku-4-5", "anthropic") };
-            m.ui.smart_assign_slot = static_cast<smart::ModelRole>(slot);
+            if (slot >= 0) {
+                pn::Models picker{{0, ""}, {},
+                                  static_cast<smart::ModelRole>(slot)};
+                m.ui.panel.descend(std::move(picker));
+            }
             auto [m1, _] = app::update(std::move(m), Msg{OpenModels{}});
             return app::detail::fused_rows_for_model(m1);
         };
@@ -211,7 +226,7 @@ TEST_CASE("smart slot picker stack") {
     {
         Model m;
         m.d.available_models = { mi("claude-opus-4-5", "anthropic") };
-        m.ui.smart_assign_slot.reset();       // ordinary model switch
+        // ordinary model switch — no assign-mode picker descended
         auto [m1, _] = app::update(std::move(m), Msg{OpenModels{}});
         auto [m2, cmd] = app::update(std::move(m1), Msg{CloseModels{}});
         CHECK(!m2.ui.panel.is<pn::Models>(), "ordinary Esc closes picker");

@@ -261,13 +261,12 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             // the whole catalogue, which is exactly what a `Pick` row means:
             // too large and too dynamic for an inline dropdown.
             if (applied.hand_off && role) {
-                m.ui.smart_assign_slot = *role;
-                // The overlay is destroyed by the hand-off, so park the
-                // advanced flag on the Model — the picker reopens this pane
-                // and must bring it back in the state the user left it.
-                m.ui.smart_assign_advanced = o->advanced;
-                m.ui.smart_assign_from     = o->from;
-                m.ui.panel.close<pn::SmartMode>();
+                // descend(): the ENTIRE SmartMode pane — form, cursor,
+                // advanced flag, its own parent chain — rides in the
+                // picker's `from` snapshot; Esc or a completed pin restores
+                // it verbatim. Nothing is parked on Model::UI any more.
+                pn::Models picker{{0, ""}, {}, *role};
+                m.ui.panel.descend(std::move(picker));
                 return agentty::app::update(std::move(m), Msg{OpenModels{}});
             }
 

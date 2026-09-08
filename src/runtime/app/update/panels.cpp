@@ -177,10 +177,11 @@ Step providers_update(Model m, msg::ProvidersMsg pm) {
                 m.ui.effort_dirty = false;
             }
             // Abandon a pending Smart-Mode slot assignment: hopping away from
-            // the model picker mid-assign must not leave the armed slot
-            // behind, or the NEXT regular model pick silently lands in the
-            // smart slot instead of switching the model.
-            m.ui.smart_assign_slot.reset();
+            // the model picker mid-assign must not leave the mode armed. The
+            // mode lives ON the picker value now, so closing it is the reset
+            // — nothing separate to clear. (The SmartMode snapshot in its
+            // `from` is dropped with it: hopping to providers is a deliberate
+            // exit from the assign flow.)
             m.ui.panel.close<pn::Models>();
             // Open at the row matching the currently-active provider. Fresh
             // rows with an empty query (so every provider is present to match).
@@ -683,8 +684,8 @@ std::vector<FusedRow> fused_rows_for_model(const Model& m) {
     in.label_fn   = &ui::model_display_label;
     // Smart Mode slot-assign pins a model that will be dispatched to the
     // ACTIVE provider, so only its models may appear. See the Select arm.
-    if (m.ui.smart_assign_slot) in.only_provider = active_provider_id();
     if (auto* c = m.ui.panel.get<pn::Models>()) {
+        if (c->assign_slot) in.only_provider = active_provider_id();
         in.query = c->query;
         // ^/ scope: restrict the list to one provider's models. Smart-assign
         // scoping (above) wins when both are set — the slot constraint is
@@ -899,7 +900,17 @@ Step models_update(Model m, msg::ModelsMsg pm) {
     return std::visit(overload{
         [&](OpenModels) -> Step {
             hydrate_recents(m);
-            m.ui.panel = pn::Models{{0, ""}};
+            if (auto* c = m.ui.panel.get<pn::Models>()) {
+                // Already open (the smart-mode hand-off descend()s the panel
+                // and THEN dispatches OpenModels; or ^/ re-pressed): keep the
+                // instance — its assign_slot and `from` snapshot — but reset
+                // the pick state, so a re-open never shows a stale filter.
+                c->index = 0;
+                c->query.clear();
+            } else {
+                // Cold open: descend, adopting whatever is open as parent.
+                m.ui.panel.descend(pn::Models{{0, ""}});
+            }
             // ONE expensive pass: enumerate providers, read settings, seed
             // every authed provider's catalog from its bundled list so the
             // picker opens instantly full.
@@ -975,27 +986,13 @@ Step models_update(Model m, msg::ModelsMsg pm) {
         [&](CloseModels) -> Step {
             m.d.fused_rows.clear();       // release the cache while closed
             if (m.ui.effort_dirty) { persist_settings(m); m.ui.effort_dirty = false; }
-            // Slot-assign mode: Esc is BACK, not exit. Pop one level up the
-            // picker stack — re-open Smart Mode at the slot row we descended
-            // from — instead of closing every overlay. Navigating into a
-            // setting and hitting Esc should return you to the parent picker.
-            if (const auto role = m.ui.smart_assign_slot) {
-                m.ui.smart_assign_slot.reset();
-                // Rebuild through the SAME builder the pane opened with, then
-                // focus by field id — no `1 + slot` offset to keep in step
-                // with a row set that is now derived.
-                auto f = build_smart_form(m, m.ui.smart_assign_advanced);
-                smart_form::focus_role(f, *role);
-                // Plain assignment, not descend(): this RESTORES the pane the
-                // hand-off destroyed; the parked from rides back in. A descend
-                // here would stash the picker as parent and Esc would bounce.
-                m.ui.panel = pn::SmartMode{{std::move(m.ui.smart_assign_from)},
-                                             std::move(f),
-                                             m.ui.smart_assign_advanced};
-                return done(std::move(m));
-            }
-            // Normal close: unwind one level (the palette that opened this,
-            // with its query/cursor intact) or to the thread.
+            // Esc unwinds one level — and that ONE path now covers slot-assign
+            // too: the assign-mode picker's `from` snapshot IS the SmartMode
+            // pane (form, advanced, nested chain), so ascend() restores it
+            // verbatim; a cold-opened picker restores the palette or closes.
+            // The abandoned assign mode dies WITH the picker value — nothing
+            // to reset. Revalidation (the form may be stale) is ascend()'s
+            // job, one place for every SmartMode restore.
             ascend(m);
             return done(std::move(m));
         },
@@ -1213,7 +1210,11 @@ Step models_update(Model m, msg::ModelsMsg pm) {
                 || c->index >= static_cast<int>(m.d.fused_rows.size()))
                 return done(std::move(m));
             const FusedRow row = m.d.fused_rows[static_cast<std::size_t>(c->index)];
-            m.ui.panel.close<pn::Models>();
+            // Copy the assign mode out BEFORE any close: `c` points into the
+            // variant, and closing destroys the alternative (the old
+            // ordering read it through the dangling pointer — the same shape
+            // as the palette's o->index bug).
+            const std::optional<smart::ModelRole> assigning = c->assign_slot;
             m.d.fused_rows.clear();
             // ←/→ already mutated m.d.effort live;
             // the switch below persists settings, so no separate apply needed.
@@ -1221,6 +1222,7 @@ Step models_update(Model m, msg::ModelsMsg pm) {
 
             if (row.is_signin_offer()) {
                 // Route to login for that provider, returning here after.
+                m.ui.panel.close<pn::Models>();
                 return open_login_for(std::move(m), row.provider_id,
                                       row.label,
                                       ui::login::origin::Models{});
@@ -1238,12 +1240,13 @@ Step models_update(Model m, msg::ModelsMsg pm) {
             // the active provider (see rebuild_fused_rows) so such a row is
             // never selectable in the first place — unrepresentable beats
             // validated.
-            if (const auto assigning = m.ui.smart_assign_slot) {
+            if (assigning) {
+                const smart::ModelRole assigned = *assigning;
                 // One role->field mapping, shared with every other reader
                 // and writer (RoleConfig::slot). The switch on 0/1/2 that
                 // used to live here was a third copy of it.
                 smart::RoleConfig cfg = m.d.smart;
-                smart::SlotOverride& slot = cfg.slot(*assigning);
+                smart::SlotOverride& slot = cfg.slot(assigned);
                 slot.model = row.model.id.value;
                 slot.set   = true;
                 // Stamp the provider this pin was made under. A model id
@@ -1258,29 +1261,30 @@ Step models_update(Model m, msg::ModelsMsg pm) {
                                   : row.provider_id;
                 cfg.enabled = true;   // pinning a slot means "on"
 
-                const smart::ModelRole assigned = *assigning;
-                m.ui.smart_assign_slot.reset();
                 // ONE entry point: persists, installs on the UI thread and
                 // pushes to the subagent router. Pinning a model and having
                 // `task` keep using the old one is exactly what the open-coded
                 // persist_settings here used to do.
                 apply_smart(m, std::move(cfg));
-                m.ui.panel.close<pn::Models>();
                 m.d.fused_rows.clear();
-                // Pop back to the parent Smart Mode picker, cursor on the
-                // slot we just set — not out to the thread. You came from
-                // there and probably want to set the sibling slots too;
-                // forcing a re-open of Smart Mode after every slot is the
-                // exact tedium this fixes.
-                auto f = build_smart_form(m, m.ui.smart_assign_advanced);
-                smart_form::focus_role(f, assigned);
-                m.ui.panel = pn::SmartMode{{std::move(m.ui.smart_assign_from)},
-                                             std::move(f),
-                                             m.ui.smart_assign_advanced};
+                // Pop back to the parent Smart Mode pane — the picker's
+                // `from` snapshot, restored + revalidated by ascend() (which
+                // rebuilds the form from the config just applied) — cursor
+                // on the slot we just set. You probably want the sibling
+                // slots too; re-opening Smart Mode per slot was the tedium
+                // this fixes.
+                ascend(m);
+                if (auto* sm = m.ui.panel.get<pn::SmartMode>())
+                    smart_form::focus_role(sm->form, assigned);
                 auto toast = set_status_toast(m, "Smart Mode slot set");
                 return {std::move(m), std::move(toast)};
             }
 
+            // Ordinary pick: a COMPLETED selection means "done" — close
+            // outright rather than ascend. (Esc is the "back" gesture; a
+            // pick that popped you back into the palette would feel like
+            // the selection hadn't taken.)
+            m.ui.panel.close<pn::Models>();
             return switch_to_model_ref(std::move(m), row.ref());
         },
         [&](ModelsLoaded& e) -> Step {

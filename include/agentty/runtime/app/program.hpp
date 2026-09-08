@@ -187,8 +187,8 @@ struct AgenttyApp {
             // 0 = no assignment in flight, else the role + 1. The `+ 1`
             // used to exist to lift a -1 sentinel out of negative range;
             // now it just keeps "absent" distinct from role 0.
-            mix(m.ui.smart_assign_slot
-                    ? static_cast<std::uint64_t>(*m.ui.smart_assign_slot) + 1
+            mix(fp->assign_slot
+                    ? static_cast<std::uint64_t>(*fp->assign_slot) + 1
                     : 0u);
         }
         // The fused list also changes as async provider catalogs resolve

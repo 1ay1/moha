@@ -198,21 +198,24 @@ TEST_CASE("settings nav: settings list → pane → Esc returns to the list") {
 }
 
 TEST_CASE("settings nav: the origin survives a slot round trip") {
-    // Assigning a model slot destroys the Smart Mode overlay (it hands off to
-    // the model picker and comes back). The origin has to be parked across
-    // that, or a pane entered from the settings list returns from the picker
-    // believing it was opened by ^S — and the next Esc drops to the thread.
+    // Assigning a model slot hands off to the model picker: the WHOLE
+    // SmartMode pane (form, advanced, its own parent chain) rides in the
+    // assign-mode picker's `from` snapshot, and Esc restores it — with the
+    // pane still knowing it was opened from the palette.
     install_stub_deps();
     Model m = run_from_palette(Model{}, "smart mode", Command::SmartMode);
     REQUIRE(m.ui.panel.is<pn::SmartMode>());
 
-    // Descend into the picker, then back out without choosing.
-    m.ui.smart_assign_slot     = smart::ModelRole::Strategic;
-    m.ui.smart_assign_advanced = m.ui.panel.get<pn::SmartMode>()->advanced;
-    m.ui.smart_assign_from     = m.ui.panel.get<pn::SmartMode>()->from;
-    m.ui.panel.close<pn::SmartMode>();
+    // Descend into the picker the REAL way: the hand-off descend()s an
+    // assign-mode Models carrying the pane in its snapshot.
+    {
+        pn::Models picker{{0, ""}, {}, smart::ModelRole::Strategic};
+        m.ui.panel.descend(std::move(picker));
+    }
     m = app::update(std::move(m), Msg{OpenModels{}}).first;
     REQUIRE(m.ui.panel.is<pn::Models>());
+    REQUIRE(m.ui.panel.get<pn::Models>()->assign_slot
+            == smart::ModelRole::Strategic);
     m = app::update(std::move(m), Msg{CloseModels{}}).first;
 
     // Back on the pane — and Esc must still know it came from the palette.

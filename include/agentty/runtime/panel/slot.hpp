@@ -106,7 +106,17 @@ private:
 struct WithFrom { From from; };
 
 // ── The exclusive panels: one distinct type each, payload inherited ───
-struct Models     : pick::OpenAt, WithFrom {};
+struct Models     : pick::OpenAt, WithFrom {
+    // Smart-Mode slot-assign mode: this picker was opened BY a SmartMode
+    // Pick row to pin a model into `assign_slot`, and Enter writes the pin
+    // instead of switching the model. Carried ON the panel — the mode is a
+    // property of THIS picker instance, not of the app — so abandoning the
+    // picker (close, hop to providers) structurally abandons the mode; no
+    // parked flag to remember to reset. The SmartMode pane it must restore
+    // rides in `from` like every other parent (the snapshot carries the
+    // form, advanced flag and nested chain — nothing else to park).
+    std::optional<smart::ModelRole> assign_slot;
+};
 struct Providers  : pick::OpenAt, WithFrom {};
 struct ThreadList      : pick::OpenAt, WithFrom {};
 // Smart Mode carries a typed ROW, not an index. The other pickers list a

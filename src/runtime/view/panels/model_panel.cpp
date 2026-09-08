@@ -31,9 +31,9 @@ Element fused_picker(const Model& m) {
     // which provider the list is scoped to (see fused_rows_for_model).
     // role_display_name is the single spelling of these labels — this used
     // to be a fourth positional copy (`slot == 0 ? "Strategic" : ...`).
-    cfg.title = m.ui.smart_assign_slot
+    cfg.title = picker->assign_slot
         ? std::string{" Smart Mode \xc2\xb7 pick "}
-          + std::string{smart::role_display_name(*m.ui.smart_assign_slot)}
+          + std::string{smart::role_display_name(*picker->assign_slot)}
           + " model "
         : (!picker->provider_scope.empty()
                // ^/ scope active: name the one provider the list is pinned
@@ -59,7 +59,7 @@ Element fused_picker(const Model& m) {
         picker->query.empty()
             ? h(text("\xf0\x9f\x94\x8d ", fg_of(muted)),
                 query_caret(accent),
-                text(std::string{m.ui.smart_assign_slot
+                text(std::string{picker->assign_slot
                                      ? "type to filter this provider"
                                      : "type to filter across providers"},
                      fg_italic(muted))
@@ -357,7 +357,7 @@ Element fused_picker(const Model& m) {
     // code, read better, and match the surrounding footer style — so this is
     // a quieting rewrite, not a fix. Restoring the ternary would be correct
     // C++ and would only bring the noise back.
-    if (m.ui.smart_assign_slot)
+    if (picker->assign_slot)
         cfg.footer.push_back(key_hints({
             {"\xe2\x86\x91\xe2\x86\x93", "move", 5},
             {"Enter", "pin to role", 5},
