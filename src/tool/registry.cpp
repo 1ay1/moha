@@ -127,17 +127,65 @@ struct WireCache {
     std::mutex mu;
     unsigned long generation = static_cast<unsigned long>(-1);
     bool connected = false;
+    // True while some thread is INSIDE connect_initial_mcp() with mu
+    // RELEASED (see refresh_wire_cache). Latecomers must not wait — they
+    // get the native-only snapshot below and the full set on their next
+    // access after the connect publishes.
+    bool connecting = false;
     std::vector<ToolDef> initial_mcp;
     std::shared_ptr<const Snapshot> current;
+    // Native-tools-only snapshot served while `connecting`. Cached apart
+    // from `current` so the generation-equality fast path can never keep
+    // serving it after the real connect lands.
+    std::shared_ptr<const Snapshot> native_only;
     std::vector<std::shared_ptr<const Snapshot>> retired;
 };
 
 WireCache& wire_cache() { static WireCache c; return c; }
 
-std::shared_ptr<const Snapshot> refresh_wire_cache_locked(WireCache& c) {
+std::shared_ptr<const Snapshot> refresh_wire_cache(std::unique_lock<std::mutex>& lk,
+                                                   WireCache& c) {
     if (!c.connected) {
-        c.initial_mcp = connect_initial_mcp();
-        c.connected = true;
+        if (c.connecting) {
+            // Another thread is mid-handshake. DO NOT WAIT: the connect is
+            // bounded by a 15 s deadline, and the caller may be the UI
+            // thread (needs_permission on a streaming tool call, a panel
+            // action) — blocking it here froze the whole app for the
+            // handshake's duration whenever input raced the startup warm.
+            // Serve agentty's native tools now; the full set appears on
+            // the first access after the connect publishes.
+            if (!c.native_only) {
+                auto ns = std::make_shared<Snapshot>();
+                ns->tools = native_registry();
+                ns->idx.reserve(ns->tools.size());
+                for (const auto& tool : ns->tools)
+                    ns->idx.emplace(tool.name.value, &tool);
+                c.native_only = std::move(ns);
+            }
+            return c.native_only;
+        }
+        // First caller pays for the connect — but WITHOUT the lock, so
+        // every other thread stays free. connect_initial_mcp() has its own
+        // serialization (bridge.cpp g_connect_mu); `connecting` keeps a
+        // second cold caller from queuing on that inner mutex too.
+        c.connecting = true;
+        lk.unlock();
+        std::vector<ToolDef> ext;
+        try {
+            ext = connect_initial_mcp();
+        } catch (...) {
+            lk.lock();
+            c.connecting = false;
+            throw;
+        }
+        lk.lock();
+        c.initial_mcp = std::move(ext);
+        c.connecting  = false;
+        c.connected   = true;
+        // Force a rebuild below: the pool generation may still equal the
+        // pre-connect value (0), so the equality fast path must not serve
+        // a pre-connect snapshot.
+        if (c.current) { c.retired.push_back(c.current); c.current.reset(); }
     }
 
     const unsigned long generation = mcp::mcp_generation();
@@ -225,8 +273,8 @@ const ToolDef* find(std::string_view name) {
     auto& cache = wire_cache();
     std::shared_ptr<const Snapshot> snapshot;
     {
-        std::lock_guard<std::mutex> lock(cache.mu);
-        snapshot = refresh_wire_cache_locked(cache);
+        std::unique_lock<std::mutex> lock(cache.mu);
+        snapshot = refresh_wire_cache(lock, cache);
     }
     if (auto it = snapshot->idx.find(std::string{name}); it != snapshot->idx.end())
         return it->second;
@@ -241,8 +289,8 @@ const std::vector<ToolDef>& wire_tools() {
     auto& cache = wire_cache();
     std::shared_ptr<const Snapshot> snapshot;
     {
-        std::lock_guard<std::mutex> lock(cache.mu);
-        snapshot = refresh_wire_cache_locked(cache);
+        std::unique_lock<std::mutex> lock(cache.mu);
+        snapshot = refresh_wire_cache(lock, cache);
     }
     return snapshot->tools;
 }
@@ -255,8 +303,8 @@ std::vector<ToolDef> wire_tools_snapshot() {
     auto& cache = wire_cache();
     std::shared_ptr<const Snapshot> snapshot;
     {
-        std::lock_guard<std::mutex> lock(cache.mu);
-        snapshot = refresh_wire_cache_locked(cache);
+        std::unique_lock<std::mutex> lock(cache.mu);
+        snapshot = refresh_wire_cache(lock, cache);
     }
     return snapshot->tools;   // deep copy while snapshot keeps it alive
 }
@@ -356,7 +404,7 @@ std::size_t reload_mcp_plugins() {
 }
 
 void invalidate_mcp_catalog() {
-    // No re-spawn: bump the pool generation (so refresh_wire_cache_locked
+    // No re-spawn: bump the pool generation (so refresh_wire_cache
     // rebuilds) and drop the published snapshot. project_tools re-reads the
     // live tools.exclude on the rebuild, so an enable/disable toggle takes
     // effect on the next catalog access with zero server churn.

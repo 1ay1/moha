@@ -334,11 +334,32 @@ namespace runner_ui {
         }
     };
     tick();
+    // Exit conditions, in the order they matter:
+    //   • EOF on the pipe — the normal case (child exited, no survivors).
+    //   • CHILD DEAD + PIPE QUIET — the hang-proof case. EOF requires
+    //     EVERY write end closed, and a grandchild the command left
+    //     behind (`npm run dev &`, a daemonizing build, a watcher)
+    //     inherits stdout/stderr and can hold the pipe open FOREVER
+    //     after the child exits. Without this arm the TUI stayed
+    //     suspended indefinitely — the reported "^G sometimes hangs".
+    //     So: reap the child without blocking inside the loop; once it
+    //     is dead and a full poll interval passes with no data, stop.
+    //     A still-attached background survivor that writes later gets
+    //     EPIPE/SIGPIPE — the price of restoring the UI; a command that
+    //     WANTS a survivor should redirect its output (`… > log &`).
+    bool child_reaped = false;
+    int  status = 0;
     for (;;) {
         struct pollfd pfd{fds[0], POLLIN, 0};
         const int pr = ::poll(&pfd, 1, 1000);
         tick();   // refresh timers whether or not output arrived this tick
-        if (pr == 0) continue;
+        if (!child_reaped
+            && ::waitpid(pid, &status, WNOHANG) == pid)
+            child_reaped = true;
+        if (pr == 0) {
+            if (child_reaped) break;   // dead + quiet ≥ 1s → done
+            continue;
+        }
         if (pr < 0) {
             if (errno == EINTR) continue;
             break;
@@ -362,8 +383,8 @@ namespace runner_ui {
     ui::restore_title();
     ::close(fds[0]);
 
-    int status = 0;
-    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    if (!child_reaped)
+        while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     ::sigaction(SIGINT,  &old_int,  nullptr);
     ::sigaction(SIGQUIT, &old_quit, nullptr);
 
@@ -423,6 +444,9 @@ namespace runner_ui {
             ::tcsetattr(STDIN_FILENO, TCSANOW, &raw);
         }
         char c;
+        // EINTR retries; EOF (0) and real errors (EIO after a hangup) fall
+        // through to the restore path — this gate can stall only for a live
+        // tty with a human who hasn't pressed a key yet, which is its job.
         while (::read(STDIN_FILENO, &c, 1) < 0 && errno == EINTR) {}
         if (have_termios) ::tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
         ui::clear_line();
