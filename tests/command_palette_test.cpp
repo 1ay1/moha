@@ -30,6 +30,7 @@ static constexpr std::array kAll = {
     Command::SmartMode,
     Command::RewindCheckpoint, Command::ForkThread,
     Command::OpenPlugins, Command::OpenCommands, Command::OpenAgents, Command::OpenHooks,
+    Command::OpenGeneralSettings,
     Command::OpenRag, Command::OpenLogin,
     Command::SignOut, Command::UpdateAgentty, Command::Quit,
 };

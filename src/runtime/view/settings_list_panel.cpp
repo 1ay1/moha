@@ -14,6 +14,7 @@
 #include "panels/panels_common.hpp"   // kPanel* widths, panel_viewport_h
 
 #include "agentty/runtime/view/helpers.hpp"
+#include "agentty/runtime/view/hints.hpp"   // key_hints — the shared footer idiom
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/panel/settings/list.hpp"
 #include "agentty/runtime/panel/settings/items.hpp"
@@ -208,22 +209,16 @@ Element settings_list_picker(const Model& m) {
                 text(act_hint, fg_of(fg))
             ).build());
 
-        std::vector<Element> keys;
-        keys.push_back(text("  \xe2\x86\x91\xe2\x86\x93 ", fg_of(fg)));
-        keys.push_back(text("move   ", fg_dim(muted)));
-        keys.push_back(text("\xe2\x86\xb5 ", fg_of(fg)));
-        keys.push_back(text("act   ", fg_dim(muted)));
-        if (can_add(o->concern)) {
-            keys.push_back(text("a ", fg_of(success)));
-            keys.push_back(text("add   ", fg_dim(muted)));
-        }
-        if (o->concern == se::Category::Plugins) {
-            keys.push_back(text("d ", fg_of(warn)));
-            keys.push_back(text("remove   ", fg_dim(muted)));
-        }
-        keys.push_back(text("esc ", fg_of(fg)));
-        keys.push_back(text("close", fg_dim(muted)));
-        cfg.footer.push_back(h(std::move(keys)).build());
+        // The shared key_hints idiom (hints.hpp), not hand-built runs —
+        // every other picker's footer goes through it, and the drift this
+        // file had (its own spacing, its own hue choices) is exactly what
+        // the helper exists to prevent. Conditional verbs stay conditional.
+        std::vector<Hint> keys{{"\xe2\x86\x91\xe2\x86\x93", "move", 5},
+                               {"\xe2\x86\xb5", "act", 5}};
+        if (can_add(o->concern))                     keys.push_back({"a", "add", 2, success});
+        if (o->concern == se::Category::Plugins)     keys.push_back({"d", "remove", 3, warn});
+        keys.push_back({"esc", "close", 5});
+        cfg.footer.push_back(key_hints(std::move(keys)));
     }
 
     return Panel{std::move(cfg)}.build();

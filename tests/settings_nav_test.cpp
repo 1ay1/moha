@@ -66,6 +66,8 @@ Model press_escape(Model m) {
             m = app::update(std::move(m), Msg{RagEmbedClose{}}).first;
         return m;
     }
+    if (m.ui.panel.is<pn::SettingsList>())
+        return app::update(std::move(m), Msg{CloseSettingsList{}}).first;
     return m;
 }
 
@@ -195,6 +197,21 @@ TEST_CASE("settings nav: settings list → pane → Esc returns to the list") {
               == settings::Category::General);
         CHECK(m.ui.panel.get<pn::SettingsList>()->index == idx);
     }
+}
+
+TEST_CASE("settings nav: General settings opens from the palette") {
+    // The General category (profile / Smart Mode / retrieval toggles) was
+    // fully built — rows, labels, reducer arms — but NO command opened it:
+    // dead UI until the "Settings" palette row landed. Pin reachability +
+    // the Esc chain.
+    install_stub_deps();
+    Model m = run_from_palette(Model{}, "settings",
+                               Command::OpenGeneralSettings);
+    REQUIRE(m.ui.panel.is<pn::SettingsList>());
+    CHECK(m.ui.panel.get<pn::SettingsList>()->concern
+          == settings::Category::General);
+    m = press_escape(std::move(m));
+    CHECK(m.ui.panel.is<pn::Palette>());   // snapshot restore, as everywhere
 }
 
 TEST_CASE("settings nav: the origin survives a slot round trip") {

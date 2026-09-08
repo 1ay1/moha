@@ -21,7 +21,9 @@ enum class Action : std::uint8_t {
     CycleProfile,  // General: Write → Ask → Minimal
     OpenRag,       // General: open the RAG mode picker
     OpenSmart,     // General: open Smart Mode config
-    RemovePlugin,  // Plugins: remove this server from mcp.json (deliberate; `d`)
+    // (No RemovePlugin: removal is the two-step `d` → SettingsListRemove
+    // flow, never an Enter action — a one-press destructive Enter and a
+    // two-step d coexisting was a trap. See the reducer's Activate arm.)
     TogglePlugin,  // Plugins: enable/disable the WHOLE server (Enter, reversible)
     ToggleTool,    // Plugins: enable/disable one tool (arg=server, arg2=bare)
     ApprovePlugin, // Plugins: trust this project config so its servers connect

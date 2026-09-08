@@ -219,33 +219,12 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
                     return agentty::app::update(std::move(m),
                                                 Msg{OpenSmartMode{}});
                 }
-                case se::Action::RemovePlugin: {
-                    auto path = edit_target(row);
-                    auto r = tools::plugin::remove_server(path, row.arg);
-                    maya::Cmd<Msg> cmd;
-                    if (r == tools::plugin::EditResult::Ok) {
-                        // Reload OFF the UI thread — the connect handshake
-                        // can take a beat and must never freeze the TUI. The
-                        // config write already happened synchronously; the
-                        // reload re-syncs the pool and PluginsUpdated lands
-                        // the fresh snapshot in m.ui.plugins.
-                        m.ui.plugins_loading = true;
-                        cmd = maya::Cmd<Msg>::batch(std::vector<maya::Cmd<Msg>>{
-                            cmdf::load_plugins_async(/*reconnect=*/true),
-                            set_status_toast(m, "removed plugin '" + row.arg +
-                                                "' — disconnected")});
-                    } else {
-                        cmd = set_status_toast(m,
-                                  "could not remove '" + row.arg + "'");
-                    }
-                    // Re-clamp: the list shrank by one.
-                    if (auto* oo = m.ui.panel.get<pn::SettingsList>()) {
-                        const int n = static_cast<int>(
-                            se::items_for(m, oo->concern).size());
-                        oo->index = std::clamp(oo->index, 0, std::max(0, n - 1));
-                    }
-                    return {std::move(m), std::move(cmd)};
-                }
+                // (There is deliberately NO Activate-arm for plugin removal.
+                // Removal is `d` → SettingsListRemove, which is TWO-step —
+                // arm, then confirm. An Enter-fired remove here would be a
+                // one-press destructive action; the old arm was unreachable
+                // — no row builder ever emitted it — but unreachable code
+                // with live side effects is a trap, not a feature.)
                 case se::Action::TogglePlugin: {
                     // Ignore a toggle while a connect/reload is already in
                     // flight — the snapshot (and this row's on/off) is mid-

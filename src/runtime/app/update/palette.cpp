@@ -108,6 +108,8 @@ template <class T, class V>
         add(Command::OpenCommands,     emit_val<OpenSettingsList>(settings::Category::Commands));
         add(Command::OpenAgents,       emit_val<OpenSettingsList>(settings::Category::Agents));
         add(Command::OpenHooks,        emit_val<OpenSettingsList>(settings::Category::Hooks));
+        add(Command::OpenGeneralSettings,
+            emit_val<OpenSettingsList>(settings::Category::General));
         // ── Account ──
         add(Command::OpenLogin,        emit<OpenLogin>());
         add(Command::SignOut,          emit<SignOut>());
