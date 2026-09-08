@@ -1129,6 +1129,11 @@ std::vector<Thread> load_all_threads() {
     bool index_dirty = false;
 
     for (const auto& e : fs::directory_iterator(threads_dir(), ec)) {
+        // Skip subdirectories outright. `blobs/` (the image / tool-output /
+        // thinking payload store) lives here, and while the .json filter
+        // below happens to exclude it today, that is incidental — a future
+        // sidecar dir named `foo.json` would be parsed as a thread.
+        if (e.is_directory(ec)) continue;
         if (e.path().extension() != ".json") continue;
         // acp_sessions.json is the ACP server's sidecar session index
         // (sessionId → {cwd, title, updatedAt}), not a thread file; and
