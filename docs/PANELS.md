@@ -251,6 +251,10 @@ content instead of inventing a magic number.
 7. If it needs revalidation after Esc-restore, add a branch in
    `ascend()` (meta.cpp). Free text needs nothing; live-list cursors
    need a clamp.
+8. Every VISIBLE facet of the panel's state must feed `visual_hash`
+   (program.hpp) — forms get it via `mix_form()`; anything else must be
+   mixed by hand or the frame gate will eat its repaints. See "Known
+   design debt" below.
 
 Steps 2 and 5 are the remaining hand-maintained arms. The next design step,
 if the count ever grows: derive variant, `Kind`, and both dispatch switches
@@ -258,6 +262,29 @@ from one compile-time panel list (descriptor registry), making a missing
 arm impossible rather than a warning. Not done yet — at ~16 panels the
 exhaustive switches are honest work, and the registry's template cost to
 the 1.7 s edit loop is unmeasured.
+
+## Known design debt: visual_hash is a hand-maintained mirror
+
+`visual_hash(Model)` (program.hpp) must enumerate every model facet the
+view renders; the frame gate skips "visually identical" frames by this
+hash. That is a PARALLEL DESCRIPTION of the view's dependency set with no
+mechanism keeping the two equal — the same twin-chains disease `top()`
+cures for key routing, alive at the render gate. It has produced a whole
+bug class (state changes, view would differ, hash doesn't move, repaint
+skipped): login inputs, both forms, the rag probe verdict, the result
+card's scroll — each found by hand, each fixed by hand.
+
+Mitigations in place: `mix_form()` digests any form-backed pane whole;
+`form::value_digest()` fingerprints field values length-only (no secret
+bytes near the hash); the visual-hash coverage test pins known facets.
+These centralize, but the contract is still "remember to teach the hash".
+
+The real fix, when it earns a day: derive the mix STRUCTURALLY from the
+panel state types (pfr-style aggregate walk; C++26 reflection when
+available), with an explicit opt-OUT marker for genuinely non-visual
+fields — inverting the default so forgetting is impossible and exemption
+is the visible, reviewable act. Until then: adding visible panel state
+MEANS updating visual_hash, and the add-a-panel checklist says so.
 
 ---
 
