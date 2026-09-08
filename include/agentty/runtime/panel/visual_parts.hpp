@@ -9,6 +9,8 @@
 //
 // Included by program.hpp only (the hash site); zero cost anywhere else.
 
+#include "agentty/domain/catalog.hpp"
+#include "agentty/mcp/plugin_model.hpp"
 #include "agentty/runtime/login.hpp"
 #include "agentty/runtime/panel/slot.hpp"
 #include "agentty/runtime/visual.hpp"
@@ -44,6 +46,53 @@ inline auto visual_parts(const EmbedConfig& c) {
 static_assert(visual::parts_cover_all<EmbedConfig>);
 
 } // namespace agentty::rag::embed
+
+// ── domain: the fused-model catalog + panel-adjacent snapshots ───────
+namespace agentty {
+
+// Id<Tag> has constructors (not an aggregate); one visible member.
+template <class Tag>
+inline auto visual_parts(const Id<Tag>& id) {
+    return std::make_tuple(visual::ref(id.value));
+}
+
+// ProviderCatalog: the DERIVED caches (search_keys, row_keys,
+// display_labels, reason_flags — rebuilt from `models` and only when it
+// changes) are exempt: walking 450 lowercased haystacks per frame buys
+// nothing `models` doesn't already signal. loaded_at_ms is a freshness
+// clock, not pixels.
+inline auto visual_parts(const ProviderCatalog& c) {
+    return std::make_tuple(visual::ref(c.provider_id), visual::ref(c.label),
+                           c.state, visual::ref(c.models),
+                           visual::ref(c.account_label),
+                           visual::exempt,   // loaded_at_ms: TTL clock
+                           visual::exempt,   // search_keys:  derived cache
+                           visual::exempt,   // row_keys:     derived cache
+                           visual::exempt,   // display_labels: derived cache
+                           visual::exempt,   // reason_flags: derived cache
+                           visual::exempt);  // reason_epoch: cache version stamp
+}
+static_assert(visual::parts_cover_all<ProviderCatalog>);
+
+} // namespace agentty
+
+namespace agentty::mcp {
+
+// ServerState: everything renders (the settings list projects the whole
+// row — connection state, error, origin badge, the tool subtree).
+// Auto-decomposition would work if every member were public+aggregate;
+// spelled out because Origin lives beside strings and the list doubles as
+// the visibility record.
+inline auto visual_parts(const ServerState& s) {
+    return std::make_tuple(visual::ref(s.name), visual::ref(s.command),
+                           visual::ref(s.url), s.connected, s.disabled,
+                           visual::ref(s.error), s.origin,
+                           visual::ref(s.config_dir), s.untrusted,
+                           visual::ref(s.tools));
+}
+static_assert(visual::parts_cover_all<ServerState>);
+
+} // namespace agentty::mcp
 
 namespace agentty::form {
 

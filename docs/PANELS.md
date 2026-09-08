@@ -294,10 +294,13 @@ child is open) — also pinned.
 Cost: ~540 ns to walk the heaviest panel (rag, 22-field form) —
 measured, ≌0.002% of a 30fps frame.
 
-Hand-mixed remnants, on purpose: panel-ADJACENT state living outside the
-slot value (fused catalogs/rows, reducer-driven ScrollState offsets, the
-plugins snapshot, thread/composer/status state). Same rule applies when
-touching those: the walk cannot see what is not in the state types.
+Hand-mixed remnants, on purpose: reducer-driven ScrollState offsets (.y
+is the only visible member of maya render plumbing) and thread/composer/
+status state outside the panel domain. Todo, the plugins snapshot, and
+the fused catalogs/rows (gated to the models panel being open — walking
+a closed panel's 8×60-model warm cache per idle tick is waste) are all
+walked structurally with parts lists in visual_parts.hpp; the catalog's
+derived caches (search_keys …) and TTL clock are exempt with reasons.
 
 ---
 

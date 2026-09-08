@@ -13,6 +13,7 @@
 #include "agtest.hpp"
 
 #include "agentty/runtime/panel/visual_parts.hpp"
+#include "agentty/runtime/model.hpp"   // TodoState
 
 #include <string>
 
@@ -120,4 +121,44 @@ TEST_CASE("visual walk: exempt facets are exempt (From does not churn)") {
     a.from = pn::From::of(pn::Snapshot{sa.raw()});
     b.from = pn::From::of(pn::Snapshot{sb.raw()});
     CHECK(walk(a) == walk(b));
+}
+
+TEST_CASE("visual walk: panel-adjacent state is covered too") {
+    // Todo items: the agent rewrites them mid-stream while the modal is
+    // open — previously only open/closed was hashed (a live bug this
+    // migration surfaced: a status flip didn't repaint).
+    TodoState t;
+    t.items.push_back({"write tests", TodoStatus::Pending});
+    const auto t0 = walk(t);
+    { auto u = t; u.items[0].status = TodoStatus::Completed;
+      CHECK(walk(u) != t0); }
+    { auto u = t; u.items[0].content = "write MORE tests";
+      CHECK(walk(u) != t0); }
+    { auto u = t; u.items.push_back({"another", TodoStatus::Pending});
+      CHECK(walk(u) != t0); }
+
+    // Plugins snapshot: connection/disable/error flips repaint the
+    // settings list.
+    mcp::PluginModel p;
+    mcp::ServerState s; s.name = "srv"; s.connected = false;
+    p.servers.push_back(s);
+    const auto p0 = walk(p);
+    { auto q = p; q.servers[0].connected = true;  CHECK(walk(q) != p0); }
+    { auto q = p; q.servers[0].disabled = true;   CHECK(walk(q) != p0); }
+    { auto q = p; q.servers[0].error = "boom";    CHECK(walk(q) != p0); }
+    { auto q = p; q.servers[0].tools.push_back({"t", "d", true, false});
+      CHECK(walk(q) != p0); }
+
+    // Catalogs: models/state/account move the hash; the derived caches
+    // and the TTL clock deliberately do NOT.
+    ProviderCatalog c;
+    c.provider_id = "anthropic";
+    const auto c0 = walk(c);
+    { auto d = c; d.state = ProviderCatalog::State::Ready;
+      CHECK(walk(d) != c0); }
+    { auto d = c; d.models.push_back({}); CHECK(walk(d) != c0); }
+    { auto d = c; d.account_label = "work"; CHECK(walk(d) != c0); }
+    { auto d = c; d.loaded_at_ms = 12345;   CHECK(walk(d) == c0); }
+    { auto d = c; d.search_keys.push_back("cache");
+      CHECK(walk(d) == c0); }
 }

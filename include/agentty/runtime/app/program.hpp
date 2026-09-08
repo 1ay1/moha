@@ -161,39 +161,32 @@ struct AgenttyApp {
         // alternative blocks below add cursor/query movement INSIDE the
         // open overlay.
         mix(static_cast<std::uint64_t>(m.ui.panel.raw().index()));
-
-        // ── The panel slot: ONE structural walk ──────────────────────
-        // Every alternative's every visible facet, DERIVED from the state
-        // types by visual::mix_any (visual.hpp): scalars, strings,
-        // variants, optionals and ranges walk automatically; a type the
-        // walk can't decompose (bases+members, or one holding a SECRET)
-        // must declare visual_parts beside its definition, with
-        // parts_cover_all proving every member was accounted for
-        // (panel/visual_parts.hpp). Adding a member to any panel state is
-        // therefore hashed BY DEFAULT — the bug class where a facet was
-        // forgotten here (login inputs, both forms, the probe verdict, the
-        // result-card scroll…) is unrepresentable, not just fixed.
-        //
-        // Secrets: field::Secret and EmbedConfig::api_key are digested as
-        // LENGTHS via their parts lists — credential bytes never reach the
-        // hash (visual_hash_walk_test pins it).
         visual::mix_any(mix, m.ui.panel.raw());
 
-        // Panel-adjacent state that lives OUTSIDE the slot value but feeds
-        // the same views (hand-mixed because it is not part of any panel
-        // state type — the walk cannot see it from the slot):
-        //   • fused catalogs + row cache (models panel's async data)
-        for (const auto& c : m.d.provider_catalogs) {
-            mix_str(c.provider_id);
-            mix(static_cast<std::uint64_t>(c.models.size()));
-            mix(static_cast<std::uint64_t>(c.state));
+        // Panel-adjacent state OUTSIDE the slot value that the panel views
+        // read — walked with the same machinery (their types carry
+        // visual_parts where a member is derived cache or a clock):
+        //   • fused catalogs + row cache — ONLY while the models panel is
+        //     open (they are its async data; the catalogs persist after
+        //     close as a warm cache, and walking 8×60 models per idle tick
+        //     for a closed panel is pure waste — measured ~5µs vs ~540ns
+        //     for the whole slot).
+        if (m.ui.panel.is<pn::Models>()) {
+            visual::mix_any(mix, m.d.provider_catalogs);
+            visual::mix_any(mix, m.d.fused_rows);
         }
-        mix(static_cast<std::uint64_t>(m.d.fused_rows.size()));
-        for (const auto& r : m.d.fused_rows)
-            mix(static_cast<std::uint64_t>((r.model.favorite ? 1u : 0u)
-                                         | (r.active ? 2u : 0u)));
-        //   • body-scroll offsets driven by reducers through ScrollStates
-        //     (the view windows rows around .y; no widget writeback)
+        //   • the todo modal: open/closed AND the items — the agent
+        //     rewrites items mid-stream while the modal is open, which was
+        //     hash-invisible (the exact forgotten-facet class, found by
+        //     this migration).
+        visual::mix_any(mix, m.ui.todo);
+        //   • the plugins snapshot the settings list projects
+        mix(m.ui.plugins_loading ? 1ULL : 0ULL);
+        visual::mix_any(mix, m.ui.plugins);
+        //   • body-scroll offsets driven by reducers through ScrollStates.
+        //     ScrollState itself is maya render plumbing (writeback fields,
+        //     bar caches) — only .y is reducer-driven visible state, so it
+        //     is mixed here rather than walked.
         if (m.ui.panel.is<pn::ToolOutput>()) {
             mix(static_cast<std::uint64_t>(m.ui.tool_viewer_scroll.y));
             mix(m.ui.tool_viewer_tail ? 1ULL : 0ULL);
@@ -201,45 +194,9 @@ struct AgenttyApp {
         if (m.ui.panel.is<pn::CodeBlockResult>())
             mix(static_cast<std::uint64_t>(m.ui.code_blocks_scroll.y));
 
-        mix(static_cast<std::uint64_t>(m.ui.todo.open.index()));
         // Login: its own variant outside the slot; same walk, same
-        // guarantees (the input states' buffers digest via the string arm —
-        // length + content-fingerprint; OAuth codes are short-lived and the
-        // gate needs to see edits, unlike Secret fields which stay
-        // length-only by their parts list).
+        // guarantees (secret buffers digest length-only via parts lists).
         visual::mix_any(mix, m.ui.login);
-        // Plugins snapshot (owned in the Model). The panel is a pure
-        // projection of m.ui.plugins, so its connection state must feed the
-        // hash directly — no nonce. A cheap structural digest: loading flag,
-        // server count, and per-server connected/error/tool-count. When a
-        // background connect lands via PluginsUpdated this digest changes and
-        // the panel repaints; when nothing changed it's stable (free tick).
-        mix(m.ui.plugins_loading ? 1ULL : 0ULL);
-        mix(m.ui.plugins.servers.size());
-        for (const auto& s : m.ui.plugins.servers) {
-            mix_str(s.name);
-            mix((s.connected ? 2ULL : 1ULL));
-            // disabled is distinct from "not connected": both have
-            // connected=false but render differently (Neutral "disabled" vs
-            // Pending "connecting…" + a dimmed subtree), so it must feed the
-            // hash or a disable→enable that doesn't change the connected bit
-            // in this frame wouldn't repaint.
-            mix(s.disabled ? 4ULL : 0ULL);
-            mix(s.error.size());
-            mix(s.tools.size());
-            mix(s.enabled_count());
-        }
-
-        // The remaining selection overlays. Same contract as every picker
-        // above: their open/closed state AND the in-overlay cursor must feed
-        // the hash, or an ↑/↓ that mutates only the cursor produces an
-        // identical hash and the move is gated away until the caret parity
-        // flips ~265 ms later — the "selector doesn't move sometimes"
-        // symptom. These three were entirely absent from the hash.
-        //   • Smart Mode config overlay (Ctrl+S) — a OneAxis like the pickers.
-        // (Rag — form, probe verdict, cursor — and Fork are fully covered
-        // by the structural walk above; EmbedForm's probe variant and the
-        // form ride in via their types' default decomposition/parts.)
 
         // Time-driven animation buckets. Each bucket flip forces a
         // render via hash advance. The bucket size is the FLOOR on
