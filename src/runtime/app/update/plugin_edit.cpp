@@ -47,6 +47,12 @@ using maya::Cmd;
 
 namespace {
 
+using pf::kNoteRemoveArmed;
+// The note to restore on disarm depends on the pane mode.
+[[nodiscard]] const char* default_note(bool add_mode) {
+    return add_mode ? pf::kNoteAdd : pf::kNoteDetail;
+}
+
 // ── snapshot → form inputs ────────────────────────────────────────────
 
 [[nodiscard]] std::string kind_of(const mcp::ServerState& s) {
@@ -243,6 +249,15 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
             if (applied.close)
                 return agentty::app::update(std::move(m), Msg{ClosePluginEdit{}});
 
+            // Moving off an armed Remove row disarms it — same contract as
+            // the settings list's `d` (any navigation cancels a pending
+            // destructive step; only Enter-again on the SAME row fires).
+            if (o->form.note == kNoteRemoveArmed) {
+                const auto* now_row = o->form.focused();
+                if (!now_row || now_row->id != pf::kRemove)
+                    o->form.note = default_note(o->server.empty());
+            }
+
             // ── kind change (add mode): rebuild the field set ─────────
             if (applied.changed && row_id == pf::kKind && o->server.empty()) {
                 const std::string kind = choice_of(o->form, pf::kKind);
@@ -286,7 +301,13 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
                 // Any other change (url text etc.) is save-owned; fall out.
             }
 
-            if (!applied.fired) return done(std::move(m));
+            // ^S saves from ANYWHERE in the form — the same chord every
+            // other form pane (Rag) honours; without this the pane looks
+            // like a form but ignores the form's save key.
+            const bool want_save =
+                applied.save || (applied.fired && row_id == pf::kSave);
+
+            if (!applied.fired && !want_save) return done(std::move(m));
 
             // ── action rows ───────────────────────────────────────────
             if (row_id == pf::kApprove && !o->server.empty()) {
@@ -303,10 +324,10 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
                 return {std::move(m), set_status_toast(m, "approve failed")};
             }
 
-            if (row_id == pf::kRemove && !o->server.empty()) {
+            if (row_id == pf::kRemove && !o->server.empty() && !want_save) {
                 // Two-step: first Enter arms (note explains), second fires.
-                if (o->form.note != "Enter again to REMOVE — Esc keeps it") {
-                    o->form.note = "Enter again to REMOVE — Esc keeps it";
+                if (o->form.note != kNoteRemoveArmed) {
+                    o->form.note = kNoteRemoveArmed;
                     return done(std::move(m));
                 }
                 const fs::path path = config_target(*o, m);
@@ -321,7 +342,7 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
                 return {std::move(m), set_status_toast(m, "remove failed")};
             }
 
-            if (row_id == pf::kSave) {
+            if (want_save) {
                 const std::string kind = o->server.empty()
                     ? choice_of(o->form, pf::kKind) : o->built_kind;
                 tools::plugin::ServerSpec spec;

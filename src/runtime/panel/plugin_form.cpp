@@ -137,8 +137,7 @@ form::Form build_form(const PluginFormInputs& in) {
                  "deletes the entry from its mcp.json (asks once)");
     }
 
-    b.note(add ? "↑↓ rows · Enter edit/choose · Esc back"
-               : "↑↓ rows · Enter edit/toggle · Esc back");
+    b.note(add ? kNoteAdd : kNoteDetail);
     return b.build();
 }
 
