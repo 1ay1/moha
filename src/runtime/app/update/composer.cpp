@@ -27,6 +27,7 @@
 #include "agentty/runtime/app/cmd_factory.hpp"   // cmd::refresh_oauth
 #include "agentty/auth/auth.hpp"                  // oauth_proactive_refresh_token
 #include "agentty/io/clipboard.hpp"
+#include "agentty/util/logx.hpp"          // AGT_LOG — paste-path tracing
 #include "agentty/provider/selection.hpp"   // prewarm_active_provider
 #include "agentty/util/home_dir.hpp"
 #include "agentty/util/env.hpp"
@@ -910,6 +911,20 @@ Step composer_update(Model m, msg::ComposerMsg cm) {
             if (e.text.empty())
                 return smart_paste_from_clipboard(std::move(m));
 
+            // Instrument the paste path. Six turns of this session were
+            // spent guessing WHY a 100 KB image showed up as 4 KB, because
+            // nothing here left a trace: the same symptom fits a truncating
+            // parser, a swallowed continuation chunk, and a per-chunk
+            // attachment, and only a log distinguishes them. One line per
+            // paste with the size and the branch taken makes the next
+            // report answerable from the log instead of from a screenshot.
+            AGT_LOG(Ui, Info, "paste.recv",
+                    "bytes={} wanted_image={} magic={} first16={:.16}",
+                    e.text.size(), wanted_image ? 1 : 0,
+                    detect_image_media_type(e.text)
+                        ? detect_image_media_type(e.text) : "-",
+                    e.text);
+
             // Bracketed-paste of raw image bytes — vanishingly rare
             // (most terminals scrub binary out of paste), but Kitty
             // and Wezterm with `--allow-passthrough`-style options
@@ -918,6 +933,8 @@ Step composer_update(Model m, msg::ComposerMsg cm) {
             // PNG that happens to start with bytes that could parse
             // as a path takes the right branch.
             if (auto* mt = detect_image_media_type(e.text); mt != nullptr) {
+                AGT_LOG(Ui, Info, "paste.image_bytes",
+                        "media_type={} bytes={}", mt, e.text.size());
                 begin_edit(m.ui.composer);
                 Attachment att;
                 att.kind       = Attachment::Kind::Image;
