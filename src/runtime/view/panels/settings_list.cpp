@@ -175,6 +175,18 @@ Element settings_list_panel(const Model& m) {
         }
         row.trailing       = it.secondary;
         row.trailing_style = fg_dim(muted);
+        // Info rows (no Enter action) carry PROSE in `secondary` — "press
+        // `a` to add one, or agentty plugin add <name>…". As a trailing
+        // cell that prose right-aligns and fights the leading for one row's
+        // width (the leading truncated to "(no plugins configure…" on a
+        // standard panel). Prose belongs UNDER the row — the same
+        // Item::help idiom the palette uses — full width, shown on the
+        // focused row. Actionable rows keep secondary as trailing: theirs
+        // is short reference data (a command line, a path), not prose.
+        if (it.action == se::Action::None && !it.indented) {
+            row.help = it.secondary;
+            row.trailing.clear();
+        }
         // Armed for removal (first `d` pressed on this row) — paint it as a
         // clear, reversible danger prompt: the second `d` commits, anything
         // else disarms.
