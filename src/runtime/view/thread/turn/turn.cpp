@@ -21,6 +21,7 @@
 #include <maya/render/renderer.hpp> // build_layout_tree / layout::compute
 #include <maya/layout/yoga.hpp>     // maya::layout::compute / LayoutNode
 #include <maya/platform/io.hpp>
+#include <maya/terminal/tmux.hpp>  // tmux::active — gate viewport-blind reveal overlay
 #include <maya/style/theme.hpp>
 #include <maya/core/motion.hpp>   // anim::keep_animating — frame requests
 
@@ -135,6 +136,16 @@ maya::Element cached_markdown_for(const Message& msg, const Model& m,
         // caret on the streaming edge (maya reveal_fx). Only animates while
         // the widget is live_; the settled build is untouched.
         cache.streaming->set_reveal_fx(true);
+        // ...but the reveal's DECORATIVE glyph overlay (scramble→resolve,
+        // gradient trail, pulsing caret) is viewport-blind: it rewrites the
+        // trailing row's glyphs every frame and can only safely touch the
+        // bottom row because it can't see the scroll position. Under tmux,
+        // which owns its own scroll region, those per-frame rewrites desync
+        // from the mux grid and GHOST/overlap onto the rows above the live
+        // tail. Keep the progressive typewriter CLIP (text still walks in at
+        // the cursor's pace) but drop the decoration there — calm, ghost-free
+        // streaming on tmux, full effect on a direct terminal.
+        cache.streaming->set_reveal_decorate(!::maya::tmux::active());
         // Reveal pacing for the rate-smoothed bounded-lag cursor (maya
         // RateCursor). The cursor reveals at backlog / drain_secs, so it
         // TRACKS the model's own speed with a fixed time lag, and low-passes
