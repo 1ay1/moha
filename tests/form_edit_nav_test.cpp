@@ -361,6 +361,29 @@ int main() {
         std::fprintf(stderr, "probe race: stale dropped, fresh landed\n");
     }
 
+    // ── Filter paste: with the palette open, a pasted string lands in the
+    // QUERY (replayed as typed input — same filtering semantics), not in
+    // the composer behind it. Control chars are stripped. ───────────
+    {
+        Model m2;
+        m2 = step(std::move(m2), Msg{OpenPalette{}}, "fpaste: open");
+        m2 = step(std::move(m2), Msg{PanelFilterPaste{"set\ntings"}},
+                  "fpaste: paste");
+        const auto* p = m2.ui.panel.get<pn::Palette>();
+        if (!p) { std::fprintf(stderr, "FAIL: palette gone after paste\n"); return 1; }
+        if (p->query != "settings") {
+            std::fprintf(stderr, "FAIL: paste query '%s' (want 'settings')\n",
+                         p->query.c_str());
+            return 1;
+        }
+        if (!m2.ui.composer.text.empty()) {
+            std::fprintf(stderr, "FAIL: paste leaked into the composer\n");
+            return 1;
+        }
+        std::fprintf(stderr, "fpaste: query='%s', composer clean\n",
+                     p->query.c_str());
+    }
+
     std::fprintf(stderr, "ALL OK\n");
     return 0;
 }

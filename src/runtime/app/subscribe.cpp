@@ -1128,7 +1128,12 @@ Sub<Msg> subscribe(const Model& m) {
     auto paste_sub = Sub<Msg>::on_paste(
         [in_login, settings_list_adding,
          rag_editing   = rag_form.editing,
-         smart_editing = smart_form_snap.editing](std::string s) -> Msg {
+         smart_editing = smart_form_snap.editing,
+         filter_open   = active_panel == ui::panel::Kind::Palette
+                      || active_panel == ui::panel::Kind::Models
+                      || active_panel == ui::panel::Kind::Providers
+                      || active_panel == ui::panel::Kind::Mention
+                      || active_panel == ui::panel::Kind::Symbol](std::string s) -> Msg {
         // Route a bracketed paste to whatever modal currently owns text
         // input, so it lands in that field's buffer — NOT the composer.
         //   • login modal open      → its code/key fields (OAuth codes, keys)
@@ -1145,6 +1150,12 @@ Sub<Msg> subscribe(const Model& m) {
         if (settings_list_adding) return SettingsListPaste{std::move(s)};
         if (rag_editing)   return RagEmbedPaste{std::move(s)};
         if (smart_editing) return SmartModePaste{std::move(s)};
+        //   • a FILTER panel open (palette/models/providers/mention/symbol)
+        //     → its query. Without this the paste dropped into the composer
+        //     BEHIND the open panel — same silent mis-target the form panes
+        //     had. The reducer replays it as typed input, so panel-hop mid-
+        //     batch degrades to a dropped paste, never a mis-target.
+        if (filter_open) return PanelFilterPaste{std::move(s)};
         return ComposerPaste{std::move(s)};
     });
 

@@ -150,6 +150,31 @@ Step palette_update(Model m, msg::PaletteMsg pm) {
             ascend(m);
             return done(std::move(m));
         },
+        [&](PanelFilterPaste& e) -> Step {
+            // ONE arm for every filter panel: replay the paste through the
+            // open panel's OWN typed-input message, one char at a time — so
+            // paste has exactly typing's semantics (ASCII gate, cursor
+            // reset, the models panel's re-rank) with no duplicated logic
+            // and no cross-TU coupling. Control chars are dropped here so a
+            // multi-line clipboard can't smuggle newlines into a filter.
+            // Bounded by clipboard size; each step is the cheap typed path.
+            Step st{std::move(m), maya::Cmd<Msg>::none()};
+            for (char c : e.text) {
+                const auto u = static_cast<unsigned char>(c);
+                if (u < 0x20 || u >= 0x7f) continue;
+                const auto ch = static_cast<char32_t>(u);
+                Msg per_char =
+                    st.first.ui.panel.is<pn::Palette>()   ? Msg{PaletteInput{ch}}
+                  : st.first.ui.panel.is<pn::Models>()    ? Msg{ModelsFilterInput{ch}}
+                  : st.first.ui.panel.is<pn::Providers>() ? Msg{ProvidersFilterInput{ch}}
+                  : st.first.ui.panel.is<pn::Mention>()   ? Msg{MentionInput{ch}}
+                  : st.first.ui.panel.is<pn::Symbol>()    ? Msg{SymbolInput{ch}}
+                                                          : Msg{NoOp{}};
+                st = agentty::app::update(std::move(st.first),
+                                          std::move(per_char));
+            }
+            return st;
+        },
         [&](PaletteInput& e) -> Step {
             auto* o = m.ui.panel.get<pn::Palette>();
             if (o && static_cast<uint32_t>(e.ch) < 0x80) {

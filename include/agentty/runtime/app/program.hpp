@@ -159,6 +159,43 @@ struct AgenttyApp {
         // alternative blocks below add cursor/query movement INSIDE the
         // open overlay.
         mix(static_cast<std::uint64_t>(m.ui.panel.raw().index()));
+
+        // ── ONE digest for any form-backed pane (SmartMode, Rag) ──────
+        // The login-paste bug generalized: a form's VISIBLE state is much
+        // more than its cursor. Typing mutates a field's value; Enter flips
+        // Browsing→Editing (caret appears, footer hint swaps); a dropdown
+        // owns a highlight; edits flip `dirty` (the unsaved note) and
+        // rewrite `note`. Every one of those was hash-invisible — typing
+        // into a Rag Text field, pasting into it, or moving inside a
+        // dropdown repainted only when something unrelated advanced the
+        // hash. Mix them all here, once, for every form.
+        //
+        // Values are digested as LENGTHS (Secret stays count-only — no
+        // secret bytes near the hash; a same-length overwrite is the only
+        // blind spot, unreachable from single edits which also move the
+        // caret we mix).
+        auto mix_form = [&](const agentty::form::Form& f) {
+            mix(static_cast<std::uint64_t>(f.cursor));
+            mix(static_cast<std::uint64_t>(f.fields.size()));
+            mix(static_cast<std::uint64_t>(f.focus.index()));   // B/E/C mode
+            mix(f.dirty ? 1ULL : 0ULL);
+            mix_str(f.note);
+            if (const auto* d = f.dropdown()) {
+                mix(static_cast<std::uint64_t>(d->highlighted));
+                mix(static_cast<std::uint64_t>(d->scroll));
+            }
+            if (const auto* row = f.focused()) {
+                mix_str(row->id);
+                mix_str(row->error);
+                // Value digest: a length-only fingerprint per kind covers
+                // typing, backspace, paste, toggle and cycle; caret_chars
+                // covers caret motion. No value BYTES enter the hash.
+                mix(static_cast<std::uint64_t>(
+                    agentty::form::value_digest(row->value)));
+                mix(static_cast<std::uint64_t>(
+                    agentty::form::caret_chars(row->value, f.editing())));
+            }
+        };
         if (auto* pp = m.ui.panel.get<pn::Providers>()) {
             mix(static_cast<std::uint64_t>(pp->index));
             mix_str(pp->query);
@@ -168,15 +205,8 @@ struct AgenttyApp {
             mix(static_cast<std::uint64_t>(tl->index));
             mix_str(tl->confirm_remove);   // two-press delete arm state
         }
-        if (auto* sm = m.ui.panel.get<pn::SmartMode>()) {
-            mix(static_cast<std::uint64_t>(sm->form.cursor));
-            // A form row's rendered value can change without the cursor
-            // moving (a slot resolves to a different model, the master switch
-            // flips and relocks the slots), so the row COUNT and the focused
-            // row's identity both feed the frame hash.
-            mix(static_cast<std::uint64_t>(sm->form.fields.size()));
-            if (const auto* row = sm->form.focused()) mix_str(row->id);
-        }
+        if (auto* sm = m.ui.panel.get<pn::SmartMode>())
+            mix_form(sm->form);
         if (auto* fp = m.ui.panel.get<pn::Models>()) {
             mix(static_cast<std::uint64_t>(fp->index));
             mix_str(fp->query);   // live search buffer
@@ -278,6 +308,14 @@ struct AgenttyApp {
         // Code-block picker (and its Result card): same contract.
         if (auto* o = m.ui.panel.get<pn::CodeBlocks>())
             mix(static_cast<std::uint64_t>(o->index));
+        // The Result card scrolls by mutating ONLY code_blocks_scroll.y (the
+        // reducer clamps against the paint-written-back max_y; no widget
+        // writeback on the way down) — identical mechanics to the tool
+        // viewer's body stage above, and it had the identical bug: ↑/↓ on a
+        // long capture was gated away until caret parity flipped ~265 ms
+        // later. The offset must feed the hash while the card is open.
+        if (m.ui.panel.is<pn::CodeBlockResult>())
+            mix(static_cast<std::uint64_t>(m.ui.code_blocks_scroll.y));
 
         // Checkpoint picker: open/closed + cursor + each entry's async
         // diff-load state (Loading→Ready flips the visible "N files · +A −D"
@@ -343,6 +381,13 @@ struct AgenttyApp {
         if (auto* o = m.ui.panel.get<pn::Rag>()) {
             mix(static_cast<std::uint64_t>(o->cursor));
             mix(static_cast<std::uint64_t>(o->active));
+            // The pane IS a form (host, port, API key…) + an async probe
+            // whose verdict paints the Action row and footer. Both were
+            // hash-invisible: typing/pasting into a field, entering edit
+            // mode, or the probe flipping Testing→Ok repainted only when
+            // something else moved the hash.
+            mix_form(o->embed.form);
+            mix(static_cast<std::uint64_t>(o->embed.probe.index()));
         }
         //   • Fork picker (Ctrl+K → Fork thread) — 3 RAG-mode rows.
         if (auto* o = m.ui.panel.get<pn::Fork>())

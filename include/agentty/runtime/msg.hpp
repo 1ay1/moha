@@ -524,6 +524,12 @@ struct ThreadLoaded     { Thread thread; };
 struct OpenPalette {};
 struct ClosePalette {};
 struct PaletteInput { char32_t ch; };
+// Bracketed paste while a FILTER panel owns the keyboard (palette, models,
+// providers, mention, symbol): the text lands in that panel's query — not
+// the composer behind it. One message; the reducer of whichever panel is
+// open handles it (the router targets by the open Kind, and the reducers
+// re-verify — same staleness discipline as every input path).
+struct PanelFilterPaste { std::string text; };
 struct PaletteBackspace {};
 struct PaletteMove { int delta; };
 struct PaletteSelect {};
@@ -1018,7 +1024,7 @@ using ThreadListMsg = std::variant<
     ThreadListSelect, ThreadListDelete, ThreadCycle, NewThread, ThreadsLoaded, ThreadLoaded>;
 
 using PaletteMsg = std::variant<
-    OpenPalette, ClosePalette, PaletteInput,
+    OpenPalette, ClosePalette, PaletteInput, PanelFilterPaste,
     PaletteBackspace, PaletteMove, PaletteSelect>;
 
 using MentionMsg = std::variant<
