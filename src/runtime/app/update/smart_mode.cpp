@@ -55,14 +55,7 @@ Step smart_mode_update(Model m, msg::SmartModeMsg sm) {
         },
         [&](SmartModePaste& e) -> Step {
             auto* o = m.ui.panel.get<pn::SmartMode>();
-            if (!o) return done(std::move(m));
-            auto* row = o->form.focused();
-            // Reducer re-checks the true mode — the router's snapshot can be
-            // stale (same rule as the editing-intent guards in apply()).
-            if (!o->form.editing() || !row || !row->editable() || row->locked)
-                return done(std::move(m));
-            agentty::form::paste(row->value, e.text);
-            o->form.dirty = true;
+            if (o) form::paste_into(o->form, e.text);   // SSOT: guard + dirty
             return done(std::move(m));
         },
         [&](SmartModeKey& e) -> Step {

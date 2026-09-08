@@ -87,26 +87,12 @@ using pf::kNoteRemoveArmed;
     return false;
 }
 
-// ── form → values ─────────────────────────────────────────────────────
-
-[[nodiscard]] std::string text_of(const form::Form& f, const char* id) {
-    if (const auto* fld = f.find(id))
-        if (const auto* t = std::get_if<form::field::Text>(&fld->value))
-            return t->value;
-    return {};
-}
-[[nodiscard]] bool toggle_of(const form::Form& f, const char* id) {
-    if (const auto* fld = f.find(id))
-        if (const auto* t = std::get_if<form::field::Toggle>(&fld->value))
-            return t->on;
-    return false;
-}
-[[nodiscard]] std::string choice_of(const form::Form& f, const char* id) {
-    if (const auto* fld = f.find(id))
-        if (const auto* c = std::get_if<form::field::Choice>(&fld->value))
-            return std::string{c->id()};
-    return {};
-}
+// ── form → values ───────────────────────────────────────────
+// Field reads go through the form layer's SSOT accessors (form::text_of /
+// toggle_of / choice_of) — no local variant-spelunking here.
+using form::text_of;
+using form::toggle_of;
+using form::choice_of;
 
 [[nodiscard]] std::vector<std::string> split_list(std::string_view s) {
     std::vector<std::string> out;
@@ -228,12 +214,7 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
 
         [&](PluginEditPaste& e) -> Step {
             auto* o = m.ui.panel.get<pn::PluginEdit>();
-            if (!o) return done(std::move(m));
-            auto* row = o->form.focused();
-            if (!o->form.editing() || !row || !row->editable() || row->locked)
-                return done(std::move(m));
-            agentty::form::paste(row->value, e.text);
-            o->form.dirty = true;
+            if (o) form::paste_into(o->form, e.text);   // SSOT guard inside
             return done(std::move(m));
         },
 

@@ -257,6 +257,38 @@ void paste(FieldValue& v, std::string_view text) {
     }, v);
 }
 
+bool paste_into(Form& f, std::string_view text) {
+    auto* row = f.focused();
+    if (!f.editing() || !row || !row->editable() || row->locked) return false;
+    paste(row->value, text);
+    f.dirty = true;
+    return true;
+}
+
+std::string text_of(const Form& f, std::string_view id) {
+    const auto* row = f.find(id);
+    if (!row) return {};
+    if (const auto* t = std::get_if<field::Text>(&row->value))   return t->value;
+    if (const auto* s = std::get_if<field::Secret>(&row->value)) return s->value;
+    if (const auto* p = std::get_if<field::Path>(&row->value))   return p->value;
+    return {};
+}
+
+bool toggle_of(const Form& f, std::string_view id) {
+    const auto* row = f.find(id);
+    if (!row) return false;
+    const auto* t = std::get_if<field::Toggle>(&row->value);
+    return t && t->on;
+}
+
+std::string choice_of(const Form& f, std::string_view id) {
+    const auto* row = f.find(id);
+    if (!row) return {};
+    if (const auto* c = std::get_if<field::Choice>(&row->value))
+        return std::string{c->id()};
+    return {};
+}
+
 void clear(FieldValue& v) {
     std::visit([&](auto& f) {
         using T = std::decay_t<decltype(f)>;

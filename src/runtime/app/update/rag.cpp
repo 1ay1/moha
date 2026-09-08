@@ -294,16 +294,12 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
         [&](RagEmbedPaste& e) -> Step {
             auto* f = form_of(m);
             if (!f) return {std::move(m), Cmd<Msg>::none()};
-            auto* row = f->form.focused();
-            // Only while actually EDITING: the router targets pastes by a
-            // snapshot that can go stale (same rule as the editing-intent
-            // guards), so the reducer re-checks the true mode.
-            if (!f->form.editing() || !row || !row->editable() || row->locked)
-                return {std::move(m), Cmd<Msg>::none()};
-            agentty::form::paste(row->value, e.text);
-            f->form.dirty = true;
-            invalidate_probe(*f);
-            refresh_status(*f);
+            // SSOT guard + dirty live in paste_into; only the pane-specific
+            // consequence (a changed field invalidates the probe) stays here.
+            if (form::paste_into(f->form, e.text)) {
+                invalidate_probe(*f);
+                refresh_status(*f);
+            }
             return {std::move(m), Cmd<Msg>::none()};
         },
 

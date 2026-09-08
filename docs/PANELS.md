@@ -207,6 +207,35 @@ finding which unrelated bag it lived in; reducers for three panels shared a
 1.8k-line panels.cpp. One-file-per-panel replaced both: `grep -l <name>`
 now finds a panel's three files by its one name.
 
+### The form-pane recipe — SSOT obligations
+
+A pane that edits config through `form::Form` (smart_mode, rag,
+plugin_edit) is a PROJECTION plus CONSEQUENCES, nothing else. The form
+layer owns the mechanics; a pane that restates any of them is a bug even
+when the restatement is correct today — three identical copies of the
+paste guard is how this list was earned. The obligations:
+
+1. **Keys**: `subscribe.cpp` handler is `on_form(f, ev, wrap)` — nothing
+   else. A pane-specific chord (Rag's `a`, SmartMode's ^S-reopen) is a
+   guarded prefix, never a re-implementation of any form key.
+2. **Paste**: the reducer's Paste arm is exactly
+   `form::paste_into(o->form, e.text)`. The editing/editable/locked guard
+   and the dirty flag live INSIDE it; only pane-specific consequences
+   (Rag: probe invalidation) may follow its `true` return.
+3. **Field reads**: `form::text_of / toggle_of / choice_of` by id — no
+   local `std::get_if<field::…>` spelunking in pane code. A pane needing
+   different semantics (rag_form's absent⇒fallback `bool_of`) writes a
+   named helper SAYING WHY, next to a comment pointing here.
+4. **Save**: honour `applied.save` (^S from anywhere) AND an Action row if
+   the pane has one; both route to the same code path.
+5. **Close**: route through the pane's Close msg (which calls
+   `panel.ascend()`), never a direct slot mutation — that is what keeps
+   Esc's unwind uniform across every pane.
+
+Everything else — what the rows ARE, what a change MEANS (commit
+immediately vs save-owned), what Save writes — is the pane's actual job
+and lives in its form builder + reducer.
+
 `settings_registry.hpp` stays in `runtime/`, *outside* the panel domain:
 it is the ~35-knob config table — the thing the settings panel displays,
 not the panel. That line answers "why is there settings code without a

@@ -409,6 +409,31 @@ void move_cursor(FieldValue& v, int delta);
 void cursor_home(FieldValue& v);
 void cursor_end(FieldValue& v);
 void paste(FieldValue& v, std::string_view text);
+
+// ── Whole-form paste (SSOT) ─────────────────────────────────
+// The one correct way to route a bracketed paste into a form pane. Guards
+// against the stale-snapshot race by re-checking the TRUE mode here (the
+// input router targets pastes off a FormFocus snapshot that can lag; see
+// form_keys.cpp's editing-intent guards for the same rule): only while
+// actually editing an editable, unlocked row does the text land. Returns
+// true when it did (caller sets pane-specific dirty semantics if any).
+// Every form pane's Paste arm MUST be exactly `form::paste_into(o->form,
+// e.text)` — a hand-rolled guard is the drift this function exists to end
+// (three panes had three copies of it before this).
+bool paste_into(Form& f, std::string_view text);
+
+// ── Typed field readers (SSOT) ───────────────────────────────
+// Read a field's value by id without spelling the variant access at every
+// call site. text_of covers ALL text-like alternatives (Text/Secret/Path)
+// so a pane can't silently read "" from a Secret it thought was a Text —
+// the exact bug class rag_form's local helper was written to avoid, now
+// hoisted so smart_form/plugin_form/rag_form share one definition.
+// Missing id or wrong kind ⇒ the neutral value; panes that must
+// distinguish "absent" from "empty" use Form::find directly.
+[[nodiscard]] std::string text_of  (const Form& f, std::string_view id);
+[[nodiscard]] bool        toggle_of(const Form& f, std::string_view id);
+// The selected id of a Choice row ("" when absent/not a choice).
+[[nodiscard]] std::string choice_of(const Form& f, std::string_view id);
 void clear(FieldValue& v);
 
 // ←/→ on a row: flips a Toggle, cycles a Choice, steps a Slider/Number.

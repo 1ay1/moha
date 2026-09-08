@@ -23,14 +23,11 @@ namespace eb = agentty::rag::embed;
 
 namespace {
 
-[[nodiscard]] std::string text_of(const form::Form& f, const char* id) {
-    const auto* row = f.find(id);
-    if (!row) return {};
-    if (const auto* t = std::get_if<form::field::Text>(&row->value))   return t->value;
-    if (const auto* s = std::get_if<form::field::Secret>(&row->value)) return s->value;
-    if (const auto* p = std::get_if<form::field::Path>(&row->value))   return p->value;
-    return {};
-}
+// text_of comes from the form layer's SSOT accessors (form.hpp). bool_of
+// stays local because it carries a FALLBACK — "row absent ⇒ keep the
+// config's current value" — which the neutral-default form::toggle_of
+// cannot express (rows here appear/disappear with the backend choice).
+using form::text_of;
 
 [[nodiscard]] bool bool_of(const form::Form& f, const char* id, bool fallback) {
     const auto* row = f.find(id);
