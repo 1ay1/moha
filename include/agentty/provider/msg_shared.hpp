@@ -24,6 +24,7 @@
 #include "agentty/domain/conversation.hpp"
 #include "agentty/provider/provider.hpp"   // provider::ToolSpec
 #include "agentty/util/image_dims.hpp"      // util::image_within_wire_limits
+#include "agentty/util/logx.hpp"            // AGT_LOG — name a dropped image
 #include "agentty/util/user_root.hpp"      // single per-user root (~/.agentty)
 
 namespace agentty::provider::wire {
@@ -103,8 +104,24 @@ namespace agentty::provider::wire {
 // 3000+ px wide, so file size is no proxy; image_dimensions() reads the real
 // pixels from the header bytes.
 [[nodiscard]] inline bool wire_image_sendable(const ImageContent& img) noexcept {
-    if (img.bytes.empty()) return false;
-    return util::image_within_wire_limits(img.bytes);
+    // Dropping an image here is INVISIBLE by construction: the prose marker
+    // ("[image: <paste>]") still goes out, so the model is told an image is
+    // present and shown nothing, and the user sees a turn that silently
+    // ignored their screenshot. Name the reason once per drop so the log
+    // answers "why didn't it see my image" without bisecting the pipeline.
+    if (img.bytes.empty()) {
+        AGT_LOG(Wire, Warn, "wire.image_dropped",
+                "reason=empty_bytes media_type={}", wire_media_type(img));
+        return false;
+    }
+    if (!util::image_within_wire_limits(img.bytes)) {
+        const auto d = util::image_dimensions(img.bytes);
+        AGT_LOG(Wire, Warn, "wire.image_dropped",
+                "reason=oversize dims={}x{} max_side={} bytes={}",
+                d.w, d.h, util::kMaxWireImageSide, img.bytes.size());
+        return false;
+    }
+    return true;
 }
 
 // The images a USER message contributes to the wire (skipping empties).

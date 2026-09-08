@@ -17,6 +17,7 @@
 #include "agentty/auth/accounts.hpp"   // entitlement scope: active account label
 #include "agentty/runtime/app/deps.hpp"
 #include "agentty/runtime/composer_attachment.hpp"
+#include "agentty/util/image_dims.hpp"   // image_dimensions — lift-time trace
 #include "agentty/tool/commands.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/provider/chatgpt/provider.hpp"
@@ -244,6 +245,17 @@ Step submit_message(Model m) {
             ImageContent img;
             img.media_type = att.media_type;     // copy: path/type stays on Attachment
             img.bytes      = std::move(att.body);
+            // Trace the hand-off. An image that is captured correctly but
+            // never reaches the wire looks IDENTICAL to one that was never
+            // captured — the prose marker goes out either way, so the model
+            // is told "there is an image here" and shown nothing. Logging
+            // the size here, and the reason at the wire gate, makes the two
+            // distinguishable from the log instead of by bisecting code.
+            const auto dims = ::agentty::util::image_dimensions(img.bytes);
+            AGT_LOG(Ui, Info, "submit.image_lift",
+                    "media_type={} bytes={} dims={}x{} within_limits={}",
+                    img.media_type, img.bytes.size(), dims.w, dims.h,
+                    ::agentty::util::image_within_wire_limits(img.bytes) ? 1 : 0);
             user.images.push_back(std::move(img));
         }
     }
