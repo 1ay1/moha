@@ -171,6 +171,20 @@ void build_live_tail(const Model& m, int& running_turn,
             const bool show_indicator = reserve_slot && tail_is_empty_placeholder;
             if (show_indicator) {
                 using namespace maya::dsl;
+                // AGENTTY_NO_TAPE=1 — opt out of the hexdump activity
+                // tape (requested by users who find the byte-level
+                // narration too busy). The 1-row slot MUST still be
+                // filled: the placeholder's whole job is height
+                // stability across the indicator→content flip, so the
+                // quiet form is a static muted verb + the same elapsed/
+                // tok-s detail — zero animation, zero per-frame work.
+                // Same truthiness rule as AGENTTY_NO_REVEAL_GLIDE
+                // (set + non-'0' = off), read once.
+                static const bool tape_enabled = [] {
+                    const char* off = std::getenv("AGENTTY_NO_TAPE");
+                    return !(off && off[0] && off[0] != '0');
+                }();
+
                 maya::ActivityIndicator::Config ind;
                 ind.edge_color = cfg.rail_color;
                 // Frame-local backing for a spliced text+pending tail.
@@ -178,20 +192,22 @@ void build_live_tail(const Model& m, int& running_turn,
                 // the widget outlives the build() call below.
                 std::string tape_scratch;
 
-                // READ-mode source: the prompt the model is reading —
-                // the last User message before this run. Real input
-                // bytes for the TTFT window; the widget's read head
-                // scans them until output bytes arrive and flip the
-                // tape to WRITE mode. Capped: the head advances ~7
-                // bytes/s, so 2 KiB is minutes of scan — copying more
-                // per frame buys nothing.
-                constexpr std::size_t kContextCap = 2048;
-                for (std::size_t j = i; j-- > 0;) {
-                    const auto& mj = m.d.current.messages[j];
-                    if (mj.role != Role::User || mj.text.empty()) continue;
-                    ind.context = std::string_view{mj.text}.substr(
-                        0, std::min(kContextCap, mj.text.size()));
-                    break;
+                if (tape_enabled) {
+                    // READ-mode source: the prompt the model is reading —
+                    // the last User message before this run. Real input
+                    // bytes for the TTFT window; the widget's read head
+                    // scans them until output bytes arrive and flip the
+                    // tape to WRITE mode. Capped: the head advances ~7
+                    // bytes/s, so 2 KiB is minutes of scan — copying more
+                    // per frame buys nothing.
+                    constexpr std::size_t kContextCap = 2048;
+                    for (std::size_t j = i; j-- > 0;) {
+                        const auto& mj = m.d.current.messages[j];
+                        if (mj.role != Role::User || mj.text.empty()) continue;
+                        ind.context = std::string_view{mj.text}.substr(
+                            0, std::min(kContextCap, mj.text.size()));
+                        break;
+                    }
                 }
 
                 if (const auto* a = active_ctx(m.s.phase)) {
@@ -246,8 +262,8 @@ void build_live_tail(const Model& m, int& running_turn,
                 // All sources pass a ≤ 512-byte tail; totals are the
                 // TRUE cumulative sizes so the offset column reads as a
                 // real stream odometer. Empty stream ⇒ the widget's
-                // waiting state (noise + word pool) — the pre-first-
-                // byte contrast is itself the TTFT signal.
+                // READ mode scanning the prompt (context above) — the
+                // read→write flip is itself the TTFT signal.
                 constexpr std::size_t kTapeTail = 512;
                 auto tape = [&](std::string_view s, std::size_t total) {
                     ind.stream = s.size() > kTapeTail
@@ -256,7 +272,10 @@ void build_live_tail(const Model& m, int& running_turn,
                 };
                 const std::string& a_text = tail.streaming_text;
                 const std::string& a_pend = tail.pending_stream;
-                if (!a_text.empty() || !a_pend.empty()) {
+                if (!tape_enabled) {
+                    // AGENTTY_NO_TAPE: leave both sources empty; the
+                    // quiet row below replaces the widget entirely.
+                } else if (!a_text.empty() || !a_pend.empty()) {
                     // Two backing strings, one logical stream. View the
                     // suffix without concatenating: the tail is pend
                     // alone when pend ≥ window, else it spans both —
@@ -280,8 +299,26 @@ void build_live_tail(const Model& m, int& running_turn,
                     tape(m.s.compaction_buffer, m.s.compaction_buffer.size());
                 }
 
-                cfg.body.emplace_back(
-                    maya::ActivityIndicator{std::move(ind)}.build());
+                if (tape_enabled) {
+                    cfg.body.emplace_back(
+                        maya::ActivityIndicator{std::move(ind)}.build());
+                } else {
+                    // Quiet form: same 1-row slot, same detail numbers,
+                    // no byte narration and no animation. A muted verb
+                    // keeps the "still working" signal without the
+                    // tape's visual bandwidth.
+                    std::vector<maya::Element> parts;
+                    parts.reserve(3);
+                    parts.push_back(text("  "));
+                    parts.push_back(text("thinking…")
+                                    | fgc(maya::Color::bright_black()));
+                    if (!ind.detail.empty()) {
+                        parts.push_back(text("  ·  " + ind.detail)
+                                        | fgc(maya::Color::bright_black())
+                                        | maya::dsl::Italic);
+                    }
+                    cfg.body.emplace_back(h(std::move(parts)).build());
+                }
             }
             // NOTE: no trailing spacer once real content exists. The
             // indicator occupies the body ONLY while the tail is an

@@ -4,6 +4,10 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The activity tape shows only real data now.** The hex-dump row under a working turn used to be decoration — a countdown offset and noise bytes with canned words scrolling by. It now has three honest modes: while waiting on the model it *reads* — a head scans the actual bytes of your prompt (offset = its true position); once output streams it *writes* — the newest bytes of the model's own answer with a true byte-count odometer, moving only when data arrives; and with nothing in flight it shows static pinned at `0x000000`. The words you glimpse in the gutter are the words the model is reading or writing at that instant — nothing is fabricated.
+- **`AGENTTY_NO_TAPE=1`** replaces the byte-level tape with a quiet muted `thinking…` row (same slot, same elapsed / tok-s numbers, zero animation) for anyone who finds the narration too busy.
+
 ## [0.8.0] - 2026-09-04
 
 ### Added
