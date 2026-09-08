@@ -15,7 +15,7 @@
 
 pkgname=agentty-git
 _pkgname=agentty
-pkgver=0.8.0.r55.g705df197
+pkgver=0.8.0.r56.g3708ca82
 pkgrel=1
 pkgdesc="Blazing-fast Claude in your terminal (C++26 TUI agent) — git HEAD, dynamically linked"
 arch=('x86_64' 'aarch64')
