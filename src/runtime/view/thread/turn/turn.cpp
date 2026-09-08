@@ -41,6 +41,18 @@ namespace agentty::ui {
 
 namespace {
 
+// Tri-state env flag: unset → `def`; "0"/"false"/"off"/"no" (any case) →
+// false; anything else → true. Lets a switch DEFAULT ON yet be explicitly
+// forced either way. Callers cache the result in a static (read once).
+[[nodiscard]] inline bool env_on(const char* name, bool def) noexcept {
+    const char* v = std::getenv(name);
+    if (!v || !*v) return def;
+    std::string s;
+    for (const char* p = v; *p; ++p)
+        s += static_cast<char>(std::tolower(static_cast<unsigned char>(*p)));
+    return !(s == "0" || s == "false" || s == "off" || s == "no");
+}
+
 // ── Cached markdown render. The ONE Element-returning helper kept in
 //    agentty — strictly because cross-frame cache state lives in the
 //    StreamingMarkdown widget instance, which we keep alive across
@@ -130,22 +142,10 @@ maya::Element cached_markdown_for(const Message& msg, const Model& m,
         ? m.ui.view_cache.message_md_live(m.d.current.id, slot_id)
         : m.ui.view_cache.message_md    (m.d.current.id, slot_id);
 
+    bool fresh_widget = false;
     if (!cache.streaming) {
         cache.streaming = std::make_shared<maya::StreamingMarkdown>();
-        // Animated live tail: gradient trail + scramble→resolve + pulsing
-        // caret on the streaming edge (maya reveal_fx). Only animates while
-        // the widget is live_; the settled build is untouched.
-        cache.streaming->set_reveal_fx(true);
-        // ...but the reveal's DECORATIVE glyph overlay (scramble→resolve,
-        // gradient trail, pulsing caret) is viewport-blind: it rewrites the
-        // trailing row's glyphs every frame and can only safely touch the
-        // bottom row because it can't see the scroll position. Under tmux,
-        // which owns its own scroll region, those per-frame rewrites desync
-        // from the mux grid and GHOST/overlap onto the rows above the live
-        // tail. Keep the progressive typewriter CLIP (text still walks in at
-        // the cursor's pace) but drop the decoration there — calm, ghost-free
-        // streaming on tmux, full effect on a direct terminal.
-        cache.streaming->set_reveal_decorate(!::maya::tmux::active());
+        fresh_widget = true;
         // Reveal pacing for the rate-smoothed bounded-lag cursor (maya
         // RateCursor). The cursor reveals at backlog / drain_secs, so it
         // TRACKS the model's own speed with a fixed time lag, and low-passes
@@ -201,6 +201,54 @@ maya::Element cached_markdown_for(const Message& msg, const Model& m,
                                                /*lead_secs=*/0.28);
             cache.streaming->set_reveal_adaptive(true, /*min*/45.0,
                                                  /*max*/280.0);
+        }
+    }
+
+    // Reveal on/off is POLICY — derived from the terminal and the env —
+    // unlike the pacing seeds above, which never change. Applied at
+    // construction and re-applied only when the ANSWER changes, so a
+    // caller that deliberately overrode the flag on an existing widget
+    // (tests pre-seed reveal_fx=false to measure settled height) keeps its
+    // override, while a real policy change (attaching to tmux, exporting
+    // AGENTTY_REVEAL) still takes effect on the next frame.
+    //
+    // DEFAULT: on for a direct terminal, OFF UNDER TMUX — both halves of
+    // the reveal rewrite the live tail's rows every animation frame and
+    // are viewport-blind (the widget can't see the scroll position, so it
+    // can only safely touch the bottom row). tmux owns its own scroll
+    // region, so those rewrites desync from the mux grid and GHOST: text
+    // overlaps the rows above and words split mid-token. That is a
+    // rendering CORRUPTION, not a taste call, so the default must not
+    // enable it there (fixed once in 0ebcf5f9, reintroduced when the env
+    // switches landed with unconditional `true` defaults).
+    //
+    // Env always wins, in both directions:
+    //   • AGENTTY_REVEAL            — master (off ⇒ no reveal at all)
+    //   • AGENTTY_REVEAL_TYPEWRITER — the progressive clip
+    //   • AGENTTY_REVEAL_DECORATE   — the scramble/gradient/caret overlay
+    // Each accepts 0/false/off/no = off; anything else = on; unset =
+    // the terminal-derived default.
+    {
+        // Under test the default is DETERMINISTIC, never terminal-derived:
+        // a suite that passes on a laptop and fails inside `tmux attach`
+        // is testing the environment. AGENTTY_UNDER_TEST is set by both
+        // test mains before anything renders, and is checked HERE (not via
+        // the reveal env vars) so it can't race their setenv ordering.
+        // Tests that want the reveal OFF set the flag on their own widget
+        // (midrun_wire_test pre-seeds it), which this never clobbers.
+        const bool under_test = env_on("AGENTTY_UNDER_TEST", false);
+        const bool fx_default = under_test || !::maya::tmux::active();
+        const bool master     = env_on("AGENTTY_REVEAL", fx_default);
+        // Written for each NEWLY CONSTRUCTED widget — not per frame, so a
+        // caller that deliberately overrode the flag on an existing widget
+        // (midrun_wire_test pre-seeds reveal_fx=false to measure settled
+        // height) keeps its override; and not once per process, so every
+        // message's widget gets the policy rather than only the first.
+        if (fresh_widget) {
+            cache.streaming->set_reveal_fx(
+                master && env_on("AGENTTY_REVEAL_TYPEWRITER", fx_default));
+            cache.streaming->set_reveal_decorate(
+                master && env_on("AGENTTY_REVEAL_DECORATE", fx_default));
         }
     }
 

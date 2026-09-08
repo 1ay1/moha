@@ -13,6 +13,8 @@
 
 #include "agtest.hpp"
 
+#include <cstdlib>   // setenv — the reveal tests pin the effect explicitly
+
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/view/thread/thread.hpp"
@@ -152,6 +154,8 @@ TEST_CASE("reasoning: the ^R switch hides the block even when text exists") {
 // bytes arrive. This pins the streaming-reveal path (turn.cpp MdView::Reasoning
 // + subturn_stably_keyable's reasoning-slot animation check).
 TEST_CASE("reasoning: body reveals incrementally, not all at once") {
+    // (The reveal is pinned ON for the whole binary in test_main.cpp — its
+    // default is terminal-derived and must not leak into the suite.)
     // A long, single-paragraph body so the reveal cursor has many chars to
     // walk through (word-boundary markers we can count as they appear).
     std::string full;
