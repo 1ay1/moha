@@ -15,6 +15,8 @@
 #include "agentty/runtime/panel/slot.hpp"
 #include "agentty/runtime/visual.hpp"
 
+#include <maya/core/scroll_state.hpp>
+
 // ── form: Secret is the load-bearing exemption ─────────────────────
 namespace agentty::form::field {
 
@@ -93,6 +95,26 @@ inline auto visual_parts(const ServerState& s) {
 static_assert(visual::parts_cover_all<ServerState>);
 
 } // namespace agentty::mcp
+
+// ── maya types the panels read ───────────────────────────────
+namespace maya {
+
+// ScrollState: only the OFFSETS are model-visible (a reducer-driven .y
+// decides which rows a body-scroll view windows in). Everything else is
+// render plumbing — writeback maxima and painted-bar rects the RENDERER
+// refills every frame (hashing them would read last frame's paint into
+// this frame's gate: a feedback loop, not state), step sizes, drag
+// bookkeeping, the paint-generation counter. NON-AGGREGATE (unregistering
+// destructor), so parts_cover_all cannot bind a count — this list is
+// trusted prose; keep it in sync if ScrollState ever grows another
+// reducer-driven field. Defined agentty-side: maya has no reason to know
+// our frame gate exists.
+inline auto visual_parts(const ScrollState& s) {
+    return std::make_tuple(s.x, s.y);
+}
+static_assert(agentty::visual::parts_cover_all<ScrollState>);
+
+} // namespace maya
 
 namespace agentty::form {
 

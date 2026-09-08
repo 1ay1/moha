@@ -183,16 +183,15 @@ struct AgenttyApp {
         //   • the plugins snapshot the settings list projects
         mix(m.ui.plugins_loading ? 1ULL : 0ULL);
         visual::mix_any(mix, m.ui.plugins);
-        //   • body-scroll offsets driven by reducers through ScrollStates.
-        //     ScrollState itself is maya render plumbing (writeback fields,
-        //     bar caches) — only .y is reducer-driven visible state, so it
-        //     is mixed here rather than walked.
+        //   • body-scroll ScrollStates: walked via their parts list (x/y
+        //     visible, render plumbing exempt). Gated to the panel that
+        //     reads each, like the catalogs above.
         if (m.ui.panel.is<pn::ToolOutput>()) {
-            mix(static_cast<std::uint64_t>(m.ui.tool_viewer_scroll.y));
-            mix(m.ui.tool_viewer_tail ? 1ULL : 0ULL);
+            visual::mix_any(mix, m.ui.tool_viewer_scroll);
+            mix(m.ui.tool_viewer_tail ? 1ULL : 0ULL);   // loose Model bool
         }
         if (m.ui.panel.is<pn::CodeBlockResult>())
-            mix(static_cast<std::uint64_t>(m.ui.code_blocks_scroll.y));
+            visual::mix_any(mix, m.ui.code_blocks_scroll);
 
         // Login: its own variant outside the slot; same walk, same
         // guarantees (secret buffers digest length-only via parts lists).

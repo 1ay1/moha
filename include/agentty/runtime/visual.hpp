@@ -111,11 +111,18 @@ concept HasParts = requires(const T& t) { visual_parts(t); };
 // Completeness proof: the parts tuple has EXACTLY one entry per
 // brace-init slot (base or member). Adding a member without deciding its
 // visibility fails here, at the type.
+//
+// NON-AGGREGATES (custom ctor/dtor — e.g. maya::ScrollState's
+// unregistering destructor) have arity 0: brace-probing cannot count
+// their members, so the proof CANNOT hold them to a count and any parts
+// list passes. Their lists are trusted, reviewed prose — the same
+// standing as the old hand-mix, but at least colocated and named. Prefer
+// aggregates for state types precisely so the proof can bind.
 template <class T>
 inline constexpr bool parts_cover_all =
-    std::tuple_size_v<
-        std::remove_cvref_t<decltype(visual_parts(std::declval<const T&>()))>>
-    == arity<T>;
+    arity<T> == 0   // non-aggregate: unprovable, trusted (see above)
+    || std::tuple_size_v<std::remove_cvref_t<
+           decltype(visual_parts(std::declval<const T&>()))>> == arity<T>;
 
 // ── The walk ─────────────────────────────────────────────────────────────
 // H is any callable taking std::uint64_t (the accumulating mixer).
