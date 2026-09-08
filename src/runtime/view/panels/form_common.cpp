@@ -108,9 +108,14 @@ maya::Panel::Config form_config(const agentty::form::Form& f, maya::Color accent
             line = f.note;
         } else {
             std::string grammar;
+            // The grammar describes what the keyboard ACTUALLY does. Saving
+            // is automatic (commit-on-exit), so advertising "^S save"
+            // would teach a step that no longer exists — ^S still works,
+            // it just isn't the contract any more. Editing says "↵ done"
+            // because leaving the field is what writes it.
             if (f.editing())        grammar = "type · ←→ caret · ↵ done · esc cancel";
             else if (f.choosing())  grammar = "↑↓ pick · ↵ choose · esc keep";
-            else                    grammar = "↑↓ rows · ↵ edit · ^S save · esc back";
+            else                    grammar = "↑↓ rows · type to edit · esc back";
             if (f.dirty && !f.editing() && !f.choosing())
                 grammar += "  ·  unsaved";
             line = f.note.empty() ? grammar : (f.note + "   ·   " + grammar);
@@ -128,11 +133,19 @@ maya::Panel::Config form_config(const agentty::form::Form& f, maya::Color accent
     if (max_width > 0)
         cfg.min_width = std::max(24, std::min(cfg.min_width, max_width - 6));
 
-    const bool editing = f.editing();
     cfg.items.reserve(f.fields.size());
     for (std::size_t i = 0; i < f.fields.size(); ++i) {
         const auto& src = f.fields[i];
         const bool on_row = (static_cast<int>(i) == f.cursor);
+        // Caret on the FOCUSED text row whether or not an edit session has
+        // started. Type-to-edit means the row is already accepting keys —
+        // the session is an implementation detail that begins on the first
+        // character. Hiding the caret until then advertised a modality the
+        // keyboard no longer has: the user saw "read-only row" and pressed
+        // Enter to "start editing", which is exactly the ceremony that was
+        // removed. Locked rows never get one (they take no keys).
+        const bool caret_row = on_row && src.is_text_like()
+                            && src.editable() && !src.locked;
 
         maya::Panel::Item row;
         row.leading       = src.label;
@@ -141,7 +154,7 @@ maya::Panel::Config form_config(const agentty::form::Form& f, maya::Color accent
         row.locked        = src.locked;
         row.locked_reason = src.locked_reason;
         row.error         = src.error;
-        row.control       = control_for(src, editing && on_row);
+        row.control       = control_for(src, caret_row);
         cfg.items.push_back(std::move(row));
     }
 

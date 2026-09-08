@@ -268,12 +268,20 @@ paste guard is how this list was earned. The obligations:
 5. **Close**: route through the pane's Close msg (which calls
    `panel.ascend()`), never a direct slot mutation — that is what keeps
    Esc's unwind uniform across every pane.
-6. **Footer**: the key grammar (↑↓ · ↵ · ^S · esc, mode-aware) and the
-   "unsaved" marker are rendered by `form_config` from the form's state —
-   a pane NEVER spells keys in its `note`. `Form::note` carries only
-   pane-specific extras (Rag's `a advanced` / `^T test`, a validation
-   summary); `note_replaces_grammar` is for arm/confirm warnings that
-   must be the footer's only content.
+6. **Footer**: the key grammar (mode-aware: `↑↓ rows · type to edit · esc
+   back` / `type · ←→ caret · ↵ done · esc cancel` / `↑↓ pick · ↵ choose ·
+   esc keep`) and the "unsaved" marker are rendered by `form_config` from
+   the form's state — a pane NEVER spells keys in its `note`. It does not
+   advertise `^S`: saving is automatic (commit-on-exit), and teaching a
+   step that no longer exists is how the Enter-to-edit modality survived
+   as long as it did. `Form::note` carries only pane-specific extras
+   (Rag's `^E advanced` / `^T test`, a validation summary);
+   `note_replaces_grammar` is for arm/confirm warnings that must be the
+   footer's only content.
+7. **Caret**: the focused text row shows its caret ALWAYS — not only once
+   an edit session exists. The row already takes keys (type-to-edit); a
+   hidden caret advertises a read-only row and invites the Enter press
+   this design removed. `form_common.cpp`'s `caret_row` owns that rule.
 
 Everything else — what the rows ARE, what a change MEANS (commit
 immediately vs save-owned), what Save writes — is the pane's actual job
