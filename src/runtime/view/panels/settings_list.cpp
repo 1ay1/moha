@@ -11,7 +11,7 @@
 //             the format hint + submit/cancel keys.
 
 #include "agentty/runtime/view/panels.hpp"
-#include "panels/panels_common.hpp"   // kPanel* widths, panel_viewport_h
+#include "panels_common.hpp"   // kPanel* widths, panel_viewport_h
 
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/hints.hpp"   // key_hints — the shared footer idiom

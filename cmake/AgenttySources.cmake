@@ -161,18 +161,20 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/app/update/frozen.cpp
     src/runtime/app/update/tool.cpp
     src/runtime/app/update/login.cpp
-    src/runtime/app/update/panels.cpp
+    src/runtime/app/update/models.cpp
+    src/runtime/app/update/providers.cpp
+    src/runtime/app/update/thread_list.cpp
     src/runtime/app/update/palette.cpp
     src/runtime/app/update/mention.cpp
     src/runtime/app/update/symbol.cpp
-    src/runtime/app/update/codeblock.cpp
-    src/runtime/app/update/checkpoint.cpp
+    src/runtime/app/update/code_blocks.cpp
+    src/runtime/app/update/checkpoints.cpp
     src/runtime/app/update/rag.cpp
     src/runtime/app/update/settings_list.cpp
     src/runtime/panel/settings_items.cpp
     src/runtime/panel/form.cpp
     src/runtime/panel/form_keys.cpp
-    src/runtime/view/form_panel.cpp
+    src/runtime/view/panels/form_common.cpp
     src/runtime/panel/rag_form.cpp
     src/runtime/settings_registry.cpp
     src/runtime/panel/smart_form.cpp
@@ -214,13 +216,22 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/view/status_bar/model_badge.cpp
     src/runtime/view/status_bar/status_bar.cpp
     src/runtime/view/changes_strip.cpp
-    src/runtime/view/panels/model_panel.cpp
-    src/runtime/view/panels/nav_panels.cpp
-    src/runtime/view/panels/tool_panels.cpp
-    src/runtime/view/panels/misc_panels.cpp
-    src/runtime/view/rag_panel.cpp
-    src/runtime/view/settings_list_panel.cpp
-    src/runtime/view/fork_panel.cpp
+    # One panel = one view file (view/panels/<name>.cpp); shared scaffolding
+    # in panels_prologue.hpp / panels_common.hpp / form_common.cpp.
+    src/runtime/view/panels/models.cpp
+    src/runtime/view/panels/providers.cpp
+    src/runtime/view/panels/thread_list.cpp
+    src/runtime/view/panels/palette.cpp
+    src/runtime/view/panels/mention.cpp
+    src/runtime/view/panels/symbol.cpp
+    src/runtime/view/panels/smart_mode.cpp
+    src/runtime/view/panels/code_blocks.cpp
+    src/runtime/view/panels/tool_output.cpp
+    src/runtime/view/panels/checkpoints.cpp
+    src/runtime/view/panels/todo.cpp
+    src/runtime/view/panels/rag.cpp
+    src/runtime/view/panels/settings_list.cpp
+    src/runtime/view/panels/fork.cpp
     src/runtime/view/diff_review.cpp
     src/runtime/view/login.cpp
     src/runtime/view/view.cpp

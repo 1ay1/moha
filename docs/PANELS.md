@@ -171,25 +171,41 @@ enforceable where the one-ness lives.
 
 ---
 
-## File layout — the folder is the domain, the filename is the panel
+## File layout — one panel, one name, three predictable places
+
+For every panel `<name>`, the SAME filename appears in three places:
 
 ```
-include/agentty/runtime/panel/    state: slot, top, nav, common (pick::),
-                                  palette, mention, symbol, code_blocks,
-                                  tool_output, checkpoints, fork, rag,
-                                  form, form_keys, smart_form, settings/
-src/runtime/panel/                their implementations
-src/runtime/view/panels/          every panel view (Model → Panel::Config;
-                                  zero Element construction — see UI.md)
-src/runtime/app/update/           reducers: panels.cpp (models/threads/
-                                  providers), palette, mention, symbol,
-                                  codeblock, checkpoint, fork, rag,
-                                  settings_list, modal, diff, meta (ascend)
+include/agentty/runtime/panel/<name>.hpp    its state (slot alternative)
+src/runtime/app/update/<name>.cpp           its reducer
+src/runtime/view/panels/<name>.cpp          its view (Model → Panel::Config)
 ```
 
-One name per panel at every layer — e.g. the model switcher is
-`pn::Models` / `Kind::Models` / `OpenModels` / `ModelsMove` /
-`models_update` / `model_panel.cpp`.
+models · providers · thread_list · palette · mention · symbol · smart_mode ·
+code_blocks · tool_output · checkpoints · fork · rag · settings_list · todo —
+all follow it. (Small deviations: smart_mode/rag state lives in
+smart_form.hpp/rag.hpp with their form builders; settings_list's state is
+panel/settings/. code_blocks' result card lives with code_blocks — same
+subsystem.)
+
+The COMMON machinery is clearly separate:
+
+```
+include/agentty/runtime/panel/    slot.hpp top.hpp nav.hpp common.hpp
+                                  form.hpp form_keys.hpp   (the form machine)
+src/runtime/panel/                their .cpps + per-panel form builders
+src/runtime/view/panels/          panels_prologue.hpp (shared includes),
+                                  panels_common.hpp (kPanel* widths,
+                                  panel_viewport_h), form_common.cpp
+                                  (form::Form → Panel::Config projection)
+src/runtime/app/update/meta.cpp   ascend() + cross-cutting arms
+```
+
+View TUs were previously grouped by VINTAGE (`nav_panels.cpp` = "what was
+split out of pickers.cpp"), which meant understanding one panel required
+finding which unrelated bag it lived in; reducers for three panels shared a
+1.8k-line panels.cpp. One-file-per-panel replaced both: `grep -l <name>`
+now finds a panel's three files by its one name.
 
 `settings_registry.hpp` stays in `runtime/`, *outside* the panel domain:
 it is the ~35-knob config table — the thing the settings panel displays,

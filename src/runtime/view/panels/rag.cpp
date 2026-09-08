@@ -10,7 +10,7 @@
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/panel/rag.hpp"
-#include "panels/panels_common.hpp"
+#include "panels_common.hpp"
 
 #include <maya/widget/panel.hpp>
 #include <maya/widget/panel.hpp>
