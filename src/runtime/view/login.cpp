@@ -201,6 +201,9 @@ Element input_panel(std::string title, std::vector<Element> prose,
     it.leading = "\xe2\x80\xba";                    // › — the prompt marker
     it.leading_style = fg_bold(accent);
     it.control = std::move(control);
+    // Prompt-style: the input hugs the › instead of right-aligning a
+    // screen-width away from it (this row has no label column to justify).
+    it.value_primary = true;
     cfg.items.push_back(std::move(it));
     cfg.footer       = std::move(footer);
     cfg.note         = std::move(note);

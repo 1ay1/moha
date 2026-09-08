@@ -231,6 +231,30 @@ struct AgenttyApp {
         }
         mix(static_cast<std::uint64_t>(m.ui.todo.open.index()));
         mix(static_cast<std::uint64_t>(m.ui.login.index()));
+        // The login INPUT states carry a live buffer + cursor. index() alone
+        // gated typing and — worse — PASTE away as "visually identical": the
+        // buffer filled, the hash didn't move, and the field showed nothing
+        // until an unrelated event repainted. Mix length + cursor (not the
+        // bytes — the hash needs change-detection, not content).
+        std::visit(maya::overload{
+            [&](const ui::login::OAuthCode& s) {
+                mix(static_cast<std::uint64_t>(s.code_input.size()));
+                mix(static_cast<std::uint64_t>(s.cursor));
+            },
+            [&](const ui::login::ApiKeyInput& s) {
+                mix(static_cast<std::uint64_t>(s.key_input.size()));
+                mix(static_cast<std::uint64_t>(s.cursor));
+            },
+            [&](const ui::login::CustomHostInput& s) {
+                mix(static_cast<std::uint64_t>(s.host_input.size()));
+                mix(static_cast<std::uint64_t>(s.cursor));
+            },
+            [&](const ui::login::AccountList& s) {
+                mix(static_cast<std::uint64_t>(s.cursor));
+                mix_str(s.confirm_remove);
+            },
+            [](const auto&) {},
+        }, m.ui.login);
 
         // Tool-output viewer: open/closed + list cursor + list↔body stage
         // + body scroll offset. The body stage scrolls by mutating ONLY
