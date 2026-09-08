@@ -96,7 +96,27 @@ maya::Panel::Config form_config(const agentty::form::Form& f, maya::Color accent
     maya::Panel::Config cfg;
     cfg.title    = f.title;
     cfg.subtitle = f.subtitle;
-    cfg.note     = f.note;
+    // ── Footer: ONE grammar for every form pane (SSOT) ───────────
+    // The key line is derived from the form's MODE here, not spelled by
+    // panes — three panes each wording their own footer is how "no
+    // surprises" dies. A pane's `note` carries only pane-specific extras
+    // (Rag's "a advanced"), prepended; a note with note_replaces_grammar
+    // (armed remove) is shown alone.
+    {
+        std::string line;
+        if (!f.note.empty() && f.note_replaces_grammar) {
+            line = f.note;
+        } else {
+            std::string grammar;
+            if (f.editing())        grammar = "type · ←→ caret · ↵ done · esc cancel";
+            else if (f.choosing())  grammar = "↑↓ pick · ↵ choose · esc keep";
+            else                    grammar = "↑↓ rows · ↵ edit · ^S save · esc back";
+            if (f.dirty && !f.editing() && !f.choosing())
+                grammar += "  ·  unsaved";
+            line = f.note.empty() ? grammar : (f.note + "   ·   " + grammar);
+        }
+        cfg.note = std::move(line);
+    }
     cfg.selected = f.cursor;
     cfg.accent   = accent;
     cfg.scroll   = scroll;

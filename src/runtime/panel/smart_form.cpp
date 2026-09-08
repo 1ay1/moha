@@ -73,6 +73,8 @@ form::Form build_form(const Inputs& in) {
     // The affordance has to be ON SCREEN. Advanced rows are hidden by default,
     // and a key nobody can see is exactly the discoverability failure these
     // knobs were moved out of an env var to fix.
+    // Pane-specific note only — the shared key grammar comes from
+    // form_config (SSOT). `a` toggles the advanced rows (pane state).
     b.note(in.advanced ? "a  hide advanced" : "a  advanced");
 
     return b.build();

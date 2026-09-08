@@ -264,11 +264,23 @@ struct Form {
     FormFocus          focus{focus::Browsing{}};
 
     // Set when a value changed since the last commit — lets the view say
-    // "unsaved" instead of the user guessing.
+    // "unsaved" instead of the user guessing. form_config APPENDS the
+    // shared "unsaved · ^S save" marker to the footer whenever this is
+    // set — panes never spell that themselves.
     bool dirty = false;
 
-    // Footer note (validation summary, save hint). Rendered above the keys.
+    // Footer note. The SHARED key grammar (↑↓ · Enter · ^S · Esc) is
+    // rendered by form_config for EVERY form pane — no pane repeats it.
+    // This field carries only what is PANE-SPECIFIC: Rag's "a advanced",
+    // a validation summary, the armed-remove warning. When set to a
+    // TRANSIENT WARNING (armed remove), the pane's reducer owns clearing
+    // it — the projection renders it INSTEAD of the grammar so it is
+    // unmissable.
     std::string note;
+    // When true, `note` REPLACES the shared grammar line instead of
+    // preceding it — for arm/confirm warnings that must be the only
+    // thing the footer says.
+    bool note_replaces_grammar = false;
 
     [[nodiscard]] const Field* focused() const noexcept {
         if (cursor < 0 || cursor >= static_cast<int>(fields.size())) return nullptr;

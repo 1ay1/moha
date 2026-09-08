@@ -231,6 +231,12 @@ paste guard is how this list was earned. The obligations:
 5. **Close**: route through the pane's Close msg (which calls
    `panel.ascend()`), never a direct slot mutation — that is what keeps
    Esc's unwind uniform across every pane.
+6. **Footer**: the key grammar (↑↓ · ↵ · ^S · esc, mode-aware) and the
+   "unsaved" marker are rendered by `form_config` from the form's state —
+   a pane NEVER spells keys in its `note`. `Form::note` carries only
+   pane-specific extras (Rag's `a advanced` / `^T test`, a validation
+   summary); `note_replaces_grammar` is for arm/confirm warnings that
+   must be the footer's only content.
 
 Everything else — what the rows ARE, what a change MEANS (commit
 immediately vs save-owned), what Save writes — is the pane's actual job

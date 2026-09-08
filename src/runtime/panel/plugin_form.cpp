@@ -137,7 +137,7 @@ form::Form build_form(const PluginFormInputs& in) {
                  "deletes the entry from its mcp.json (asks once)");
     }
 
-    b.note(add ? kNoteAdd : kNoteDetail);
+    // No b.note(): the shared key grammar comes from form_config (SSOT).
     return b.build();
 }
 

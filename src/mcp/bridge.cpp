@@ -1180,6 +1180,9 @@ std::vector<ServerLaunch> configured_servers_for_delegation() {
         if (!it.value().is_object()
             || json_flag(it.value(), "disabled")) continue;
         const auto& spec = it.value();
+        // Passthrough entries are dispatch-only tool declarations, not
+        // delegable MCP servers.
+        if (spec.value("type", std::string{}) == "passthrough") continue;
         ServerLaunch launch;
         launch.name = it.key();
         launch.command = spec.value("command", std::string{});
@@ -1292,6 +1295,13 @@ std::vector<tools::ToolDef> mcp_tools(PoolHandle& out_pool) {
         // unless its exact spec hash is approved. HTTP/SSE servers spawn no
         // local command, so they're not gated. plugin_model() shows the
         // skipped server as "untrusted — approve to enable".
+        // type:"passthrough" entries are NOT MCP servers at all — no
+        // process, no handshake; their tools are synthesized from config in
+        // passthrough_tools(). Handing one to the HTTP transport here made
+        // the connect loop handshake a non-MCP endpoint (headroom's
+        // /v1/retrieve) and burn the full 15 s deadline — the Plugins pane
+        // sat on "connecting…" and startup paid the wait for nothing.
+        if (spec.value("type", std::string{}) == "passthrough") continue;
         if (!project_all_trusted) {
             const std::string command = spec.value("command", std::string{});
             const std::string url     = spec.value("url", std::string{});

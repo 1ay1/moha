@@ -38,14 +38,10 @@ inline constexpr const char* kRemove      = "remove";
 // Per-tool toggle rows use the id "tool:<bare-name>".
 inline constexpr const char* kToolPrefix  = "tool:";
 
-// Footer notes — shared between builder and reducer so the armed-remove
-// state is recognisable by string identity (the form has no side-channel
-// for pane-transient state, and adding one for a two-frame note would be
-// ceremony).
-inline constexpr const char* kNoteDetail  =
-    "↑↓ rows · Enter edit/toggle · ^S save · Esc back";
-inline constexpr const char* kNoteAdd     =
-    "↑↓ rows · Enter edit/choose · ^S save · Esc back";
+// Footer notes — the shared key grammar is rendered by form_config for
+// every form pane; these carry ONLY pane-specific content. The armed-
+// remove warning replaces the grammar line (note_replaces_grammar) so a
+// destructive confirm is the only thing the footer says.
 inline constexpr const char* kNoteRemoveArmed =
     "Enter again to REMOVE — any other key keeps it";
 

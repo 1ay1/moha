@@ -143,13 +143,16 @@ void refresh_status(rs::EmbedForm& f) {
     f.form.subtitle = eb::describe(f.cfg);
 
     // Validation is a VALUE: surface it inline rather than refusing silently
-    // at save time.
+    // at save time. NOTE: the shared key grammar + the "unsaved" marker are
+    // rendered by form_config (SSOT) — this note carries only what is
+    // pane-specific: the validation summary, the in-process reassurance,
+    // ^T (this pane's probe chord), and the advanced toggle.
     if (auto v = eb::validate(f.cfg); const auto* bad = std::get_if<eb::Invalid>(&v))
         f.form.note = bad->why;
     else if (eb::is_in_process(f.cfg.backend))
-        f.form.note = "no daemon required \xe2\x80\x94 the model runs in-process";
+        f.form.note = "no daemon required — the model runs in-process";
     else if (f.form.dirty)
-        f.form.note = "unsaved \xe2\x80\x94 ^T test, ^S save";
+        f.form.note = "^T test";
     else
         // The RESTING note advertises the advanced key. A bare letter, not ^A:
         // that chord is the form layer's caret-home and tmux's default prefix,

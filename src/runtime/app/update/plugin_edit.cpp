@@ -48,10 +48,6 @@ using maya::Cmd;
 namespace {
 
 using pf::kNoteRemoveArmed;
-// The note to restore on disarm depends on the pane mode.
-[[nodiscard]] const char* default_note(bool add_mode) {
-    return add_mode ? pf::kNoteAdd : pf::kNoteDetail;
-}
 
 // ── snapshot → form inputs ────────────────────────────────────────────
 
@@ -235,8 +231,10 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
             // destructive step; only Enter-again on the SAME row fires).
             if (o->form.note == kNoteRemoveArmed) {
                 const auto* now_row = o->form.focused();
-                if (!now_row || now_row->id != pf::kRemove)
-                    o->form.note = default_note(o->server.empty());
+                if (!now_row || now_row->id != pf::kRemove) {
+                    o->form.note.clear();
+                    o->form.note_replaces_grammar = false;
+                }
             }
 
             // ── kind change (add mode): rebuild the field set ─────────
@@ -309,6 +307,7 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
                 // Two-step: first Enter arms (note explains), second fires.
                 if (o->form.note != kNoteRemoveArmed) {
                     o->form.note = kNoteRemoveArmed;
+                    o->form.note_replaces_grammar = true;
                     return done(std::move(m));
                 }
                 const fs::path path = config_target(*o, m);
