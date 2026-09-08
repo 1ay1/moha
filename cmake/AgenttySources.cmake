@@ -206,7 +206,6 @@ set(AGENTTY_RUNTIME_NOMAIN_SOURCES
     src/runtime/view/thread/turn/permission.cpp
     src/runtime/view/thread/turn/turn.cpp
     src/runtime/view/thread/welcome_screen.cpp
-    src/runtime/view/thread/activity_indicator.cpp
     src/runtime/view/thread/conversation.cpp
     src/runtime/view/thread/thread.cpp
     src/runtime/view/composer.cpp

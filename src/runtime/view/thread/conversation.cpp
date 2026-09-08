@@ -34,7 +34,6 @@
 
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
-#include "agentty/runtime/view/thread/activity_indicator.hpp"
 #include "agentty/runtime/view/thread/seam.hpp"
 #include "agentty/runtime/view/thread/turn/permission.hpp"
 #include "agentty/runtime/view/thread/turn/turn.hpp"
@@ -173,14 +172,27 @@ void build_live_tail(const Model& m, int& running_turn,
             if (show_indicator) {
                 using namespace maya::dsl;
                 maya::ActivityIndicator::Config ind;
-                ind.edge_color    = cfg.rail_color;
-                ind.spinner_glyph = std::string{m.s.spinner.current_frame()};
-                ind.label         = "thinking";
-                ind.words         = activity_indicator_words();
+                ind.edge_color = cfg.rail_color;
                 // Frame-local backing for a spliced text+pending tail.
                 // Declared at Config scope so the string_view handed to
                 // the widget outlives the build() call below.
                 std::string tape_scratch;
+
+                // READ-mode source: the prompt the model is reading —
+                // the last User message before this run. Real input
+                // bytes for the TTFT window; the widget's read head
+                // scans them until output bytes arrive and flip the
+                // tape to WRITE mode. Capped: the head advances ~7
+                // bytes/s, so 2 KiB is minutes of scan — copying more
+                // per frame buys nothing.
+                constexpr std::size_t kContextCap = 2048;
+                for (std::size_t j = i; j-- > 0;) {
+                    const auto& mj = m.d.current.messages[j];
+                    if (mj.role != Role::User || mj.text.empty()) continue;
+                    ind.context = std::string_view{mj.text}.substr(
+                        0, std::min(kContextCap, mj.text.size()));
+                    break;
+                }
 
                 if (const auto* a = active_ctx(m.s.phase)) {
                     // Elapsed since the phase began (matches the settled
