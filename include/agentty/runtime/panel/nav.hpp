@@ -206,6 +206,7 @@ namespace agentty::ui::panel {
         case Kind::Checkpoints:     return Msg{CloseCheckpoints{}};
         case Kind::Rag:     return Msg{CloseRag{}};
         case Kind::SettingsList:    return Msg{CloseSettingsList{}};
+        case Kind::PluginEdit:      return Msg{ClosePluginEdit{}};
         case Kind::Fork:            return Msg{CloseFork{}};
         case Kind::Models:     return Msg{CloseModels{}};
         case Kind::Providers:  return Msg{CloseProviders{}};

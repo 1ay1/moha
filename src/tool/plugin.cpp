@@ -256,6 +256,43 @@ EditResult add_server(const fs::path& path, const ServerSpec& spec,
     return store(path, l.doc) ? EditResult::Ok : EditResult::IoError;
 }
 
+EditResult update_server(const fs::path& path, const ServerSpec& spec) {
+    std::lock_guard<std::mutex> lk(mutation_mutex());
+    Loaded l = load(path);
+    if (!l.existed) return EditResult::NotFound;
+    if (!l.ok) return EditResult::ParseError;
+    const char* key = servers_key(l.doc);
+    if (!l.doc.contains(key) || !l.doc[key].is_object()
+        || !l.doc[key].contains(spec.name))
+        return EditResult::NotFound;
+    json& entry = l.doc[key][spec.name];
+    if (!entry.is_object()) entry = json::object();
+
+    // Rewrite only what the spec owns; foreign keys (env, headers,
+    // timeoutMs, tools) stay byte-for-byte.
+    if (spec.type == "passthrough") {
+        entry["type"] = "passthrough";
+        entry["url"]  = spec.url;
+        if (!spec.passthrough.empty()) entry["passthrough"] = spec.passthrough;
+        entry.erase("command");
+        entry.erase("args");
+    } else if (!spec.url.empty()) {
+        entry["type"] = spec.type.empty() ? "http" : spec.type;
+        entry["url"]  = spec.url;
+        entry.erase("command");
+        entry.erase("args");
+        entry.erase("passthrough");
+    } else {
+        entry["type"]    = "stdio";
+        entry["command"] = spec.command;
+        if (spec.args.empty()) entry.erase("args");
+        else                   entry["args"] = spec.args;
+        entry.erase("url");
+        entry.erase("passthrough");
+    }
+    return store(path, l.doc) ? EditResult::Ok : EditResult::IoError;
+}
+
 EditResult remove_server(const fs::path& path, const std::string& name) {
     std::lock_guard<std::mutex> lk(mutation_mutex());
     Loaded l = load(path);

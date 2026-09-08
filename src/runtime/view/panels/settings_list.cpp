@@ -228,7 +228,10 @@ Element settings_list_panel(const Model& m) {
         std::vector<Hint> keys{{"\xe2\x86\x91\xe2\x86\x93", "move", 5},
                                {"\xe2\x86\xb5", "act", 5}};
         if (can_add(o->concern))                     keys.push_back({"a", "add", 2, success});
-        if (o->concern == se::Category::Plugins)     keys.push_back({"d", "remove", 3, warn});
+        if (o->concern == se::Category::Plugins) {
+            keys.push_back({"e", "edit", 3});
+            keys.push_back({"d", "remove", 3, warn});
+        }
         keys.push_back({"esc", "close", 5});
         cfg.footer.push_back(key_hints(std::move(keys)));
     }

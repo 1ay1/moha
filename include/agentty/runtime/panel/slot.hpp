@@ -145,6 +145,21 @@ struct ToolOutput      : agentty::tool_output::Open, WithFrom {};
 struct Checkpoints     : agentty::checkpoints::Open, WithFrom {};
 struct Rag     : agentty::rag_settings::Open, WithFrom {};
 struct SettingsList    : agentty::settings::ListOpen, WithFrom {};
+// Plugin detail/add editor — one form pane for BOTH flows. `server` empty
+// == ADD mode (the `kind` choice row rebuilds the field set as the user
+// picks stdio/http/passthrough…); non-empty == editing that server's entry
+// (identity rows locked, config rows editable, Save force-overwrites).
+// `project` routes the write to ./.agentty/mcp.json vs the user file.
+struct PluginEdit : WithFrom {
+    agentty::form::Form form;
+    std::string server;      // "" = add mode
+    bool        project = false;
+    // The kind the CURRENT field set was built for. When the `kind` choice
+    // changes, the reducer rebuilds the form for the new kind while
+    // preserving name/url text the user already typed — same rebuild-
+    // preserve pattern as SmartMode's advanced toggle.
+    std::string built_kind;
+};
 struct Fork            : agentty::fork_panel::Open, WithFrom {};
 struct DiffReview      : pick::OpenAtCell, WithFrom {};
 
@@ -153,7 +168,7 @@ using Variant = std::variant<
     Models, Providers, ThreadList, SmartMode,
     Palette, Mention, Symbol,
     CodeBlocks, CodeBlockResult, ToolOutput, Checkpoints,
-    Rag, SettingsList, Fork,
+    Rag, SettingsList, PluginEdit, Fork,
     DiffReview>;
 
 // The one indirection that lets the type refer to itself: a stashed parent
@@ -275,6 +290,7 @@ enum class Kind {
     Checkpoints,
     Rag,
     SettingsList,
+    PluginEdit,
     Fork,
     Models,
     Providers,
@@ -302,6 +318,7 @@ enum class Kind {
         Kind operator()(const Checkpoints&)     const { return Kind::Checkpoints; }
         Kind operator()(const Rag&)     const { return Kind::Rag; }
         Kind operator()(const SettingsList&)    const { return Kind::SettingsList; }
+        Kind operator()(const PluginEdit&)      const { return Kind::PluginEdit; }
         Kind operator()(const Fork&)            const { return Kind::Fork; }
         Kind operator()(const DiffReview&)      const { return Kind::DiffReview; }
     };

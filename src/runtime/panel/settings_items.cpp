@@ -96,7 +96,7 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading) 
         } else {
             w.primary   = std::to_string(model.wire_tool_count) +
                           " tools on the wire";
-            w.secondary = "◉ on / ○ off · Enter toggles · d removes · a adds";
+            w.secondary = "◉ on / ○ off · Enter toggles · e edits · a adds · d removes";
             w.status    = Item::Status::Neutral;
         }
         out.push_back(std::move(w));

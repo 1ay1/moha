@@ -59,6 +59,17 @@ enum class EditResult : std::uint8_t {
 [[nodiscard]] EditResult add_server(const std::filesystem::path& path,
                                     const ServerSpec& spec, bool force);
 
+// Edit an EXISTING entry in place, preserving every key the spec doesn't
+// own (env blocks, headers, timeoutMs, tools.exclude — anything the user
+// hand-wrote). add_server(force=true) replaces the entry WHOLESALE, which
+// is right for the CLI's re-add but wrong for a form's Save: saving a URL
+// tweak must not delete the env block beside it. Only the fields the
+// ServerSpec models (command/args/url/type/passthrough) are rewritten;
+// absent-in-spec transport keys are erased only when the KIND owns them
+// (a stdio spec clears url; an http spec clears command/args).
+[[nodiscard]] EditResult update_server(const std::filesystem::path& path,
+                                       const ServerSpec& spec);
+
 // Remove the named server. Preserves everything else.
 [[nodiscard]] EditResult remove_server(const std::filesystem::path& path,
                                        const std::string& name);

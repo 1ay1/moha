@@ -316,7 +316,12 @@ std::optional<Msg> on_settings_list(const KeyEvent& ev, bool input_active) {
         const auto v = nav::char_view(e);
         if (!v || v->ctrl) return std::nullopt;
         switch (v->c) {
-            case U'a': case U'A': return Msg{SettingsListAddStart{}};
+            // `a` opens the form-based add (kind-first wizard) on Plugins;
+            // other concerns keep the one-line starter prompt. `A` is the
+            // legacy one-liner everywhere (muscle memory + scripts in docs).
+            case U'a':            return Msg{SettingsListEditOpen{/*add=*/true}};
+            case U'A':            return Msg{SettingsListAddStart{}};
+            case U'e': case U'E': return Msg{SettingsListEditOpen{/*add=*/false}};
             case U'd': case U'D': return Msg{SettingsListRemove{}};
             case U' ':            return Msg{SettingsListActivate{}};
             default: return std::nullopt;
@@ -469,6 +474,12 @@ std::optional<Msg> on_smart_mode(const FormFocus& f, const KeyEvent& ev) {
         if (const auto v = nav::char_view(ev); v && !v->ctrl && v->c == U'a')
             return Msg{SmartModeAdvanced{}};
     return on_form(f, ev, [](form::keys::Action a) { return Msg{SmartModeKey{a}}; });
+}
+
+// Plugin editor. Pure form pane — no pane-specific chords; Esc routes
+// through the nav close so the settings list underneath is restored.
+std::optional<Msg> on_plugin_edit(const FormFocus& f, const KeyEvent& ev) {
+    return on_form(f, ev, [](form::keys::Action a) { return Msg{PluginEditKey{a}}; });
 }
 
 std::optional<Msg> on_diff_review(const KeyEvent& ev) {
@@ -997,11 +1008,13 @@ Sub<Msg> subscribe(const Model& m) {
 
     // Which mode each form-backed pane is in. Three bools per pane — NOT the
     // pane's rows, which would be a per-frame deep copy on the input path.
-    FormFocus rag_form, smart_form_snap;
+    FormFocus rag_form, smart_form_snap, plugin_form_snap;
     if (const auto* o = m.ui.panel.get<ui::panel::Rag>())
         rag_form = focus_of(o->embed.form);
     if (const auto* o = m.ui.panel.get<ui::panel::SmartMode>())
         smart_form_snap = focus_of(o->form);
+    if (const auto* o = m.ui.panel.get<ui::panel::PluginEdit>())
+        plugin_form_snap = focus_of(o->form);
 
     auto key_sub = Sub<Msg>::on_key(
         [=, login_state = m.ui.login](const KeyEvent& ev) -> std::optional<Msg> {
@@ -1063,6 +1076,7 @@ Sub<Msg> subscribe(const Model& m) {
                     case OK::Providers: return on_provider_picker(ev);
                     case OK::ThreadList:     return on_thread_list(ev);
                     case OK::SmartMode:      return on_smart_mode(smart_form_snap, ev);
+                    case OK::PluginEdit:     return on_plugin_edit(plugin_form_snap, ev);
                     case OK::DiffReview:     return on_diff_review(ev);
                     case OK::Todo:           return on_todo_modal(ev);
                     case OK::None:           break;
@@ -1129,6 +1143,7 @@ Sub<Msg> subscribe(const Model& m) {
         [in_login, settings_list_adding,
          rag_editing   = rag_form.editing,
          smart_editing = smart_form_snap.editing,
+         plugin_editing = plugin_form_snap.editing,
          filter_open   = active_panel == ui::panel::Kind::Palette
                       || active_panel == ui::panel::Kind::Models
                       || active_panel == ui::panel::Kind::Providers
@@ -1150,6 +1165,7 @@ Sub<Msg> subscribe(const Model& m) {
         if (settings_list_adding) return SettingsListPaste{std::move(s)};
         if (rag_editing)   return RagEmbedPaste{std::move(s)};
         if (smart_editing) return SmartModePaste{std::move(s)};
+        if (plugin_editing) return PluginEditPaste{std::move(s)};
         //   • a FILTER panel open (palette/models/providers/mention/symbol)
         //     → its query. Without this the paste dropped into the composer
         //     BEHIND the open panel — same silent mis-target the form panes

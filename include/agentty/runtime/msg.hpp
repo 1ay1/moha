@@ -617,6 +617,20 @@ struct SmartModePaste { std::string text; };
 struct SmartModeAdvanced {};
 struct SmartModeClearSlot {};     // 'x' on a slot row: reset it to auto
 
+// ── Plugin editor (detail / add form) ──────────────────────────
+// Opened from the Plugins settings list: `e` on a server row → detail form
+// for THAT server; `a` → add form (kind-first: the kind choice rebuilds the
+// field set as the user picks stdio/http/sse/passthrough). Same shared form
+// layer as SmartMode/Rag — one key message, paste routed to the focused
+// field, close via nav so Esc restores the settings list.
+struct OpenPluginEdit {
+    std::string server;   // "" = add mode
+    bool        project = false;
+};
+struct ClosePluginEdit {};
+struct PluginEditKey { form::keys::Action action; };
+struct PluginEditPaste { std::string text; };
+
 // ── In-app login modal ───────────────────────────────────────────────────
 // Shown when the user starts agentty with no valid credentials, OR
 // triggered explicitly in-app to sign in or add an account.
@@ -805,8 +819,13 @@ struct CloseSettingsList {};
 struct SettingsListMove  { int delta; };
 struct SettingsListActivate {};
 // Inline add-mode.
-struct SettingsListAddStart   {};              // `a` — enter the add prompt
+struct SettingsListAddStart   {};              // `A` — enter the one-line add prompt
 struct SettingsListRemove     {};              // `d` — delete the highlighted plugin (deliberate)
+// `e`/`a` — open the plugin editor form (detail on the highlighted server,
+// or add mode). On non-Plugins concerns `add=true` falls back to the
+// one-line starter prompt and `add=false` is a no-op — resolved in the
+// reducer, where the concern is known.
+struct SettingsListEditOpen   { bool add = false; };
 struct SettingsListChar       { char32_t ch; };// typed codepoint
 struct SettingsListPaste      { std::string text; }; // bracketed paste into the add-mode input
 // The MCP connection snapshot the Plugins panel renders. Dispatched by the
@@ -1028,6 +1047,7 @@ using RagMsg = std::variant<
 using SettingsListMsg = std::variant<
     OpenSettingsList, CloseSettingsList, SettingsListMove,
     SettingsListActivate, SettingsListAddStart, SettingsListRemove,
+    SettingsListEditOpen,
     SettingsListChar, SettingsListPaste, PluginsUpdated, SettingsListBackspace,
     SettingsListSubmitInput, SettingsListCancelInput>;
 
@@ -1054,6 +1074,10 @@ using DiffReviewMsg = std::variant<
 using SmartModeMsg = std::variant<
     OpenSmartMode, CloseSmartMode, SmartModeKey, SmartModePaste,
     SmartModeAdvanced, SmartModeClearSlot>;
+
+// ── Plugin editor (detail / add form) ──────────────────────────
+using PluginEditMsg = std::variant<
+    OpenPluginEdit, ClosePluginEdit, PluginEditKey, PluginEditPaste>;
 
 using MetaMsg = std::variant<
     CompactContext, CycleProfile, RestoreCheckpoint, CheckpointRestored,
@@ -1095,6 +1119,7 @@ using Msg = std::variant<
     msg::LoginMsg,
     msg::DiffReviewMsg,
     msg::SmartModeMsg,
+    msg::PluginEditMsg,
     msg::MetaMsg
 >;
 
@@ -1139,6 +1164,7 @@ consteval int leaf_domain_count() {
          + int{in_variant_v<L, msg::LoginMsg>}
          + int{in_variant_v<L, msg::DiffReviewMsg>}
          + int{in_variant_v<L, msg::SmartModeMsg>}
+         + int{in_variant_v<L, msg::PluginEditMsg>}
          + int{in_variant_v<L, msg::ToolOutputMsg>}
          + int{in_variant_v<L, msg::MetaMsg>};
 }
@@ -1191,7 +1217,7 @@ static_assert(leaf_domain_count<Tick>()                      == 1,
 // they must also update the kDomains array used by the dispatcher in
 // update.cpp, which currently exhausts on 12 arms. Mismatch → dispatch
 // switch loses a domain silently.
-static_assert(std::variant_size_v<Msg> == 20,
+static_assert(std::variant_size_v<Msg> == 21,
               "Msg domain count changed — update the dispatcher in "
               "src/runtime/app/update.cpp and this proof to match");
 

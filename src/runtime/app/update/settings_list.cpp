@@ -385,6 +385,32 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
             }
             return {std::move(m), std::move(cmd)};
         },
+        [&](SettingsListEditOpen& e) -> Step {
+            auto* o = m.ui.panel.get<pn::SettingsList>();
+            if (!o || o->input_active) return done(std::move(m));
+            if (o->concern != se::Category::Plugins) {
+                // Other concerns have no editor form; `a` degrades to the
+                // one-line starter prompt they already use, `e` is a no-op.
+                if (e.add)
+                    return agentty::app::update(std::move(m),
+                                                Msg{SettingsListAddStart{}});
+                return done(std::move(m));
+            }
+            if (e.add) {
+                // Add form: descend keeps this list as the Esc target.
+                return agentty::app::update(std::move(m),
+                                            Msg{OpenPluginEdit{{}, false}});
+            }
+            // Detail form for the highlighted server. Tool rows carry the
+            // server in `arg` too, so `e` works from anywhere in a subtree.
+            const auto rows = se::items_for(m, o->concern);
+            if (o->index < 0 || o->index >= static_cast<int>(rows.size()))
+                return done(std::move(m));
+            const auto& row = rows[static_cast<std::size_t>(o->index)];
+            if (row.arg.empty()) return done(std::move(m));   // header rows
+            return agentty::app::update(std::move(m),
+                                        Msg{OpenPluginEdit{row.arg, false}});
+        },
         [&](SettingsListAddStart) -> Step {
             auto* o = m.ui.panel.get<pn::SettingsList>();
             if (!o) return done(std::move(m));
