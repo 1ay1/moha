@@ -13,6 +13,10 @@
 #   4. git commit "release: vX.Y.Z" + git tag vX.Y.Z.
 #   5. scripts/release.sh --tag vX.Y.Z (builds every artifact + uploads via gh).
 #   6. Sync AUR repo (aur@aur.archlinux.org:agentty-bin.git).
+#   6b. Sync AUR agentty-git: refresh the cosmetic pkgver on the AUR page and
+#       verify the PKGBUILD's FetchContent pin tags still match
+#       cmake/AgenttySubmodules.cmake (a drifted pin would break every
+#       from-source AUR build until fixed — fail the release instead).
 #   7. Sync 1ay1/homebrew-tap Formula/agentty.rb and 1ay1/scoop-bucket bucket/agentty.json.
 #   8. git push origin master --tags.
 #
@@ -145,6 +149,86 @@ else
         else
             ( cd "$aur_dir" && git push -q origin master )
             ok "https://aur.archlinux.org/packages/agentty-bin (v$NEW_VERSION-1)"
+        fi
+    fi
+fi
+
+# ---- 6b. AUR agentty-git ----------------------------------------------------
+# Users are never blocked by a stale agentty-git: its pkgver() re-derives the
+# version from `git describe` at build time. This step exists for two other
+# reasons: (a) the AUR page shows the version from the last-pushed .SRCINFO,
+# and a page frozen at an old release looks abandoned; (b) if this release
+# moved a FetchContent pin (nlohmann_json / simdjson / mimalloc tag in
+# cmake/AgenttySubmodules.cmake), the PKGBUILD's checksummed tarballs no
+# longer match and EVERY agentty-git build fails — catch that here, at
+# release time, not in a user's makepkg.
+hr "6b/8  AUR (agentty-git)"
+gitpkg="$root/packaging/arch/agentty-git/PKGBUILD"
+if [ "$DO_AUR" -eq 0 ]; then
+    info "--no-aur: skipping agentty-git sync"
+elif ! command -v makepkg >/dev/null 2>&1; then
+    info "makepkg not installed — skipping agentty-git (rerun on an Arch host)"
+else
+    # Pin-drift guard: the tags the PKGBUILD feeds through
+    # FETCHCONTENT_SOURCE_DIR_* must equal the tags CMake pins. On drift the
+    # sha256s need re-computing too, so this is a hard stop, not an auto-fix.
+    cm="$root/cmake/AgenttySubmodules.cmake"
+    pin_of() { # first GIT_TAG after the FetchContent_Declare( <name> line
+        awk -v n="$1" '$0 ~ "^[[:space:]]*" n "$" {f=1} f&&/GIT_TAG/{print $2; exit}' "$cm"
+    }
+    cm_json=$(pin_of nlohmann_json)
+    cm_simd=$(pin_of simdjson)
+    cm_mi=$(sed -nE 's/.*AGENTTY_MIMALLOC_TAG "([^"]+)".*/\1/p' "$cm" | head -1)
+    pb_json=$(sed -nE 's/^_json_tag=(.*)/\1/p' "$gitpkg")
+    pb_simd=$(sed -nE 's/^_simdjson_tag=(.*)/\1/p' "$gitpkg")
+    pb_mi=$(sed -nE 's/^_mimalloc_tag=(.*)/\1/p' "$gitpkg")
+    [ "$cm_json" = "$pb_json" ] && [ "$cm_simd" = "$pb_simd" ] && [ "$cm_mi" = "$pb_mi" ] \
+        || err "agentty-git PKGBUILD pins drifted from AgenttySubmodules.cmake:
+  nlohmann_json: cmake=$cm_json pkgbuild=$pb_json
+  simdjson:      cmake=$cm_simd pkgbuild=$pb_simd
+  mimalloc:      cmake=$cm_mi pkgbuild=$pb_mi
+update packaging/arch/agentty-git/PKGBUILD (tags + sha256sums) and rerun."
+    ok "FetchContent pins match ($cm_json / $cm_simd / $cm_mi)"
+
+    # Refresh the cosmetic pkgver to this release's describe output and keep
+    # the checked-in copy in sync (committed below, lands in the step-8 push).
+    gitver=$(git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g')
+    sed -i -E "s/^pkgver=.*/pkgver=$gitver/" "$gitpkg"
+    if [ -n "$(git status --porcelain -- packaging/arch/agentty-git/PKGBUILD)" ]; then
+        git add packaging/arch/agentty-git/PKGBUILD
+        git commit -q -m "packaging: sync agentty-git pkgver ($gitver)"
+        ok "pkgver -> $gitver (committed)"
+    fi
+
+    # Push to the AUR. agentty-git lives on account 1ay1 (key: neowall_aur),
+    # NOT the account that owns agentty-bin — override with AUR_GIT_KEY.
+    aur_key=${AUR_GIT_KEY:-$HOME/.ssh/neowall_aur}
+    aurgit_ssh="ssh -S none -o IdentitiesOnly=yes -i $aur_key"
+    aur_dir="$root/dist/aur/agentty-git"
+    if [ ! -d "$aur_dir/.git" ]; then
+        mkdir -p "$(dirname "$aur_dir")"
+        GIT_SSH_COMMAND="$aurgit_ssh" \
+            git clone -q ssh://aur@aur.archlinux.org/agentty-git.git "$aur_dir"
+    else
+        ( cd "$aur_dir" \
+            && GIT_SSH_COMMAND="$aurgit_ssh" git fetch -q origin master 2>/dev/null \
+            && git reset -q --hard origin/master 2>/dev/null ) || true
+    fi
+    cp "$gitpkg" "$aur_dir/PKGBUILD"
+    ( cd "$aur_dir" && makepkg --printsrcinfo > .SRCINFO )
+    if [ -z "$(cd "$aur_dir" && git status --porcelain)" ]; then
+        info "AUR agentty-git already up-to-date"
+    else
+        ( cd "$aur_dir" \
+            && git add PKGBUILD .SRCINFO \
+            && git -c user.name="$(git config user.name)" \
+                   -c user.email="$(git config user.email)" \
+                   commit -q -m "agentty-git $gitver-1" )
+        if [ "$DRY" -eq 1 ]; then
+            info "--dry: skipping aur push (staged at $aur_dir)"
+        else
+            ( cd "$aur_dir" && GIT_SSH_COMMAND="$aurgit_ssh" git push -q origin master )
+            ok "https://aur.archlinux.org/packages/agentty-git ($gitver-1)"
         fi
     fi
 fi
