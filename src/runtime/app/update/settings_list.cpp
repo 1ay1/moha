@@ -76,6 +76,10 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
             const int start =
                 first_actionable(se::items_for(m, e.concern), 0, +1);
             m.ui.panel = pn::SettingsList{{e.concern, start}};
+            // A fresh open starts at the top — don't inherit the scroll
+            // offset of the last visit (the widget's keep-selection-in-view
+            // would fight the stale offset for a frame). PR #34.
+            m.ui.settings_list_scroll.y = 0;
             // Opening the Plugins panel is what CONNECTS the servers (and
             // refreshes the snapshot): the connection is driven by the update
             // loop, not a lazy side effect of the first tool call. Without

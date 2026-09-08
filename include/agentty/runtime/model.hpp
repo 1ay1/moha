@@ -597,6 +597,10 @@ struct Model {
         mutable maya::ScrollState todo_scroll             = routed_scroll();
         mutable maya::ScrollState tool_viewer_scroll      = routed_scroll();
         mutable maya::ScrollState account_list_scroll     = routed_scroll();
+        // The Ctrl+K settings list (Plugins/Commands/Agents/Hooks). The
+        // Plugins pane can exceed any viewport (125 advertised tools ⇒ 135+
+        // rows), so it scrolls like every other picker.
+        mutable maya::ScrollState settings_list_scroll    = routed_scroll();
     };
 
     Domain      d;

@@ -100,7 +100,10 @@ Element settings_list_picker(const Model& m) {
     // that cannot be reclaimed — which is the whole reason
     // panel_viewport_h() exists (see pickers_common.hpp).
     cfg.viewport_h = panel_detail::panel_viewport_h();
-    cfg.scroll     = nullptr;
+    // Scroll like every other picker — the Plugins pane can exceed any
+    // viewport (a server advertising 125 tools is 135+ rows), and a
+    // scroll-less panel paints the overflow past the modal border.
+    cfg.scroll     = &m.ui.settings_list_scroll;
     cfg.selected   = adding ? -1 : o->index;
 
     // ── Header ─────────────────────────────────────────────────

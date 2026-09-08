@@ -22,6 +22,7 @@ include(AgenttySubmodules)
 
 # Per-domain source group lists (AGENTTY_*_SOURCES). See cmake/AgenttySources.cmake.
 include(AgenttySources)
+include(CheckCXXSourceCompiles)
 
 # ── Shared compile flags ────────────────────────────────────────────────
 # All agentty TUs (the main binary, the shared OBJECT libraries below, and
@@ -667,8 +668,29 @@ if(NOT MSVC AND NOT AGENTTY_SANITIZE)
     endif()
     # _FORTIFY_SOURCE requires -O1+; only define it for optimizing configs so
     # a Debug build doesn't emit the "requires optimization" warning per TU.
-    target_compile_definitions(agentty PRIVATE
-        $<$<NOT:$<CONFIG:Debug>>:_FORTIFY_SOURCE=2>)
+    #
+    # A hardening toolchain spec or distro packager flags (e.g. Arch makepkg's
+    # `-D_FORTIFY_SOURCE=3` injected via CFLAGS, or a hardened GCC spec file
+    # that predefines it with no -D at all) can already define the macro.
+    # Adding our own -D after it trips GCC's "`_FORTIFY_SOURCE' redefined"
+    # warning. Detect a predefinition at configure time (a compile probe, not
+    # a flag-string scan — spec-file hardening injects no visible flag) and
+    # yield: the toolchain's value is the packager's hardening choice.
+    # (PR #33, sail3r.)
+    set(_agt_req_quiet_save ${CMAKE_REQUIRED_QUIET})
+    set(CMAKE_REQUIRED_QUIET YES)
+    check_cxx_source_compiles("
+        #ifndef _FORTIFY_SOURCE
+        #error _FORTIFY_SOURCE is not predefined by the toolchain
+        #endif
+        int main() { return 0; }
+    " AGENTTY_FORTIFY_PREDEFINED)
+    set(CMAKE_REQUIRED_QUIET ${_agt_req_quiet_save})
+    unset(_agt_req_quiet_save)
+    if(NOT AGENTTY_FORTIFY_PREDEFINED)
+        target_compile_definitions(agentty PRIVATE
+            $<$<NOT:$<CONFIG:Debug>>:_FORTIFY_SOURCE=2>)
+    endif()
     # A fully-static build already carries its own PIE decision (-static-pie
     # or -no-pie); adding a bare -pie here would fight it. Only add -pie for
     # the non-static path.

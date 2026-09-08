@@ -49,7 +49,8 @@ set(_AGENTTY_CONSOLIDATED
     oauth_proactive_refresh_test maya_host_sequence_test
     smart_slot_panel_stack_test account_switch_refresh_test fused_models_test
     panel_sections_render_test
-    credentials_test entitlement_test inflate_test)
+    credentials_test entitlement_test inflate_test
+    settings_list_scroll_test)
 foreach(_t ${_AGENTTY_CONSOLIDATED})
     agentty_test(${_t} MODE consolidated)
 endforeach()
