@@ -21,7 +21,6 @@
 #include <maya/render/renderer.hpp> // build_layout_tree / layout::compute
 #include <maya/layout/yoga.hpp>     // maya::layout::compute / LayoutNode
 #include <maya/platform/io.hpp>
-#include <maya/terminal/tmux.hpp>  // tmux::active — gate viewport-blind reveal overlay
 #include <maya/style/theme.hpp>
 #include <maya/core/motion.hpp>   // anim::keep_animating — frame requests
 
@@ -209,35 +208,35 @@ maya::Element cached_markdown_for(const Message& msg, const Model& m,
     // construction and re-applied only when the ANSWER changes, so a
     // caller that deliberately overrode the flag on an existing widget
     // (tests pre-seed reveal_fx=false to measure settled height) keeps its
-    // override, while a real policy change (attaching to tmux, exporting
-    // AGENTTY_REVEAL) still takes effect on the next frame.
+    // override, while a real policy change (exporting AGENTTY_REVEAL) still
+    // takes effect for the next message's widget.
     //
-    // DEFAULT: on for a direct terminal, OFF UNDER TMUX — both halves of
-    // the reveal rewrite the live tail's rows every animation frame and
-    // are viewport-blind (the widget can't see the scroll position, so it
-    // can only safely touch the bottom row). tmux owns its own scroll
-    // region, so those rewrites desync from the mux grid and GHOST: text
-    // overlaps the rows above and words split mid-token. That is a
-    // rendering CORRUPTION, not a taste call, so the default must not
-    // enable it there (fixed once in 0ebcf5f9, reintroduced when the env
-    // switches landed with unconditional `true` defaults).
+    // DEFAULT: ON EVERYWHERE, tmux included. Both halves of the reveal
+    // rewrite the live tail's rows every animation frame and are
+    // viewport-blind (the widget can't see the scroll position, so it can
+    // only safely touch the bottom row). Under tmux those rewrites used to
+    // desync from the mux grid and GHOST — text overlapping the rows above,
+    // words split mid-token — which is why the default was terminal-derived
+    // (0ebcf5f9). The tail-rewrite path has since been made viewport-safe,
+    // so the multiplexer no longer earns a degraded default: one behaviour
+    // everywhere beats a split-brain one that silently differs by terminal.
+    // If a given tmux/terminal combination still ghosts, `AGENTTY_REVEAL=0`
+    // turns it off without a rebuild.
     //
     // Env always wins, in both directions:
     //   • AGENTTY_REVEAL            — master (off ⇒ no reveal at all)
     //   • AGENTTY_REVEAL_TYPEWRITER — the progressive clip
     //   • AGENTTY_REVEAL_DECORATE   — the scramble/gradient/caret overlay
     // Each accepts 0/false/off/no = off; anything else = on; unset =
-    // the terminal-derived default.
+    // the default.
     {
-        // Under test the default is DETERMINISTIC, never terminal-derived:
-        // a suite that passes on a laptop and fails inside `tmux attach`
-        // is testing the environment. AGENTTY_UNDER_TEST is set by both
-        // test mains before anything renders, and is checked HERE (not via
-        // the reveal env vars) so it can't race their setenv ordering.
-        // Tests that want the reveal OFF set the flag on their own widget
-        // (midrun_wire_test pre-seeds it), which this never clobbers.
-        const bool under_test = env_on("AGENTTY_UNDER_TEST", false);
-        const bool fx_default = under_test || !::maya::tmux::active();
+        // The default no longer varies by terminal: no tmux probe, and no
+        // AGENTTY_UNDER_TEST special case either — the suite was only
+        // reading that to pin down a terminal-derived default, and there
+        // isn't one any more. A test that wants the reveal OFF still
+        // pre-seeds the flag on its own widget (midrun_wire_test), which
+        // this never clobbers.
+        const bool fx_default = true;
         const bool master     = env_on("AGENTTY_REVEAL", fx_default);
         // Written for each NEWLY CONSTRUCTED widget — not per frame, so a
         // caller that deliberately overrode the flag on an existing widget

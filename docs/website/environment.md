@@ -120,7 +120,11 @@ common ones are `AGENTTY_DOCS_DIR` and `AGENTTY_EMBED_MODEL`.
 | `AGENTTY_HOST` | Declare the cooperating host explicitly rather than autodetecting. |
 | `AGENTTY_CLIPBOARD_CMD` | Command to pipe clipboard writes through (e.g. `pbcopy`, `wl-copy`) when autodetection fails. |
 | `AGENTTY_PAINTED_CARET` | `=1` draws the caret manually — for terminals with broken cursor-visibility handling. |
-| `AGENTTY_NO_REVEAL_GLIDE` | Disable the streaming reveal animation; text appears immediately. |
+| `AGENTTY_REVEAL` | Master switch for the streaming reveal effect. **On by default everywhere, tmux included**; `0`/`false`/`off`/`no` turns it off, anything else forces it on. Set it to `0` if your terminal/multiplexer combination ghosts the live tail. |
+| `AGENTTY_REVEAL_TYPEWRITER` | The typewriter clip alone — text arriving character-by-character. ANDed with `AGENTTY_REVEAL`; same default and same truthiness rule. |
+| `AGENTTY_REVEAL_DECORATE` | The decorative overlay on the revealing tail alone. ANDed with `AGENTTY_REVEAL`; same default and same truthiness rule. |
+| `AGENTTY_NO_REVEAL_GLIDE` | `=1` disables the bounded **end-of-turn glide** (the visible catch-up when a turn finishes) and restores the immediate finish. Not the reveal animation itself — that's `AGENTTY_REVEAL`. The glide is otherwise on only where frames are dense: not over SSH, and only with synchronized-output support. |
+| `AGENTTY_NO_TAPE` | `=1` replaces the animated activity tape with a quiet static row carrying the same elapsed / tok-s detail. |
 | `AGENTTY_FROZEN_COLLAPSE` | `=1` opts **in** to collapsing frozen turns. Off by default. |
 | `AGENTTY_NO_TRANSFORMS` | Disable output transforms. |
 
@@ -132,6 +136,7 @@ Not for normal use. Listed so a reader of the source isn't left guessing.
 |----------|--------|
 | `AGENTTY_CACHE_PROF` · `AGENTTY_LOAD_PROF` · `AGENTTY_STREAM_PROF` · `AGENTTY_VIEW_PROF` | Profiling counters for the render cache, thread load, streaming, and view paths. |
 | `AGENTTY_STRICT_TEST_ROOT` · `AGENTTY_TEST_FAKE_PASSWD_HOME` | Test-harness isolation: enforce a sandboxed user root and fake the passwd home lookup. |
+| `AGENTTY_UNDER_TEST` | Set by the test mains before anything renders: arms the user-root tripwire so a test can never touch the real `~/.agentty`. |
 
 ## Variables agentty *reads* from your environment
 

@@ -21,9 +21,9 @@
 #include <maya/core/anim_clock.hpp>
 
 int main(int argc, char** argv) {
-    // (Rendering policy that would otherwise be terminal-derived — the
-    // streaming reveal — keys off AGENTTY_UNDER_TEST, set below, so the
-    // suite behaves identically inside and outside tmux.)
+    // (No rendering policy is terminal-derived any more — the streaming
+    // reveal defaults ON everywhere, tmux included — so the suite behaves
+    // identically inside and outside a multiplexer without a gate here.)
 
     // ── Central user-root isolation ────────────────────────────────
     // Point the ENTIRE binary at a throwaway ~/.agentty before any test
