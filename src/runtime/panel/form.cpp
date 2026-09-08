@@ -262,6 +262,7 @@ bool paste_into(Form& f, std::string_view text) {
     if (!f.editing() || !row || !row->editable() || row->locked) return false;
     paste(row->value, text);
     f.dirty = true;
+    f.edit_dirty = true;   // pasted bytes count toward commit-on-exit
     return true;
 }
 
@@ -408,6 +409,7 @@ Activated activate(Form& f) {
 
     if (row->is_text_like()) {
         f.focus = focus::Editing{};
+        f.edit_dirty = false;   // fresh session — commit-on-exit arms on first change
         return Activated::StartedEditing;
     }
 

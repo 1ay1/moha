@@ -280,11 +280,16 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
                 // Any other change (url text etc.) is save-owned; fall out.
             }
 
-            // ^S saves from ANYWHERE in the form — the same chord every
-            // other form pane (Rag) honours; without this the pane looks
-            // like a form but ignores the form's save key.
-            const bool want_save =
-                applied.save || (applied.fired && row_id == pf::kSave);
+            // ^S saves from ANYWHERE — and so does LEAVING an edited field
+            // (commit-on-exit: Applied::left_field), with two deliberate
+            // differences: field-exit commits are DETAIL-MODE ONLY (an add
+            // form is under construction — committing a name with no URL
+            // yet would just stamp errors on rows the user hasn't reached),
+            // and they keep the pane OPEN (leaving a field is not leaving
+            // the form). Explicit save (^S / the action row) still closes.
+            const bool exit_commit = applied.left_field && !o->server.empty();
+            const bool want_save = applied.save || exit_commit
+                || (applied.fired && row_id == pf::kSave);
 
             if (!applied.fired && !want_save) return done(std::move(m));
 
@@ -342,6 +347,15 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
                 if (r != tools::plugin::EditResult::Ok) {
                     o->form.note = "write failed — is the file valid JSON?";
                     return done(std::move(m));
+                }
+                o->form.dirty = false;   // committed — the footer drops "unsaved"
+                if (exit_commit && !applied.save) {
+                    // Field-exit commit: written + applied, pane stays open.
+                    // The catalog reload runs so the new value is live
+                    // immediately (same as the toggle path).
+                    return {std::move(m), Cmd<Msg>::batch(std::vector<Cmd<Msg>>{
+                        cmdf::load_plugins_async(/*reconnect=*/true),
+                        set_status_toast(m, "saved '" + spec.name + "'")})};
                 }
                 const std::string toast = (add ? "added '" : "saved '")
                     + spec.name + "'";

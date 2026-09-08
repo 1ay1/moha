@@ -113,6 +113,16 @@ Applied apply(Form& f, Action a) {
     Applied out;
     Field* row = f.focused();
 
+    // End the current edit session (if any) and record commit-on-exit:
+    // leaving a field whose value changed IS the save signal. One helper so
+    // Enter/Esc/arrows/PgUp/Home all agree — a divergent exit path here is
+    // a field that silently never commits.
+    auto leave_edit = [&] {
+        if (!f.editing()) return;
+        (void)escape(f);
+        if (f.edit_dirty) { out.left_field = true; f.edit_dirty = false; }
+    };
+
     switch (a.intent) {
         case Intent::None: break;
 
@@ -122,22 +132,22 @@ Applied apply(Form& f, Action a) {
             // text edits are in-place, so "commit" is just dropping the
             // caret), then move. Ending the edit first keeps the invariant
             // that Editing focus always refers to the cursor row.
-            if (f.editing()) (void)escape(f);
+            leave_edit();
             move(f, a.intent == Intent::MovePrev ? -1 : +1);
             break;
 
-        case Intent::MoveFirst: if (f.editing()) (void)escape(f);
+        case Intent::MoveFirst: leave_edit();
                                  move_edge(f, /*last=*/false); break;
-        case Intent::MoveLast:  if (f.editing()) (void)escape(f);
+        case Intent::MoveLast:  leave_edit();
                                  move_edge(f, /*last=*/true);  break;
         // Viewport-sized strides. The form does not know the viewport (a
         // widget concern), so a fixed stride matching the default
         // panel_viewport_h keeps PgUp/PgDn meaningful without a layout
         // back-channel; move_page CLAMPS at the edges (no wrap) and skips
         // headers.
-        case Intent::MovePageUp:   if (f.editing()) (void)escape(f);
+        case Intent::MovePageUp:   leave_edit();
                                    move_page(f, -10); break;
-        case Intent::MovePageDown: if (f.editing()) (void)escape(f);
+        case Intent::MovePageDown: leave_edit();
                                    move_page(f, +10); break;
 
         case Intent::AdjustDown:
@@ -163,7 +173,13 @@ Applied apply(Form& f, Action a) {
             break;
 
         case Intent::Save:  out.save  = true; break;
-        case Intent::Close: out.close = escape(f); break;
+        case Intent::Close:
+            // Esc while editing leaves the field — and commits like every
+            // other exit (in-place edits mean Esc was never a revert; making
+            // it the one uncommitted exit would be a silent-drift trap).
+            if (f.editing()) { leave_edit(); break; }
+            out.close = escape(f);
+            break;
 
         // ── Editing-only intents ──────────────────────────────────
         // Guarded by the TRUE focus, not the caller's belief. subscribe.cpp
@@ -177,18 +193,21 @@ Applied apply(Form& f, Action a) {
             if (f.editing() && row && row->editable()) {
                 insert(row->value, a.ch);
                 out.changed = true;
+                f.edit_dirty = true;
             }
             break;
         case Intent::Backspace:
             if (f.editing() && row && row->editable()) {
                 backspace(row->value);
                 out.changed = true;
+                f.edit_dirty = true;
             }
             break;
         case Intent::DeleteForward:
             if (f.editing() && row && row->editable()) {
                 delete_forward(row->value);
                 out.changed = true;
+                f.edit_dirty = true;
             }
             break;
         case Intent::CaretLeft:
@@ -207,10 +226,11 @@ Applied apply(Form& f, Action a) {
             if (f.editing() && row && row->editable()) {
                 clear(row->value);
                 out.changed = true;
+                f.edit_dirty = true;
             }
             break;
         case Intent::LeaveField:
-            (void)escape(f);
+            leave_edit();
             break;
 
         case Intent::MenuPrev:      dropdown_move(f, -1); break;

@@ -282,6 +282,13 @@ struct Form {
     // thing the footer says.
     bool note_replaces_grammar = false;
 
+    // The CURRENT edit session mutated the field's value. Set by the key
+    // layer (insert/backspace/clear) and paste_into while editing; cleared
+    // when an edit session starts and when it ends. Powers
+    // Applied::left_field — commit-on-exit fires only when leaving a field
+    // that actually changed, so pure navigation through fields is free.
+    bool edit_dirty = false;
+
     [[nodiscard]] const Field* focused() const noexcept {
         if (cursor < 0 || cursor >= static_cast<int>(fields.size())) return nullptr;
         return &fields[static_cast<std::size_t>(cursor)];

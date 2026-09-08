@@ -124,7 +124,8 @@ inline auto visual_parts(const Form& f) {
     return std::make_tuple(visual::ref(f.title), visual::ref(f.subtitle),
                            visual::ref(f.fields), f.cursor,
                            visual::ref(f.focus), f.dirty,
-                           visual::ref(f.note), f.note_replaces_grammar);
+                           visual::ref(f.note), f.note_replaces_grammar,
+                           f.edit_dirty);
 }
 static_assert(visual::parts_cover_all<Form>);
 

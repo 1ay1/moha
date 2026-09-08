@@ -83,6 +83,13 @@ struct Applied {
     bool hand_off = false;     // a Pick row wants its picker opened
     bool save     = false;     // ^S
     bool close    = false;     // Esc at the outermost level
+    // Editing focus ended THIS keystroke (Enter/Esc/arrow out of a text
+    // field) AND the field's value changed during that edit session.
+    // Commit-on-exit: panes treat this exactly like `save` — leaving a
+    // field IS the save. Exit without a change stays false, so cursoring
+    // through fields never rewrites config. The two flags share one code
+    // path in every pane (obligation #4 in PANELS.md's recipe).
+    bool left_field = false;
 };
 Applied apply(Form& f, Action a);
 

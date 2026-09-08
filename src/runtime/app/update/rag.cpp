@@ -285,7 +285,10 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
             if (applied.fired)
                 return {std::move(m),
                         Cmd<Msg>::after(std::chrono::milliseconds{0}, Msg{RagEmbedTest{}})};
-            if (applied.save)
+            // ^S and field-exit share one save path (commit-on-exit — the
+            // form-layer contract). RagEmbedSave validates first, so a bad
+            // half-config surfaces as the probe's Failed note, not a write.
+            if (applied.save || applied.left_field)
                 return {std::move(m),
                         Cmd<Msg>::after(std::chrono::milliseconds{0}, Msg{RagEmbedSave{}})};
             if (applied.close)
