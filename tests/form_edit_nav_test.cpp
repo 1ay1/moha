@@ -313,6 +313,54 @@ int main() {
         std::fprintf(stderr, "chain: second esc closed to thread\n");
     }
 
+    // ── Async-probe race: Test launches a worker; the user EDITS the
+    // config before the completion lands. The stale TestDone must NOT
+    // stamp Ok/dim onto a config the probe never saw. ─────────────
+    {
+        auto* r = m.ui.panel.get<pn::Rag>();
+        if (!r) { std::fprintf(stderr, "no rag pane for probe race\n"); return 1; }
+        // Walk to an editable text row — the previous section left the
+        // cursor at End (an Action/locked row where Insert no-ops, which
+        // would make this test assert nothing).
+        for (int i = 0; i < 24; ++i) {
+            const auto* fr = r->embed.form.focused();
+            if (fr && fr->is_text_like() && !fr->locked) break;
+            if (auto up = form::keys::translate(r->embed.form, maya::KeyEvent{K::Up})) {
+                m = step(std::move(m), Msg{RagEmbedKey{*up}}, "probe race: seek");
+                r = m.ui.panel.get<pn::Rag>();
+            }
+        }
+        const auto gen_at_launch = ++r->embed.probe_gen;   // simulate launch
+        r->embed.probe = agentty::rag_settings::EmbedForm::Testing{};
+        // The user edits a field → invalidate_probe bumps the generation.
+        if (auto enter = form::keys::translate(r->embed.form, maya::KeyEvent{K::Enter}))
+            m = step(std::move(m), Msg{RagEmbedKey{*enter}}, "probe race: edit");
+        if (auto a = form::keys::translate(true, false, maya::KeyEvent{maya::CharKey{U'x'}}))
+            m = step(std::move(m), Msg{RagEmbedKey{*a}}, "probe race: type");
+        // The worker's answer arrives, stamped with the OLD generation.
+        m = step(std::move(m),
+                 Msg{RagEmbedTestDone{true, 768, 42, "", gen_at_launch}},
+                 "probe race: stale done");
+        r = m.ui.panel.get<pn::Rag>();
+        if (std::holds_alternative<agentty::rag_settings::EmbedForm::Ok>(r->embed.probe)) {
+            std::fprintf(stderr,
+                         "FAIL: stale probe completion verified an edited config\n");
+            return 1;
+        }
+        // And a CURRENT-generation completion still lands.
+        const auto gen_now = ++r->embed.probe_gen;
+        r->embed.probe = agentty::rag_settings::EmbedForm::Testing{};
+        m = step(std::move(m),
+                 Msg{RagEmbedTestDone{true, 768, 42, "", gen_now}},
+                 "probe race: fresh done");
+        r = m.ui.panel.get<pn::Rag>();
+        if (!std::holds_alternative<agentty::rag_settings::EmbedForm::Ok>(r->embed.probe)) {
+            std::fprintf(stderr, "FAIL: fresh probe completion was dropped\n");
+            return 1;
+        }
+        std::fprintf(stderr, "probe race: stale dropped, fresh landed\n");
+    }
+
     std::fprintf(stderr, "ALL OK\n");
     return 0;
 }

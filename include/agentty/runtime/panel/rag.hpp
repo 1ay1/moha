@@ -65,6 +65,15 @@ struct EmbedForm {
     using Probe = std::variant<Idle, Testing, Ok, Failed>;
     Probe probe{Idle{}};
 
+    // Which probe LAUNCH the next TestDone may answer. The probe runs on a
+    // worker; between launch and completion the user can EDIT the config
+    // (which invalidates the probe) or launch again. A completion whose
+    // generation doesn't match is a stale answer about a config that no
+    // longer exists — without the stamp it would overwrite `dim` and mark
+    // the pane verified-Ok against bytes the probe never saw. Same shape as
+    // login's attempt_id.
+    std::uint64_t probe_gen = 0;
+
     [[nodiscard]] bool dirty() const noexcept { return form.dirty; }
 };
 

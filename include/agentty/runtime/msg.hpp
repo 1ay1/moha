@@ -800,6 +800,9 @@ struct RagEmbedTestDone {
     std::uint32_t dim = 0;
     int           latency_ms = 0;
     std::string   error;
+    // Echo of EmbedForm::probe_gen at launch — the reducer drops answers
+    // from a superseded launch (config edited / re-tested meanwhile).
+    std::uint64_t gen = 0;
 };
 struct RagEmbedSave  {};                    // persist + live-apply
 struct RagEmbedRevert{};                    // discard edits, reload from config

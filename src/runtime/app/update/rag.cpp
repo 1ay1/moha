@@ -107,6 +107,10 @@ void sync_cfg(rs::EmbedForm& f) {
 // Any edit invalidates a previous probe result: the endpoint that answered
 // may not be the endpoint now configured.
 void invalidate_probe(rs::EmbedForm& f) {
+    // Also supersede any probe IN FLIGHT: bumping the generation makes a
+    // worker completion that races this edit land as a no-op instead of
+    // stamping Ok onto a config it never tested.
+    ++f.probe_gen;
     if (!std::holds_alternative<rs::EmbedForm::Idle>(f.probe))
         f.probe = rs::EmbedForm::Idle{};
 }
@@ -342,6 +346,7 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
                 return {std::move(m), Cmd<Msg>::none()};
             }
             f->probe = rs::EmbedForm::Testing{};
+            const std::uint64_t gen = ++f->probe_gen;
 
             store::RagConfig probe_cfg = deps().load_settings().rag;
             write_embed_into(probe_cfg, f->cfg);
@@ -352,15 +357,25 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
             // other background work.
             return {std::move(m),
                     Cmd<Msg>::task_isolated(
-                        [probe_cfg = std::move(probe_cfg), key = std::move(key)]
+                        [probe_cfg = std::move(probe_cfg), key = std::move(key),
+                         gen]
                         (std::function<void(Msg)> dispatch) {
                             const auto r = tools::rag_probe_embedder(probe_cfg, key);
-                            dispatch(Msg{RagEmbedTestDone{r.ok, r.dim, r.latency_ms, r.error}});
+                            dispatch(Msg{RagEmbedTestDone{r.ok, r.dim,
+                                                          r.latency_ms, r.error,
+                                                          gen}});
                         })};
         },
         [&](RagEmbedTestDone& e) -> Step {
             auto* f = form_of(m);
             if (!f) return {std::move(m), Cmd<Msg>::none()};
+            // STALENESS GATE (same shape as login's attempt_id): only the
+            // completion of the LATEST launch may land. An edit or a re-test
+            // bumped probe_gen, making this answer about a config that no
+            // longer exists — adopting its dim / Ok would verify bytes the
+            // probe never saw.
+            if (e.gen != f->probe_gen)
+                return {std::move(m), Cmd<Msg>::none()};
             if (e.ok) {
                 // Adopt the MEASURED dimension. This is the only place `dim`
                 // is ever set: a user-supplied value would be silently
