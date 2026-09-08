@@ -30,7 +30,7 @@ namespace {
 
 // The rendered frame, minus styling.
 std::string frame(const Model& m) {
-    return maya::render_to_string(ui::command_palette(m), 82);
+    return maya::render_to_string(ui::palette_panel(m), 82);
 }
 
 // Which line carries the cursor bar, or -1. The bar is the ONE marker for

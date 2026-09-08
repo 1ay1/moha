@@ -7,7 +7,7 @@
 
 namespace agentty::ui {
 
-Element symbol(const Model& m) {
+Element symbol_panel(const Model& m) {
     auto* o = m.ui.panel.get<pn::Symbol>();
     if (!o) return nothing();
 

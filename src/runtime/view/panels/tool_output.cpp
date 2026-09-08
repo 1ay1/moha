@@ -7,7 +7,7 @@
 
 namespace agentty::ui {
 
-Element tool_output_viewer(const Model& m) {
+Element tool_output_panel(const Model& m) {
     const auto* o = m.ui.panel.get<pn::ToolOutput>();
     if (!o) return nothing();
 

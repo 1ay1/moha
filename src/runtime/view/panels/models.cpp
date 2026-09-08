@@ -14,7 +14,7 @@ namespace agentty::ui {
 // Rows are `provider · model` with a context-window trailing cell; sections
 // (recent / all providers / sign in) render as is_header dividers. Selecting
 // switches provider+model atomically; a dim "sign in to X" row routes to login.
-Element fused_picker(const Model& m) {
+Element models_panel(const Model& m) {
     auto* picker = m.ui.panel.get<pn::Models>();
     if (!picker) return text("");
 

@@ -43,7 +43,7 @@ mode.
 - **Virtualization**: agentty caps the live transcript at
   `kViewWindow = 20` messages, slicing `kSliceChunk = 8` old messages
   at a time (`include/agentty/runtime/app/update/internal.hpp`).
-  `maybe_virtualize` (`src/runtime/app/update/modal.cpp:84-103`)
+  `maybe_virtualize` (`src/runtime/app/update/submit.cpp:84-103`)
   advances `m.ui.thread_view_start` and emits
   `Cmd::commit_scrollback_overflow()`. That Cmd routes through
   `Runtime::commit_inline_overflow` (`maya/include/maya/app/app.hpp:390-399`)

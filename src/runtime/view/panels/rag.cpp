@@ -27,7 +27,7 @@ using namespace maya;
 using namespace maya::dsl;
 namespace rs = agentty::rag_settings;
 
-Element rag_settings_picker(const Model& m) {
+Element rag_panel(const Model& m) {
     const auto* o = m.ui.panel.get<pn::Rag>();
     if (!o) return nothing();
 

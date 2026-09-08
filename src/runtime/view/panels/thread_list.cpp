@@ -9,7 +9,7 @@ namespace agentty::ui {
 
 
 
-Element thread_list(const Model& m) {
+Element thread_list_panel(const Model& m) {
     auto* picker = m.ui.panel.get<pn::ThreadList>();
     if (!picker) return nothing();
 

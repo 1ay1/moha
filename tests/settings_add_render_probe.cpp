@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
 
     maya::RenderContext ctx{86, 40, maya::render_generation(), true};
     maya::RenderContextGuard g(ctx);
-    auto el  = ui::settings_list_picker(m);
+    auto el  = ui::settings_list_panel(m);
     auto out = maya::render_to_string(el, 86);
     std::fputs(out.c_str(), stdout);
     return 0;

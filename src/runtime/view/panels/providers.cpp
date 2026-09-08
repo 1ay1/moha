@@ -7,7 +7,7 @@
 
 namespace agentty::ui {
 
-Element provider_picker(const Model& m) {
+Element providers_panel(const Model& m) {
     auto* picker = m.ui.panel.get<pn::Providers>();
     if (!picker) return nothing();
 

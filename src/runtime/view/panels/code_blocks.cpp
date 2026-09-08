@@ -12,7 +12,7 @@ namespace agentty::ui {
 // index + language tag + first-line preview + line count. The digit
 // shortcut in the key handler maps 1-based onto these rows, so the
 // leading number is the affordance that teaches the fast path.
-Element code_blocks(const Model& m) {
+Element code_blocks_panel(const Model& m) {
     auto* o = m.ui.panel.get<pn::CodeBlocks>();
     if (!o) return nothing();
 
@@ -98,7 +98,7 @@ Element code_blocks(const Model& m) {
 // on the real terminal (and it remains in native scrollback above the
 // TUI); this card shows the summary — command, exit code, size — plus
 // the LAST few lines (errors live at the end) and the decision keys.
-Element code_block_result_card(const Model& m) {
+Element code_block_result_panel(const Model& m) {
     auto* r = m.ui.panel.get<pn::CodeBlockResult>();
     if (!r) return nothing();
 

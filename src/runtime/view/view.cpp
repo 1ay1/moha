@@ -38,22 +38,22 @@ std::optional<maya::Element> pick_panel(const Model& m) {
     switch (panel::top(m)) {
         case OK::Login:          return login_modal(m);
         case OK::Permission:     return std::nullopt;   // renders inline, not as an overlay
-        case OK::Palette: return command_palette(m);
-        case OK::Mention:        return mention(m);
-        case OK::Symbol:         return symbol(m);
-        case OK::CodeBlocks:     return code_blocks(m);
-        case OK::CodeBlockResult: return code_block_result_card(m);
-        case OK::ToolOutput:     return tool_output_viewer(m);
-        case OK::Checkpoints:    return checkpoints(m);
-        case OK::Rag:    return rag_settings_picker(m);
-        case OK::SettingsList:   return settings_list_picker(m);
-        case OK::Fork:           return fork_picker_view(m);
-        case OK::Models:    return fused_picker(m);
-        case OK::Providers: return provider_picker(m);
-        case OK::ThreadList:     return thread_list(m);
+        case OK::Palette: return palette_panel(m);
+        case OK::Mention:        return mention_panel(m);
+        case OK::Symbol:         return symbol_panel(m);
+        case OK::CodeBlocks:     return code_blocks_panel(m);
+        case OK::CodeBlockResult: return code_block_result_panel(m);
+        case OK::ToolOutput:     return tool_output_panel(m);
+        case OK::Checkpoints:    return checkpoints_panel(m);
+        case OK::Rag:    return rag_panel(m);
+        case OK::SettingsList:   return settings_list_panel(m);
+        case OK::Fork:           return fork_panel(m);
+        case OK::Models:    return models_panel(m);
+        case OK::Providers: return providers_panel(m);
+        case OK::ThreadList:     return thread_list_panel(m);
         case OK::SmartMode:      return smart_mode_panel(m);
         case OK::DiffReview:     return diff_review(m);
-        case OK::Todo:           return todo_modal(m);
+        case OK::Todo:           return todo_panel(m);
         case OK::None:           return std::nullopt;
     }
     return std::nullopt;

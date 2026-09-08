@@ -45,7 +45,7 @@ struct RowSpec { const char* label; const char* help; };
 
 } // namespace
 
-Element fork_picker_view(const Model& m) {
+Element fork_panel(const Model& m) {
     const auto* o = m.ui.panel.get<pn::Fork>();
     if (!o) return nothing();
 

@@ -7,7 +7,7 @@
 
 namespace agentty::ui {
 
-Element todo_modal(const Model& m) {
+Element todo_panel(const Model& m) {
     if (!pick::is_open(m.ui.todo.open)) return nothing();
 
     Panel::Config cfg;

@@ -48,7 +48,7 @@ ProviderCatalog cat(std::string id, std::string label,
 // canvas to text. Non-ASCII folds to '?' — the section titles are ASCII, and
 // the badge/■ chrome around them is not what we're asserting on.
 std::string render_panel(const Model& m, int width = 100, int height = 200) {
-    auto root = ui::fused_picker(m);
+    auto root = ui::models_panel(m);
     maya::StylePool pool;
     maya::Canvas canvas(width, height, &pool);
     canvas.clear();

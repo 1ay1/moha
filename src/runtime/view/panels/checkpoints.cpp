@@ -15,7 +15,7 @@ namespace agentty::ui {
 // what the worktree has changed SINCE that point so the rewind is never
 // blind. Enter rewinds; the destructive files+transcript revert is the
 // existing RestoreCheckpoint flow.
-Element checkpoints(const Model& m) {
+Element checkpoints_panel(const Model& m) {
     auto* o = m.ui.panel.get<pn::Checkpoints>();
     if (!o) return nothing();
 

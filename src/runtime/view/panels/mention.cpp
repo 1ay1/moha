@@ -7,7 +7,7 @@
 
 namespace agentty::ui {
 
-Element mention(const Model& m) {
+Element mention_panel(const Model& m) {
     auto* o = m.ui.panel.get<pn::Mention>();
     if (!o) return nothing();
 

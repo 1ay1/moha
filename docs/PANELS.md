@@ -158,7 +158,7 @@ maya kinds. It is not, and **must not be folded in**:
 | Choice | ids, labels, hints, index | the display label |
 
 The form side is the editable **model** (reducer state); the maya side is
-the render **projection** (deliberately less). `form_panel.cpp`'s
+the render **projection** (deliberately less). `form_common.cpp`'s
 `control_for()` is the projection boundary — ~60 lines whose job is
 real-string → count, options+index → label. Deleting it would mean either
 maya holds credentials or the reducer imports widget types. The asymmetry
@@ -243,7 +243,7 @@ content instead of inventing a magic number.
    arm in `kind_of`).
 3. Messages `Open<Name>` / `Close<Name>` / `<Name>Move…` in `msg.hpp`;
    reducer arm dispatches `ascend(m)` on close and `descend(...)` on open.
-4. View `src/runtime/view/panels/<name>_panel.cpp`: a function
+4. View `src/runtime/view/panels/<name>.cpp`: a function
    `Model → maya::Panel::Config`. Pick a named width floor.
 5. Arms in `pick_panel()` (view.cpp) and the subscribe switch — the
    compiler lists every site you missed (`-Wswitch`).

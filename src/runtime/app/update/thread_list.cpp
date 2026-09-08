@@ -2,40 +2,22 @@
 // the async ThreadsLoaded). Split from panels.cpp; shares only
 // reset_to_fresh_thread (defined here, its sole user).
 
-#include "agentty/runtime/panel/smart_form.hpp"
 #include "agentty/runtime/app/update/internal.hpp"
 #include "agentty/runtime/app/update.hpp"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
-#include <cstdio>
-#include <cstdlib>
 #include <utility>
 
 #include <maya/core/overload.hpp>
-#include <maya/core/anim_clock.hpp>   // anim_now_ms (catalog freshness clock)
 #include <maya/platform/io.hpp>
 
 #include "agentty/runtime/app/cmd_factory.hpp"
 #include "agentty/runtime/app/deps.hpp"
-#include "agentty/provider/chatgpt/responses.hpp"
-#include "agentty/provider/copilot/copilot_oauth.hpp"
-#include "agentty/provider/kimi/kimi_oauth.hpp"
-#include "agentty/provider/registry.hpp"
-#include "agentty/provider/auth_state.hpp"
-#include "agentty/provider/acp_agents.hpp"
 #include "agentty/provider/selection.hpp"
-#include "agentty/provider/catalog_sources.hpp"
-#include "agentty/auth/vault.hpp"
-#include "agentty/provider/credentials.hpp"
-#include "agentty/auth/auth.hpp"
-#include "agentty/auth/accounts.hpp"
 #include "agentty/runtime/login.hpp"
-#include "agentty/runtime/fused_models.hpp"
 #include "agentty/runtime/mem.hpp"
 #include "agentty/runtime/panel/common.hpp"
-#include "agentty/runtime/provider_rows.hpp"
 #include "agentty/runtime/view/cache.hpp"
 #include "agentty/runtime/view/helpers.hpp"
 #include "agentty/tool/skills.hpp"

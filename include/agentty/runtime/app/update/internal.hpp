@@ -72,7 +72,7 @@ maya::Cmd<Msg> finalize_turn(Model& m, StopReason stop_reason = StopReason::Unsp
 // carries no todos array (partial early stream).
 void sync_todo_state_from_args(Model& m, const nlohmann::json& args);
 
-// ── update/modal.cpp helpers ─────────────────────────────────────────────
+// ── update/submit.cpp helpers ─────────────────────────────────────────────
 Step           submit_message(Model m);
 void           persist_settings(const Model& m);
 

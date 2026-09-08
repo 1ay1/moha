@@ -58,7 +58,7 @@ Model big_plugins_model(int n) {
 // bug overflowed the modal past the terminal bottom, so a short canvas
 // makes overflow visible as painted rows beyond the border.
 std::string render_picker(const Model& m, int width = 100, int height = 48) {
-    auto root = ui::settings_list_picker(m);
+    auto root = ui::settings_list_panel(m);
     maya::StylePool pool;
     maya::Canvas canvas(width, height, &pool);
     canvas.clear();

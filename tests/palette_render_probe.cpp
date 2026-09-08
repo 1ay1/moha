@@ -32,7 +32,7 @@ static void palette_checks() {
     Model m;
     m.ui.panel = pn::Palette{{}};
     m.d.pending_changes.push_back(FileChange{});
-    auto rend = [&]{ return maya::render_to_string(ui::command_palette(m), 82); };
+    auto rend = [&]{ return maya::render_to_string(ui::palette_panel(m), 82); };
     std::string out = rend();
     // `--dump` prints the frame so a human can look at it, the same way
     // embed_render_probe does. Checks still run either way.
@@ -49,7 +49,7 @@ static void palette_checks() {
     check(!has_mojibake(out), "palette: no mojibake");
     auto* o = m.ui.panel.get<agentty::ui::panel::Palette>();
     o->query = "rev";
-    std::string ansi = maya::render_to_string_ansi(ui::command_palette(m), 82);
+    std::string ansi = maya::render_to_string_ansi(ui::palette_panel(m), 82);
     // Locate the Review row and confirm it carries a distinct highlight style.
     auto strip = [](const std::string& s){ std::string r; for (std::size_t i=0;i<s.size();){ if(s[i]=='\x1b'){ i=s.find('m',i); if(i==std::string::npos)break; ++i;} else r+=s[i++]; } return r; };
     std::string hot; std::size_t st=0;

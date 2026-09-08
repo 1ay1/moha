@@ -7,7 +7,7 @@
 
 namespace agentty::ui {
 
-Element command_palette(const Model& m) {
+Element palette_panel(const Model& m) {
     auto* o = m.ui.panel.get<pn::Palette>();
     if (!o) return nothing();
 

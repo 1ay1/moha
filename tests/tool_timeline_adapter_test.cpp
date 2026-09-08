@@ -486,7 +486,7 @@ TEST_CASE("tool timeline adapter") {
     viewer_model.ui.panel = A::ui::panel::ToolOutput{{{viewer_entry}, 0, false}};
     int list_height = -1;
     for (int width = 8; width <= 120; ++width) {
-        auto viewer = U::tool_output_viewer(viewer_model);
+        auto viewer = U::tool_output_panel(viewer_model);
         auto constrained = maya::dsl::vstack()
             .width(maya::Dimension::fixed(width))(viewer);
         auto measured = maya::measure_element(constrained, width);
@@ -499,7 +499,7 @@ TEST_CASE("tool timeline adapter") {
     viewer_model.ui.panel.get<A::ui::panel::ToolOutput>()->viewing = true;
     int body_height = -1;
     for (int width = 8; width <= 120; ++width) {
-        auto viewer = U::tool_output_viewer(viewer_model);
+        auto viewer = U::tool_output_panel(viewer_model);
         auto constrained = maya::dsl::vstack()
             .width(maya::Dimension::fixed(width))(viewer);
         auto measured = maya::measure_element(constrained, width);
@@ -541,7 +541,7 @@ TEST_CASE("tool timeline adapter") {
             A::ui::panel::ToolOutput{{{std::move(entry)}, 0, true}};
         int expected_height = -1;
         for (int width : viewer_widths) {
-            auto viewer = U::tool_output_viewer(structured_model);
+            auto viewer = U::tool_output_panel(structured_model);
             auto constrained = maya::dsl::vstack()
                 .width(maya::Dimension::fixed(width))(viewer);
             auto measured = maya::measure_element(constrained, width);
@@ -568,7 +568,7 @@ TEST_CASE("tool timeline adapter") {
             A::ui::panel::ToolOutput{{{std::move(empty)}, 0, true}};
         int expected_height = -1;
         for (int width : viewer_widths) {
-            auto viewer = U::tool_output_viewer(empty_model);
+            auto viewer = U::tool_output_panel(empty_model);
             auto constrained = maya::dsl::vstack()
                 .width(maya::Dimension::fixed(width))(viewer);
             auto measured = maya::measure_element(constrained, width);
@@ -605,7 +605,7 @@ TEST_CASE("tool timeline adapter") {
 #else
         setenv("LINES", height_text.c_str(), 1);
 #endif
-        auto short_viewer = U::tool_output_viewer(short_terminal_model);
+        auto short_viewer = U::tool_output_panel(short_terminal_model);
         auto short_constrained = maya::dsl::vstack()
             .width(maya::Dimension::fixed(40))(short_viewer);
         const auto short_size = maya::measure_element(short_constrained, 40);
@@ -633,7 +633,7 @@ TEST_CASE("tool timeline adapter") {
 #else
         setenv("LINES", height_text.c_str(), 1);
 #endif
-        auto short_list = U::tool_output_viewer(short_list_model);
+        auto short_list = U::tool_output_panel(short_list_model);
         auto constrained = maya::dsl::vstack()
             .width(maya::Dimension::fixed(40))(short_list);
         const auto size = maya::measure_element(constrained, 40);

@@ -1,4 +1,4 @@
-// Composer-submission and settings-persistence helpers for the update
+// submit.cpp — composer-submission and settings-persistence helpers for the
 // reducer. submit_message is the entry point for ComposerEnter /
 // ComposerSubmit and is also called from finalize_turn when flushing
 // the composer's queued-message buffer, which is why it lives in a

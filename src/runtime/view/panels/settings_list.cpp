@@ -85,7 +85,7 @@ const char* add_prompt(se::Category c) {
 
 } // namespace
 
-Element settings_list_picker(const Model& m) {
+Element settings_list_panel(const Model& m) {
     const auto* o = m.ui.panel.get<pn::SettingsList>();
     if (!o) return nothing();
 

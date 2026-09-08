@@ -255,7 +255,7 @@ std::atomic<std::size_t>& cap_resolutions() noexcept {
 // invoked. Replacing only '/' was not enough: a group folder named
 // `My Group/Sub_Dir` produced the name "My Group-Sub_Dir", which is
 // discoverable and listed but permanently unreachable, because the
-// slash-command parser (update/modal.cpp) splits its token on whitespace.
+// slash-command parser (update/submit.cpp) splits its token on whitespace.
 //
 // Rules, applied in order:
 //   • ASCII upper -> lower (names are case-insensitive in practice; the
