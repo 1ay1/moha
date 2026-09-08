@@ -1412,20 +1412,6 @@ int main(int argc, char** argv) {
                 backend = maya::RenderBackend::Grid;
         }
     }
-    // Render leaked model PSEUDO-TAG lines (the system-prompt section tags a
-    // model sometimes echoes into its reply) as dim labeled dividers that NAME
-    // the tag, instead of raw `<shell>` text or a mangled HTML block. The set
-    // mirrors the section tags emitted by src/provider/prompt.cpp plus the
-    // common reasoning/reminder wrappers. Registered once, before maya::run.
-    maya::set_markdown_pseudo_tags({
-        "shell", "shell-notes", "environment",
-        "file-editing", "tool-batching", "output-formatting",
-        "context-economy", "big-codebases", "search-strategy",
-        "in-house-languages", "memory", "memory-tools",
-        "learned-memory", "local-memory", "project-memory", "user-memory",
-        "provider-notes", "agents-md", "agents-md-global", "agents-md-package",
-        "persisted-output", "thinking", "system-reminder", "antml:reasoning",
-    });
     maya::run<app::AgenttyApp>({.title = "agentty", .fps = 0,
                                .mode = maya::Mode::Inline, .backend = backend});
 
