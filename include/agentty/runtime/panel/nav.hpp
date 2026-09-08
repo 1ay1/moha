@@ -61,6 +61,21 @@ struct NavSpec {
     // ^chord, Enter, Esc, or an arrow. One grammar, no dialects.
     bool vim_nav = false;
 
+    // Bare-letter aliases for this overlay's chord verbs.
+    //
+    // The key policy says a printable TYPES or does NOTHING — that exists
+    // because a panel with a text input can't tell a command from a
+    // character. A PURE LIST has no such ambiguity: nothing here types, so
+    // a letter is unambiguous and a chord is pure friction (worse:
+    // terminal multiplexers eat chords — ^A is tmux's default prefix, ^B
+    // is screen's, so the first press never reaches us at all).
+    //
+    // Populated ONLY by overlays with no filter_ch and no text field:
+    // {letter, msg}. translate() applies them after the chord pass, and
+    // ONLY when `filter_ch` is null — so wiring one into a filtering
+    // panel is a no-op rather than a keystroke that eats the query.
+    std::vector<std::pair<char32_t, std::function<Msg()>>> letter_verbs;
+
     // Page granularity for overlays that express paging as a big Move
     // (no jump factory): PgUp/PgDn become move(∓page_step).
     int page_step = 10;
@@ -165,9 +180,18 @@ struct CharView {
     if (s.filter_ch && !v->ctrl && v->raw >= 0x20)
         return s.filter_ch(v->raw);
 
-    // No bare-letter verbs. j/k/q (the old vim_nav aliases) are retired:
-    // a printable either TYPES (filter above, form text rows) or does
-    // NOTHING — one key policy everywhere, no per-overlay dialects.
+    // Bare-letter verbs — pure lists only (guarded on !filter_ch above by
+    // the early return, and again here so the rule is local). Case-
+    // insensitive: a list command shouldn't care about Shift.
+    if (!s.filter_ch && !v->ctrl && !s.letter_verbs.empty()) {
+        const char32_t lo = (v->c >= U'A' && v->c <= U'Z')
+                          ? v->c + (U'a' - U'A') : v->c;
+        for (const auto& [key, make] : s.letter_verbs)
+            if (key == lo && make) return make();
+    }
+
+    // No other bare-letter verbs: a printable either TYPES (filter above,
+    // form text rows) or does NOTHING — one key policy, no dialects.
     return std::nullopt;
 }
 

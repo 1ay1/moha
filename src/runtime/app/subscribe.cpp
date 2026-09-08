@@ -207,13 +207,19 @@ std::optional<Msg> on_code_block_picker(const KeyEvent& ev) {
         // analogue of Enter — not letter commands.
         if (!v->ctrl && v->c >= U'1' && v->c <= U'9')
             return Msg{CodeBlocksSelect{static_cast<int>(v->c - U'1')}};
-        // Actions are chords — the bare e/y/q dialect is retired.
+        // Actions are chords — and letters below (pure list, nothing types).
         if (v->ctrl) switch (v->c) {
             case U'e': return Msg{CodeBlocksEdit{}};
             case U'y': return Msg{CodeBlocksCopy{}};
             default: break;
         }
         return std::nullopt;
+    };
+    // Pure list: letters work alongside the chords, so a multiplexer
+    // stealing ^E/^Y can't lock you out.
+    s.letter_verbs = {
+        {U'e', [] { return Msg{CodeBlocksEdit{}}; }},
+        {U'y', [] { return Msg{CodeBlocksCopy{}}; }},
     };
     return nav::translate(s, ev);
 }
@@ -236,6 +242,10 @@ std::optional<Msg> on_code_block_result(const KeyEvent& ev) {
             case U'y': return Msg{CodeBlockResultCopy{}};
             default:   return std::nullopt;
         }
+    };
+    s.letter_verbs = {
+        {U'a', [] { return Msg{CodeBlockResultAttach{}}; }},
+        {U'y', [] { return Msg{CodeBlockResultCopy{}}; }},
     };
     return nav::translate(s, ev);
 }
@@ -262,16 +272,10 @@ struct FormFocus {
     bool open     = false;
     bool editing  = false;
     bool choosing = false;
-    // The focused row is text-like + editable + unlocked — printables TYPE
-    // into it (type-to-edit) instead of being claimed by pane chords.
-    bool text_row = false;
 };
 
 [[nodiscard]] inline FormFocus focus_of(const form::Form& f) noexcept {
-    const auto* row = f.focused();
-    const bool text = row && row->is_text_like()
-                   && row->editable() && !row->locked;
-    return FormFocus{true, f.editing(), f.choosing(), text};
+    return FormFocus{true, f.editing(), f.choosing()};
 }
 
 // Forward a key to the shared form layer. Returns nullopt when the form does
@@ -280,7 +284,7 @@ template <class Wrap>
 [[nodiscard]] std::optional<Msg> on_form(const FormFocus& f, const KeyEvent& ev,
                                         Wrap&& wrap) {
     if (!f.open) return std::nullopt;
-    if (auto a = form::keys::translate(f.editing, f.choosing, ev, f.text_row))
+    if (auto a = form::keys::translate(f.editing, f.choosing, ev))
         return wrap(*a);
     return std::nullopt;
 }
@@ -322,17 +326,25 @@ std::optional<Msg> on_settings_list(const KeyEvent& ev, bool input_active) {
         const auto v = nav::char_view(e);
         if (!v || !v->ctrl) return std::nullopt;
         switch (v->c) {
-            // Chords only — bare letters are retired everywhere. ^A opens
-            // the form-based add (kind-first wizard) on Plugins and the
+            // Chords — and their bare-letter twins below. ^A opens the
+            // form-based add (kind-first wizard) on Plugins and the
             // one-line starter prompt elsewhere; ^N is the legacy one-line
-            // add for scripts/muscle memory; ^E edits; ^D removes (two-
-            // step, same as before).
+            // add; ^E edits; ^D removes (two-step).
             case U'a': return Msg{SettingsListEditOpen{/*add=*/true}};
             case U'n': return Msg{SettingsListAddStart{}};
             case U'e': return Msg{SettingsListEditOpen{/*add=*/false}};
             case U'd': return Msg{SettingsListRemove{}};
             default:   return std::nullopt;
         }
+    };
+    // This list has NO text input, so bare letters are unambiguous — and
+    // the chords above are exactly the ones a multiplexer steals (^A is
+    // tmux's prefix, so its first press never reaches us). Both work.
+    s.letter_verbs = {
+        {U'a', [] { return Msg{SettingsListEditOpen{/*add=*/true}}; }},
+        {U'n', [] { return Msg{SettingsListAddStart{}}; }},
+        {U'e', [] { return Msg{SettingsListEditOpen{/*add=*/false}}; }},
+        {U'd', [] { return Msg{SettingsListRemove{}}; }},
     };
     return nav::translate(s, ev);
 }
@@ -458,6 +470,10 @@ std::optional<Msg> on_thread_list(const KeyEvent& ev) {
             default:   return std::nullopt;
         }
     };
+    s.letter_verbs = {
+        {U'n', [] { return Msg{NewThread{}}; }},
+        {U'd', [] { return Msg{ThreadListDelete{}}; }},
+    };
     return nav::translate(s, ev);
 }
 
@@ -541,9 +557,12 @@ std::optional<Msg> on_diff_review(const KeyEvent& ev) {
         }
 
         switch (c) {
-            // Per-hunk decisions — chords like every other action key.
-            // Arrows/Enter/Tab drive navigation and the primary accept;
-            // ^Y / ^N are the explicit per-hunk verbs.
+            // Per-hunk decisions. Chords above; bare letters here because
+            // this pane has NO text input — nothing to disambiguate against,
+            // and a multiplexer prefix (^A/^B) must never be able to lock
+            // the user out of accepting a hunk.
+            case U'y': case U'Y': return AcceptHunk{};
+            case U'n': case U'N': return RejectHunk{};
             default: break;
         }
     }
@@ -584,6 +603,7 @@ std::optional<Msg> on_tool_viewer(const KeyEvent& ev) {
             default:   return std::nullopt;
         }
     };
+    s.letter_verbs = { {U'y', [] { return Msg{ToolOutputCopy{}}; }} };
     return nav::translate(s, ev);
 }
 
@@ -633,8 +653,8 @@ std::optional<Msg> on_login(const ui::login::State& state, const KeyEvent& ev) {
                 default: return std::nullopt;
             }
         }
-        if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U'd')
-            return AccountRemove{};
+        if (const auto v = nav::char_view(ev); v && v->c == U'd')
+            return AccountRemove{};   // pure list: chord OR letter
         return std::nullopt;
     }
 

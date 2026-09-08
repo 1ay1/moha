@@ -86,8 +86,8 @@ Element code_blocks_panel(const Model& m) {
     cfg.footer.push_back(key_hints({
         {"↑↓", "move", 5},        // ↑↓
         {"Enter/1-9", "run", 3},
-        {"^E", "edit", 4},
-        {"^Y", "copy", 4},
+        {"e", "edit", 4},
+        {"y", "copy", 4},
         {"Esc", "close", 4},
     }));
 
@@ -229,8 +229,8 @@ Element code_block_result_panel(const Model& m) {
             fg_dim(muted)));
     }
     cfg.footer.push_back(key_hints({
-        {"^A", "attach to composer", 6},
-        {"^Y", "copy", 4},
+        {"a", "attach to composer", 6},
+        {"y", "copy", 4},
         {"Esc", "discard", 4},
     }));
 

@@ -209,35 +209,42 @@ now finds a panel's three files by its one name.
 
 ## The key policy — one grammar, no dialects
 
-**A bare printable either TYPES or does NOTHING. Every action is a
-`^chord`, `Enter`, `Esc`, an arrow, or a digit selector.** No exceptions,
-no per-panel vocabularies.
+**A bare printable never has two meanings on the same surface.** Which
+meaning it has is decided by ONE fact about the panel:
 
-| Key | Meaning, everywhere |
+- **Panel with text input** (a filter query, a form's text row): a
+  printable **TYPES**. Every action is a `^chord`, `Enter`, `Esc`, an
+  arrow, or a digit selector — there is no other way, because a letter
+  is already spoken for.
+- **Pure list** (nothing anywhere types): a printable is unambiguous, so
+  its action verbs are available as **both** a bare letter and a chord.
+  Same verb, two spellings, zero ambiguity.
+
+The second rule exists because chords are not reliably deliverable:
+**`^A` is tmux's default prefix and `^B` is screen's**, so on a
+multiplexed terminal the first press never reaches the app at all (the
+reported "^A doesn't work the first time"). A pure list that only
+listened for chords was unusable there. Letters cost nothing on a
+surface where nothing types, so they are the primary spelling in the
+footers; the chord stays as the muscle-memory twin.
+
+| Key | Meaning |
 |---|---|
-| letters/symbols | type into a filter, or into a text row (type-to-edit); otherwise inert |
-| digits | selectors where a list is numbered (run block 1-9), never commands |
+| letters/symbols | type (filter / text row) — or, on a pure list, run that list's verb |
+| digits | selectors where a list is numbered (run block 1-9) |
 | `↑↓` `PgUp/PgDn` `Home/End` | move / page / jump |
 | `←→` | adjust a row (toggle, choice, slider) or step files/panes |
 | `Enter` | the row's primary action (edit / toggle / open / accept) |
-| `Esc` | leave the current level — field → pane → parent pane |
-| `^E` `^A` `^D` `^N` `^Y` `^X` | pane verbs: edit, add/attach/accept-all, delete, new, copy/yank, reset/reject-all |
+| `Esc` | leave the current level — field → pane → parent pane (committing edits) |
 
-Why: agentty had three dialects at once — vim aliases (`j/k/h/l/q`) in
-some lists, bare letter commands (`a`, `e`, `d`, `y`) in others, and
-typing-goes-to-a-filter in the rest. The same `d` deleted a plugin here
-and typed a `d` there; `a` meant "advanced" in one form pane and "add"
-in a list. That ambiguity is what forced Enter-to-edit on text fields
-(letters had to be reserved for commands), which in turn forced an
-explicit save step. Retiring bare-letter commands collapsed all three:
-text rows can now be typed into directly, and leaving the field saves
-(see the recipe's obligation #4).
-
-Enforcement lives in exactly two places: `form_keys.cpp::translate` (the
-form grammar; bare printables only ever reach `TypeToEdit`) and
-`nav.hpp::translate` (the list grammar; `vim_nav` is retired — a
-printable either feeds `filter_ch` or is dropped). A panel's `extra`
-hook may add chords; if it ever adds a bare letter, that is the bug.
+Enforcement is structural, in two functions. `nav.hpp::translate` runs
+`filter_ch` first and only then `letter_verbs` — and `letter_verbs` is
+IGNORED when `filter_ch` is set, so wiring a letter into a filtering
+panel is a no-op rather than a key that eats the query.
+`form_keys.cpp::translate` gives a printable exactly one destination:
+`TypeToEdit` (the reducer drops it when the focused row isn't text).
+A panel's `extra` hook adds chords; its `letter_verbs` adds the bare
+twins, and only a pure list may populate it.
 
 ### The form-pane recipe — SSOT obligations
 

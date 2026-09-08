@@ -74,8 +74,7 @@ struct Action {
 // which is precisely the input lag this router exists to keep out of the
 // hot path.
 [[nodiscard]] std::optional<Action> translate(bool editing, bool choosing,
-                                              const maya::KeyEvent& ev,
-                                              bool text_row = false);
+                                              const maya::KeyEvent& ev);
 
 // Convenience for callers that already hold the form (tests, reducers).
 [[nodiscard]] std::optional<Action> translate(const Form& f, const maya::KeyEvent& ev);

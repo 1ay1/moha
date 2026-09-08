@@ -22,14 +22,10 @@ using maya::SpecialKey;
 } // namespace
 
 std::optional<Action> translate(const Form& f, const KeyEvent& ev) {
-    const auto* row = f.focused();
-    const bool text = row && row->is_text_like()
-                   && row->editable() && !row->locked;
-    return translate(f.editing(), f.choosing(), ev, text);
+    return translate(f.editing(), f.choosing(), ev);
 }
 
-std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev,
-                                bool text_row) {
+std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev) {
     const auto sk = special(ev);
     const auto ch = ui::nav::char_view(ev);   // folds raw ctrl bytes to letter+ctrl
 
@@ -105,15 +101,21 @@ std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev,
     }
     if (ch) {
         // ── Bare printables NEVER act (the no-surprises key policy) ───
-        // On a TEXT-LIKE row they TYPE: the edit session starts on the
-        // first character, no Enter-to-edit modality — same philosophy as
-        // the composer (typing types). On every other row they do
-        // NOTHING: navigation is arrows/PgUp/PgDn/Home/End, actions are
-        // Enter or a ^chord. The old vim aliases (j/k/h/l/x/space) were
-        // exactly the surprise class this kills — `j` navigating on a
-        // toggle row but typing on a text row is two behaviours for one
-        // key.
-        if (text_row) return Action{Intent::TypeToEdit, ch->c};
+        // They TYPE on a text-like row (type-to-edit — the edit session
+        // starts on the first character, no Enter modality) and do nothing
+        // anywhere else.
+        //
+        // The row kind is decided by apply(), NOT here. The router
+        // translates a whole input BATCH against ONE focus snapshot taken
+        // at frame start, so any cursor-dependent decision made here goes
+        // stale the instant the batch contains a move: pressing ↓ then a
+        // letter in the same batch translated the letter against the OLD
+        // row and DROPPED it — the reported "input doesn't register".
+        // Emitting TypeToEdit unconditionally keeps the router
+        // cursor-independent (its founding contract: three bools, no
+        // rows); apply() sees the real focused row and ignores the intent
+        // when it isn't text-like.
+        return Action{Intent::TypeToEdit, ch->c};
     }
     return std::nullopt;
 }

@@ -70,13 +70,13 @@ Element thread_list_panel(const Model& m) {
     // account list and the settings add-prompt, so every two-step confirm
     // in the app reads the same way.
     if (!picker->confirm_remove.empty())
-        cfg.note = "^D confirm delete \xc2\xb7 any other key cancels";
+        cfg.note = "d confirm delete \xc2\xb7 any other key cancels";
     cfg.footer.push_back(key_hints({
         {"\xe2\x86\x91\xe2\x86\x93", "move", 5},        // ↑↓
         {"PgUp/PgDn", "page", 2},
         {"Enter", "open", 5},
-        {"^N", "new", 3},
-        {"^D", picker->confirm_remove.empty() ? "remove" : "confirm", 3},
+        {"n", "new", 3},
+        {"d", picker->confirm_remove.empty() ? "remove" : "confirm", 3},
         {"^/Alt+\xe2\x86\x90\xe2\x86\x92", "cycle", 1},   // ^←→ / Alt+←→
         {"Esc", "close", 4},
     }));

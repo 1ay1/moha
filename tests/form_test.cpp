@@ -550,23 +550,21 @@ TEST_CASE("form: the key router depends only on focus, not on the rows") {
     // every row's strings on the input path — which is what made the settings
     // pane feel laggy the moment it grew past a handful of rows.
     //
-    // The flags overload is the contract: three bools decide the whole key
-    // map (editing, choosing, text_row — focus-shaped facts, not rows). If
-    // someone reintroduces a Form-shaped dependency, this stops compiling
-    // rather than quietly costing a copy per keystroke.
+    // The flags overload is the contract: TWO bools decide the whole key
+    // map (editing, choosing — focus-shaped facts, not rows). If someone
+    // reintroduces a Form-shaped dependency, this stops compiling rather
+    // than quietly costing a copy per keystroke (or, worse, going stale
+    // mid-batch and dropping keys).
     const auto esc = key(maya::SpecialKey::Escape);
     const auto j   = chr(U'j');
 
-    // Browsing a NON-text row: bare letters do NOTHING — the one key
-    // policy (actions are chords/Enter/Esc/arrows; letters only type).
+    // Browsing: a printable is always TypeToEdit — the ROUTER stays
+    // cursor-independent (its founding contract: two bools, no rows), and
+    // apply() drops the intent when the focused row isn't text-like. A
+    // router that peeked at the row went stale mid-batch and silently ate
+    // keystrokes (↓ then a letter in one read).
     {
         auto a = keys::translate(/*editing=*/false, /*choosing=*/false, j);
-        CHECK_FALSE(a.has_value());
-    }
-    // Browsing a TEXT row: the same key TYPES — type-to-edit, no Enter
-    // modality. TypeToEdit (not Insert) so a stale batch can't re-enter.
-    {
-        auto a = keys::translate(false, false, j, /*text_row=*/true);
         REQUIRE(a.has_value());
         CHECK(a->intent == keys::Intent::TypeToEdit);
         CHECK(a->ch == U'j');

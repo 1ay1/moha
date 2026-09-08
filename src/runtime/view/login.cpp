@@ -483,8 +483,8 @@ Element panel_account_list(const login::AccountList& s,
     }
 
     cfg.note = s.confirm_remove.empty()
-                   ? "\xe2\x86\x91\xe2\x86\x93 move \xc2\xb7 \xe2\x86\xb5 select \xc2\xb7 ^D remove \xc2\xb7 esc close"
-                   : "^D confirm remove \xc2\xb7 any other key cancels";
+                   ? "\xe2\x86\x91\xe2\x86\x93 move \xc2\xb7 \xe2\x86\xb5 select \xc2\xb7 d remove \xc2\xb7 esc close"
+                   : "d confirm remove \xc2\xb7 any other key cancels";
     return maya::Panel{std::move(cfg)}.build();
 }
 

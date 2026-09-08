@@ -336,8 +336,8 @@ Element diff_review(const Model& m) {
         std::vector<Hint> hints = {
             {"↑↓", "hunk", 6},
             {"←→", "file", 5, m.d.pending_changes.size() > 1 ? fg : muted},
-            {"^Y", "accept", 7, success},
-            {"^N", "reject", 7, danger},
+            {"y", "accept", 7, success},
+            {"n", "reject", 7, danger},
             {"^A", "all",  4, success},
             {"^X", "none", 3, danger},
         };
