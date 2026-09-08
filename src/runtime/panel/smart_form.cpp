@@ -74,8 +74,8 @@ form::Form build_form(const Inputs& in) {
     // and a key nobody can see is exactly the discoverability failure these
     // knobs were moved out of an env var to fix.
     // Pane-specific note only — the shared key grammar comes from
-    // form_config (SSOT). `a` toggles the advanced rows (pane state).
-    b.note(in.advanced ? "a  hide advanced" : "a  advanced");
+    // form_config (SSOT). ^E toggles the advanced rows (pane state).
+    b.note(in.advanced ? "^E  hide advanced" : "^E  advanced");
 
     return b.build();
 }

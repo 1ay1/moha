@@ -157,7 +157,7 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
         [&](SettingsListMove& e) -> Step {
             auto* o = m.ui.panel.get<pn::SettingsList>();
             if (!o) return done(std::move(m));
-            o->confirm_remove.clear();   // moving off a row disarms a pending `d`
+            o->confirm_remove.clear();   // moving off a row disarms a pending ^D
             auto rows = se::items_for(m, o->concern);
             const int n = static_cast<int>(rows.size());
             if (n <= 0) { o->index = 0; return done(std::move(m)); }
@@ -198,7 +198,7 @@ Step settings_list_update(Model m, msg::SettingsListMsg sm) {
         [&](SettingsListActivate) -> Step {
             auto* o = m.ui.panel.get<pn::SettingsList>();
             if (!o) return done(std::move(m));
-            o->confirm_remove.clear();   // any Enter action disarms a pending `d`
+            o->confirm_remove.clear();   // any Enter action disarms a pending ^D
             auto rows = se::items_for(m, o->concern);
             if (o->index < 0 || o->index >= static_cast<int>(rows.size()))
                 return done(std::move(m));

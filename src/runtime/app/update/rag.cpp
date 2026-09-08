@@ -154,11 +154,11 @@ void refresh_status(rs::EmbedForm& f) {
     else if (f.form.dirty)
         f.form.note = "^T test";
     else
-        // The RESTING note advertises the advanced key. A bare letter, not ^A:
-        // that chord is the form layer's caret-home and tmux's default prefix,
-        // so it never reaches the app. Shown only when there is nothing more
-        // urgent to say.
-        f.form.note = "a  advanced";
+        // The RESTING note advertises the advanced chord. ^E is safe: the
+        // form layer only claims it (caret-end) while EDITING, and the pane
+        // handler fires it in browse mode only. Shown only when there is
+        // nothing more urgent to say.
+        f.form.note = "^E  advanced";
 }
 
 // Build the pane's form for `mode`, seeded with what the live retriever

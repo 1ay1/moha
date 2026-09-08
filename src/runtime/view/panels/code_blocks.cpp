@@ -84,10 +84,10 @@ Element code_blocks_panel(const Model& m) {
 
     cfg.footer.push_back(text(""));
     cfg.footer.push_back(key_hints({
-        {"\xe2\x86\x91\xe2\x86\x93", "move", 5},        // ↑↓
+        {"↑↓", "move", 5},        // ↑↓
         {"Enter/1-9", "run", 3},
-        {"e", "edit", 4},
-        {"y", "copy", 4},
+        {"^E", "edit", 4},
+        {"^Y", "copy", 4},
         {"Esc", "close", 4},
     }));
 
@@ -229,8 +229,8 @@ Element code_block_result_panel(const Model& m) {
             fg_dim(muted)));
     }
     cfg.footer.push_back(key_hints({
-        {"a", "attach to composer", 6},
-        {"y", "copy", 4},
+        {"^A", "attach to composer", 6},
+        {"^Y", "copy", 4},
         {"Esc", "discard", 4},
     }));
 

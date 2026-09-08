@@ -203,12 +203,14 @@ std::optional<Msg> on_code_block_picker(const KeyEvent& ev) {
     s.extra  = [](const KeyEvent& e) -> std::optional<Msg> {
         const auto v = nav::char_view(e);
         if (!v) return std::nullopt;
+        // Digits stay bare: they are SELECTORS (run block N), the numeric
+        // analogue of Enter — not letter commands.
         if (!v->ctrl && v->c >= U'1' && v->c <= U'9')
             return Msg{CodeBlocksSelect{static_cast<int>(v->c - U'1')}};
-        if (!v->ctrl) switch (v->c) {
-            case U'e': case U'E': return Msg{CodeBlocksEdit{}};
-            case U'y': case U'Y': return Msg{CodeBlocksCopy{}};
-            case U'q': case U'Q': return Msg{CloseCodeBlocks{}};
+        // Actions are chords — the bare e/y/q dialect is retired.
+        if (v->ctrl) switch (v->c) {
+            case U'e': return Msg{CodeBlocksEdit{}};
+            case U'y': return Msg{CodeBlocksCopy{}};
             default: break;
         }
         return std::nullopt;
@@ -216,10 +218,10 @@ std::optional<Msg> on_code_block_picker(const KeyEvent& ev) {
     return nav::translate(s, ev);
 }
 
-// Post-run result card: a = attach to composer, y = copy, Esc/q/Enter
+// Post-run result card: ^A = attach to composer, ^Y = copy, Esc/Enter
 // dismiss. Enter deliberately DISCARDS rather than attaches — the
 // default action must be the safe one (no surprise composer content);
-// attaching is the explicit `a`.
+// attaching is the explicit chord.
 std::optional<Msg> on_code_block_result(const KeyEvent& ev) {
     nav::NavSpec s;
     s.close     = [] { return Msg{CodeBlockResultDiscard{}}; };
@@ -228,13 +230,11 @@ std::optional<Msg> on_code_block_result(const KeyEvent& ev) {
     s.page_step = 10;
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
         const auto v = nav::char_view(e);
-        if (!v || v->ctrl) return std::nullopt;
+        if (!v || !v->ctrl) return std::nullopt;
         switch (v->c) {
-            case U'a': case U'A': return Msg{CodeBlockResultAttach{}};
-            case U'y': case U'Y': return Msg{CodeBlockResultCopy{}};
-            case U'q': case U'Q': case U'd': case U'D':
-                return Msg{CodeBlockResultDiscard{}};
-            default: return std::nullopt;
+            case U'a': return Msg{CodeBlockResultAttach{}};
+            case U'y': return Msg{CodeBlockResultCopy{}};
+            default:   return std::nullopt;
         }
     };
     return nav::translate(s, ev);
@@ -246,7 +246,6 @@ std::optional<Msg> on_checkpoint_picker(const KeyEvent& ev) {
     s.close     = [] { return Msg{CloseCheckpoints{}}; };
     s.select    = [] { return Msg{CheckpointsSelect{}}; };
     s.move      = [](int d) { return Msg{CheckpointsMove{d}}; };
-    s.vim_nav   = true;
     s.page_step = 10;
     return nav::translate(s, ev);
 }
@@ -263,10 +262,16 @@ struct FormFocus {
     bool open     = false;
     bool editing  = false;
     bool choosing = false;
+    // The focused row is text-like + editable + unlocked — printables TYPE
+    // into it (type-to-edit) instead of being claimed by pane chords.
+    bool text_row = false;
 };
 
 [[nodiscard]] inline FormFocus focus_of(const form::Form& f) noexcept {
-    return FormFocus{true, f.editing(), f.choosing()};
+    const auto* row = f.focused();
+    const bool text = row && row->is_text_like()
+                   && row->editable() && !row->locked;
+    return FormFocus{true, f.editing(), f.choosing(), text};
 }
 
 // Forward a key to the shared form layer. Returns nullopt when the form does
@@ -275,7 +280,8 @@ template <class Wrap>
 [[nodiscard]] std::optional<Msg> on_form(const FormFocus& f, const KeyEvent& ev,
                                         Wrap&& wrap) {
     if (!f.open) return std::nullopt;
-    if (auto a = form::keys::translate(f.editing, f.choosing, ev)) return wrap(*a);
+    if (auto a = form::keys::translate(f.editing, f.choosing, ev, f.text_row))
+        return wrap(*a);
     return std::nullopt;
 }
 
@@ -283,13 +289,14 @@ template <class Wrap>
 // shared form layer — which mode owns the keyboard, what Enter does per row
 // kind, how Esc unwinds — so this only forwards.
 //
-// `a` is the one exception: it changes which rows EXIST rather than acting on
-// a row, so it is pane state. A bare letter rather than ^A, which the form
-// layer uses for caret-home and which tmux takes as its default prefix.
-// Suppressed while editing so it stays literal in a text field.
+// ^E is the one exception: it changes which rows EXIST rather than acting
+// on a row, so it is pane state. A chord, not a bare letter — bare
+// printables TYPE on text rows now (type-to-edit), so letter commands are
+// gone everywhere; ^E is free in browse mode (the form layer only claims
+// it as caret-end while EDITING, which wins below by claim order).
 std::optional<Msg> on_rag_settings(const FormFocus& f, const KeyEvent& ev) {
     if (f.open && !f.editing)
-        if (const auto v = nav::char_view(ev); v && !v->ctrl && v->c == U'a')
+        if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U'e')
             return Msg{RagAdvanced{}};
     return on_form(f, ev, [](form::keys::Action a) { return Msg{RagEmbedKey{a}}; });
 }
@@ -311,20 +318,20 @@ std::optional<Msg> on_settings_list(const KeyEvent& ev, bool input_active) {
     s.close   = [] { return Msg{CloseSettingsList{}}; };
     s.select  = [] { return Msg{SettingsListActivate{}}; };
     s.move    = [](int d) { return Msg{SettingsListMove{d}}; };
-    s.vim_nav = true;
     s.extra   = [](const KeyEvent& e) -> std::optional<Msg> {
         const auto v = nav::char_view(e);
-        if (!v || v->ctrl) return std::nullopt;
+        if (!v || !v->ctrl) return std::nullopt;
         switch (v->c) {
-            // `a` opens the form-based add (kind-first wizard) on Plugins;
-            // other concerns keep the one-line starter prompt. `A` is the
-            // legacy one-liner everywhere (muscle memory + scripts in docs).
-            case U'a':            return Msg{SettingsListEditOpen{/*add=*/true}};
-            case U'A':            return Msg{SettingsListAddStart{}};
-            case U'e': case U'E': return Msg{SettingsListEditOpen{/*add=*/false}};
-            case U'd': case U'D': return Msg{SettingsListRemove{}};
-            case U' ':            return Msg{SettingsListActivate{}};
-            default: return std::nullopt;
+            // Chords only — bare letters are retired everywhere. ^A opens
+            // the form-based add (kind-first wizard) on Plugins and the
+            // one-line starter prompt elsewhere; ^N is the legacy one-line
+            // add for scripts/muscle memory; ^E edits; ^D removes (two-
+            // step, same as before).
+            case U'a': return Msg{SettingsListEditOpen{/*add=*/true}};
+            case U'n': return Msg{SettingsListAddStart{}};
+            case U'e': return Msg{SettingsListEditOpen{/*add=*/false}};
+            case U'd': return Msg{SettingsListRemove{}};
+            default:   return std::nullopt;
         }
     };
     return nav::translate(s, ev);
@@ -336,7 +343,6 @@ std::optional<Msg> on_fork_picker(const KeyEvent& ev) {
     s.close   = [] { return Msg{CloseFork{}}; };
     s.select  = [] { return Msg{ForkThread{}}; };
     s.move    = [](int d) { return Msg{ForkMove{d}}; };
-    s.vim_nav = true;
     return nav::translate(s, ev);
 }
 
@@ -440,17 +446,16 @@ std::optional<Msg> on_thread_list(const KeyEvent& ev) {
                                 : j == nav::Jump::PageUp ? W::PageUp
                                                          : W::PageDown}};
     };
-    s.vim_nav = true;
     // ^J re-press closes (raw 0x0A is Enter on legacy terminals and maya
     // maps it to SpecialKey::Enter first, so only the flagged form arrives).
     s.toggle_close_chord = U'j';
     s.extra   = [](const KeyEvent& e) -> std::optional<Msg> {
         const auto v = nav::char_view(e);
-        if (!v || v->ctrl) return std::nullopt;
+        if (!v || !v->ctrl) return std::nullopt;   // chords only
         switch (v->c) {
-            case U'n': case U'N': return Msg{NewThread{}};
-            case U'd': case U'D': return Msg{ThreadListDelete{}};
-            default: return std::nullopt;
+            case U'n': return Msg{NewThread{}};
+            case U'd': return Msg{ThreadListDelete{}};
+            default:   return std::nullopt;
         }
     };
     return nav::translate(s, ev);
@@ -465,13 +470,12 @@ std::optional<Msg> on_smart_mode(const FormFocus& f, const KeyEvent& ev) {
     // pane-specific (the form layer has no concept of an open chord).
     if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U's')
         return Msg{CloseSmartMode{}};
-    // `a` reveals the advanced routing-policy rows. A BARE letter, not ^A:
-    // ^A is the form layer's caret-home while editing, and it is the default
-    // tmux prefix, so a chord there is swallowed before the app ever sees it.
-    // In nav mode the form only claims k/j/h/l/x and space, so `a` is free —
-    // the same vocabulary as the `x` that resets a slot.
+    // ^E reveals/hides the advanced routing-policy rows — same chord as the
+    // Rag pane's advanced toggle, one vocabulary across form panes. Bare
+    // letters no longer act anywhere (they type on text rows, nothing
+    // elsewhere).
     if (!f.editing)
-        if (const auto v = nav::char_view(ev); v && !v->ctrl && v->c == U'a')
+        if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U'e')
             return Msg{SmartModeAdvanced{}};
     return on_form(f, ev, [](form::keys::Action a) { return Msg{SmartModeKey{a}}; });
 }
@@ -521,10 +525,14 @@ std::optional<Msg> on_diff_review(const KeyEvent& ev) {
             switch (c) {
                 case U'a': case U'A': return AcceptAllChanges{};
                 case U'x': case U'X': return RejectAllChanges{};
+                // Per-hunk decisions — same chord policy as everything else
+                // (Enter remains the primary accept).
+                case U'y': case U'Y': return AcceptHunk{};
+                case U'n': case U'N': return RejectHunk{};
                 // ^R re-press closes the pane (same commit semantics as Esc
                 // — decisions persist, undecided hunks stay live).
                 case U'r': case U'R': return CloseDiffReview{};
-                // vim half-page scroll inside the focused hunk's body.
+                // half-page scroll inside the focused hunk's body.
                 case U'd': case U'D': return DiffReviewScroll{+12};
                 case U'u': case U'U': return DiffReviewScroll{-12};
                 default: break;
@@ -533,15 +541,9 @@ std::optional<Msg> on_diff_review(const KeyEvent& ev) {
         }
 
         switch (c) {
-            // Per-hunk decisions — frequent + safe, so plain keys.
-            case U'y': case U'Y': return AcceptHunk{};
-            case U'n': case U'N': return RejectHunk{};
-            // vim-style nav — no arrow keys needed (phone / legacy terminals).
-            case U'j': case U'J': return DiffReviewMove{+1};
-            case U'k': case U'K': return DiffReviewMove{-1};
-            case U'h': case U'H': return DiffReviewPrevFile{};
-            case U'l': case U'L': return DiffReviewNextFile{};
-            case U'q': case U'Q': return CloseDiffReview{};
+            // Per-hunk decisions — chords like every other action key.
+            // Arrows/Enter/Tab drive navigation and the primary accept;
+            // ^Y / ^N are the explicit per-hunk verbs.
             default: break;
         }
     }
@@ -567,7 +569,6 @@ std::optional<Msg> on_tool_viewer(const KeyEvent& ev) {
     s.close     = [] { return Msg{CloseToolOutput{}}; };
     s.select    = [] { return Msg{ToolOutputSelect{}}; };
     s.move      = [](int d) { return Msg{ToolOutputMove{d}}; };
-    s.vim_nav   = true;
     s.page_step = 10;
     s.toggle_close_chord = U'o';
     s.extra     = [](const KeyEvent& e) -> std::optional<Msg> {
@@ -577,12 +578,10 @@ std::optional<Msg> on_tool_viewer(const KeyEvent& ev) {
             return std::nullopt;
         }
         const auto v = nav::char_view(e);
-        if (!v || v->ctrl) return std::nullopt;
+        if (!v || !v->ctrl) return std::nullopt;   // chords only
         switch (v->c) {
-            case U'h': case U'H': return Msg{ToolOutputStep{-1}};
-            case U'l': case U'L': return Msg{ToolOutputStep{+1}};
-            case U'y': case U'Y': return Msg{ToolOutputCopy{}};
-            default: return std::nullopt;
+            case U'y': return Msg{ToolOutputCopy{}};
+            default:   return std::nullopt;
         }
     };
     return nav::translate(s, ev);
@@ -619,9 +618,10 @@ std::optional<Msg> on_login(const ui::login::State& state, const KeyEvent& ev) {
         return NoOp{};
     }
 
-    // ── Account switcher: a LIST, not a text field ──────────────────
-    // ↑/↓ (and j/k) move the highlight, Enter switches to / adds the
-    // highlighted account, Delete/Backspace/d twice confirms removal.
+    // ── Account switcher: a LIST, not a text field ────────────────
+    // ↑/↓ move the highlight, Enter switches to / adds the highlighted
+    // account, Delete/Backspace (or ^D) twice confirms removal. Bare
+    // letters do nothing — the one key policy.
     if (std::holds_alternative<AccountList>(state)) {
         if (std::holds_alternative<SpecialKey>(ev.key)) {
             switch (std::get<SpecialKey>(ev.key)) {
@@ -633,14 +633,8 @@ std::optional<Msg> on_login(const ui::login::State& state, const KeyEvent& ev) {
                 default: return std::nullopt;
             }
         }
-        if (auto* ck = std::get_if<CharKey>(&ev.key)) {
-            switch (ck->codepoint) {
-                case U'k': return AccountMove{-1};
-                case U'j': return AccountMove{+1};
-                case U'd': return AccountRemove{};   // vim-ish "delete"
-                default: return std::nullopt;
-            }
-        }
+        if (const auto v = nav::char_view(ev); v && v->ctrl && v->c == U'd')
+            return AccountRemove{};
         return std::nullopt;
     }
 

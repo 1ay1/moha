@@ -38,9 +38,16 @@ enum class Intent : std::uint8_t {
     MovePageUp, MovePageDown,  // PgUp/PgDn — viewport-sized strides
     AdjustDown, AdjustUp,      // ←/→ on a Toggle/Choice/Number/Slider
     Activate,                  // Enter
-    ResetField,                // x
+    ResetField,                // ^X
     Save,                      // ^S
     Close,                     // Esc (Browsing) — the pane decides what that means
+    // Browsing, text-like row only: a printable typed while browsing
+    // STARTS the edit session and inserts — type-to-edit, no Enter
+    // modality. Distinct from Insert so the stale-batch guard on Insert
+    // (editing-focus only) stays airtight: a paste's tail characters
+    // translated against a stale Editing snapshot still die instead of
+    // silently re-entering the field.
+    TypeToEdit,                // `ch` carries the code point
     // Editing
     Insert,                    // `ch` carries the code point
     Backspace, DeleteForward,
@@ -68,7 +75,8 @@ struct Action {
 // which is precisely the input lag this router exists to keep out of the
 // hot path.
 [[nodiscard]] std::optional<Action> translate(bool editing, bool choosing,
-                                              const maya::KeyEvent& ev);
+                                              const maya::KeyEvent& ev,
+                                              bool text_row = false);
 
 // Convenience for callers that already hold the form (tests, reducers).
 [[nodiscard]] std::optional<Action> translate(const Form& f, const maya::KeyEvent& ev);

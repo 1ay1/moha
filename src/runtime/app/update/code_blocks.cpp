@@ -639,7 +639,7 @@ Step codeblock_update(Model m, msg::CodeBlockMsg cm) {
                     ? std::string{"this"} : "'" + block.language + "'";
                 auto cmd = set_status_toast(m,
                     tag + " block isn't runnable here — "
-                    "press e to edit or y to copy");
+                    "press ^E to edit or ^Y to copy");
                 return {std::move(m), std::move(cmd)};
             }
             m.ui.panel.close<pn::CodeBlocks>(); m.ui.panel.close<pn::CodeBlockResult>();

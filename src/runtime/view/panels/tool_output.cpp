@@ -95,7 +95,7 @@ Element tool_output_panel(const Model& m) {
             cfg.footer.push_back(key_hints({
                 {"\xe2\x86\x91\xe2\x86\x93", "move", 5},   // ↑↓
                 {"Enter", "view", 6},
-                {"y", "copy", 4},
+                {"^Y", "copy", 4},
                 {"Esc", "close", 3},
             }));
         }
@@ -340,7 +340,7 @@ Element tool_output_panel(const Model& m) {
             viewer_hints = {
                 {"\xe2\x86\x91\xe2\x86\x93", "scroll", 5},        // ↑↓
                 {"\xe2\x86\x90\xe2\x86\x92", "prev/next", 4},     // ←→
-                {"y", "copy", 4},
+                {"^Y", "copy", 4},
                 {"Esc", "back", 3},
             };
         }

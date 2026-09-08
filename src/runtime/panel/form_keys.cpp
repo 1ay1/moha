@@ -22,10 +22,14 @@ using maya::SpecialKey;
 } // namespace
 
 std::optional<Action> translate(const Form& f, const KeyEvent& ev) {
-    return translate(f.editing(), f.choosing(), ev);
+    const auto* row = f.focused();
+    const bool text = row && row->is_text_like()
+                   && row->editable() && !row->locked;
+    return translate(f.editing(), f.choosing(), ev, text);
 }
 
-std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev) {
+std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev,
+                                bool text_row) {
     const auto sk = special(ev);
     const auto ch = ui::nav::char_view(ev);   // folds raw ctrl bytes to letter+ctrl
 
@@ -41,13 +45,9 @@ std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev)
             case SpecialKey::Down:   return Action{Intent::MenuNext};
             default: break;
         }
-        if (ch && !ch->ctrl) {
-            if (ch->c == U'k') return Action{Intent::MenuPrev};
-            if (ch->c == U'j') return Action{Intent::MenuNext};
-            if (ch->c == U' ') return Action{Intent::MenuCommit};
-        }
-        // Swallow everything else: an open menu must not leak keys to the
-        // form beneath it.
+        // Swallow everything else — including bare printables (the one key
+        // policy: letters never act) — so an open menu can't leak keys to
+        // the form beneath it.
         return Action{Intent::None};
     }
 
@@ -96,15 +96,20 @@ std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev)
     }
     if (ch && ch->ctrl) {
         if (ch->c == U's') return Action{Intent::Save};
+        if (ch->c == U'x') return Action{Intent::ResetField};
         return std::nullopt;                // ^C and friends stay ambient
     }
     if (ch) {
-        if (ch->c == U'k') return Action{Intent::MovePrev};
-        if (ch->c == U'j') return Action{Intent::MoveNext};
-        if (ch->c == U'h') return Action{Intent::AdjustDown};
-        if (ch->c == U'l') return Action{Intent::AdjustUp};
-        if (ch->c == U' ') return Action{Intent::Activate};
-        if (ch->c == U'x') return Action{Intent::ResetField};
+        // ── Bare printables NEVER act (the no-surprises key policy) ───
+        // On a TEXT-LIKE row they TYPE: the edit session starts on the
+        // first character, no Enter-to-edit modality — same philosophy as
+        // the composer (typing types). On every other row they do
+        // NOTHING: navigation is arrows/PgUp/PgDn/Home/End, actions are
+        // Enter or a ^chord. The old vim aliases (j/k/h/l/x/space) were
+        // exactly the surprise class this kills — `j` navigating on a
+        // toggle row but typing on a text row is two behaviours for one
+        // key.
+        if (text_row) return Action{Intent::TypeToEdit, ch->c};
     }
     return std::nullopt;
 }
@@ -189,6 +194,24 @@ Applied apply(Form& f, Action a) {
         // field — without this guard those characters mutate a row the
         // user is no longer editing. The reducer is the only layer that
         // sees the real mode; intent from a stale snapshot dies here.
+        case Intent::TypeToEdit:
+            // Type-to-edit: a printable typed while BROWSING a text-like
+            // row starts the edit session and lands as its first insert.
+            // Only translate() emits this, and only when the router said
+            // the focused row is text-like AND focus was Browsing — so it
+            // cannot fire from a stale batch (those arrive as Insert and
+            // die on the editing-focus guard below). Deletion keys
+            // deliberately do NOT auto-enter: a stray Backspace must never
+            // destroy value bytes the user couldn't see a caret in.
+            if (!f.editing() && row && row->is_text_like()
+                && row->editable() && !row->locked) {
+                f.focus = focus::Editing{};
+                f.edit_dirty = false;
+                insert(row->value, a.ch);
+                out.changed = true;
+                f.edit_dirty = true;
+            }
+            break;
         case Intent::Insert:
             if (f.editing() && row && row->editable()) {
                 insert(row->value, a.ch);

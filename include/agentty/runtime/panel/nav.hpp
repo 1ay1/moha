@@ -55,9 +55,10 @@ struct NavSpec {
     std::function<Msg(char32_t)>    filter_ch;   // printable → query append
     std::function<Msg()>            filter_bs;   // Backspace → query erase
 
-    // vim j/k as Move synonyms + q as close. Mutually exclusive with a
-    // filter in practice (j/k/q must stay typeable when filter_ch is set —
-    // translate() enforces the precedence: filter wins).
+    // vim j/k as Move synonyms + q as close — RETIRED (kept as a field so
+    // old call sites compile; translate() ignores it). Bare printables
+    // either type into a filter or do nothing; every action key is a
+    // ^chord, Enter, Esc, or an arrow. One grammar, no dialects.
     bool vim_nav = false;
 
     // Page granularity for overlays that express paging as a big Move
@@ -164,14 +165,9 @@ struct CharView {
     if (s.filter_ch && !v->ctrl && v->raw >= 0x20)
         return s.filter_ch(v->raw);
 
-    if (s.vim_nav && !v->ctrl) {
-        switch (v->c) {
-            case U'k': case U'K': if (s.move)  return s.move(-1); break;
-            case U'j': case U'J': if (s.move)  return s.move(+1); break;
-            case U'q': case U'Q': if (s.close) return s.close();  break;
-            default: break;
-        }
-    }
+    // No bare-letter verbs. j/k/q (the old vim_nav aliases) are retired:
+    // a printable either TYPES (filter above, form text rows) or does
+    // NOTHING — one key policy everywhere, no per-overlay dialects.
     return std::nullopt;
 }
 

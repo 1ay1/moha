@@ -76,7 +76,7 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading) 
             i.secondary = "reading mcp.json and handshaking servers";
         } else {
             i.primary   = "(no plugins configured)";
-            i.secondary = "press `a` to add one, or agentty plugin add <name> …";
+            i.secondary = "press ^A to add one, or agentty plugin add <name> …";
         }
         i.hint      = "docs: plugins";
         out.push_back(std::move(i));
@@ -96,7 +96,7 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading) 
         } else {
             w.primary   = std::to_string(model.wire_tool_count) +
                           " tools on the wire";
-            w.secondary = "◉ on / ○ off · Enter toggles · e edits · a adds · d removes";
+            w.secondary = "◉ on / ○ off · Enter toggles · ^E edits · ^A adds · ^D removes";
             w.status    = Item::Status::Neutral;
         }
         out.push_back(std::move(w));

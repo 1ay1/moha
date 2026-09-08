@@ -334,10 +334,10 @@ Element diff_review(const Model& m) {
         ).build());
     } else {
         std::vector<Hint> hints = {
-            {"j/k", "hunk", 6},
-            {"h/l", "file", 5, m.d.pending_changes.size() > 1 ? fg : muted},
-            {"Y", "accept", 7, success},
-            {"N", "reject", 7, danger},
+            {"↑↓", "hunk", 6},
+            {"←→", "file", 5, m.d.pending_changes.size() > 1 ? fg : muted},
+            {"^Y", "accept", 7, success},
+            {"^N", "reject", 7, danger},
             {"^A", "all",  4, success},
             {"^X", "none", 3, danger},
         };

@@ -74,8 +74,10 @@ returning the response body as the tool result:
 }
 ```
 
-Inline add: press `a` in the Plugins pane (or `agentty plugin add`) with
+Inline add: press `^A` in the Plugins pane (or `agentty plugin add`) with
 `headroom --passthrough http://localhost:8787/v1/retrieve headroom_retrieve`.
+(In the pane, `^A` opens a kind-first form where "passthrough" is one of
+the listed kinds — no flag to remember.)
 
 Semantics worth knowing:
 

@@ -144,9 +144,9 @@ TEST_CASE("form: a dropdown never filters — j/k always navigate") {
     press(f, key(maya::SpecialKey::Enter));
     REQUIRE(f.choosing());
 
-    press(f, chr(U'j'));
+    press(f, key(maya::SpecialKey::Down));
     CHECK(f.dropdown()->highlighted == 1);
-    press(f, chr(U'k'));
+    press(f, key(maya::SpecialKey::Up));
     CHECK(f.dropdown()->highlighted == 0);
 
     // Even a long list navigates rather than filters — the option count does
@@ -156,7 +156,7 @@ TEST_CASE("form: a dropdown never filters — j/k always navigate") {
     auto g = Builder{"Long"}.choice("m", "Model", many).build();
     press(g, key(maya::SpecialKey::Enter));
     REQUIRE(g.choosing());
-    press(g, chr(U'j'));
+    press(g, key(maya::SpecialKey::Down));
     CHECK(g.dropdown()->highlighted == 1);
 }
 
@@ -548,17 +548,26 @@ TEST_CASE("form: the key router depends only on focus, not on the rows") {
     // every row's strings on the input path — which is what made the settings
     // pane feel laggy the moment it grew past a handful of rows.
     //
-    // The flags overload is the contract: two bools decide the whole key map.
-    // If someone reintroduces a Form-shaped dependency, this stops compiling
+    // The flags overload is the contract: three bools decide the whole key
+    // map (editing, choosing, text_row — focus-shaped facts, not rows). If
+    // someone reintroduces a Form-shaped dependency, this stops compiling
     // rather than quietly costing a copy per keystroke.
     const auto esc = key(maya::SpecialKey::Escape);
     const auto j   = chr(U'j');
 
-    // Browsing: j moves.
+    // Browsing a NON-text row: bare letters do NOTHING — the one key
+    // policy (actions are chords/Enter/Esc/arrows; letters only type).
     {
         auto a = keys::translate(/*editing=*/false, /*choosing=*/false, j);
+        CHECK_FALSE(a.has_value());
+    }
+    // Browsing a TEXT row: the same key TYPES — type-to-edit, no Enter
+    // modality. TypeToEdit (not Insert) so a stale batch can't re-enter.
+    {
+        auto a = keys::translate(false, false, j, /*text_row=*/true);
         REQUIRE(a.has_value());
-        CHECK(a->intent == keys::Intent::MoveNext);
+        CHECK(a->intent == keys::Intent::TypeToEdit);
+        CHECK(a->ch == U'j');
     }
     // Editing: the same key is text, never navigation.
     {
@@ -567,11 +576,12 @@ TEST_CASE("form: the key router depends only on focus, not on the rows") {
         CHECK(a->intent == keys::Intent::Insert);
         CHECK(a->ch == U'j');
     }
-    // Choosing: it navigates the list.
+    // Choosing: an open dropdown swallows printables (an enum list has no
+    // filter; leaking the key to the form under it would be a mis-target).
     {
         auto a = keys::translate(/*editing=*/false, /*choosing=*/true, j);
         REQUIRE(a.has_value());
-        CHECK(a->intent == keys::Intent::MenuNext);
+        CHECK(a->intent == keys::Intent::None);
     }
     // And every mode answers Esc — the escape guarantee, at the router level.
     for (auto [e, c] : {std::pair{false, false}, {true, false}, {false, true}}) {
