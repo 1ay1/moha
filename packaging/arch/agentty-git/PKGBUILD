@@ -1,0 +1,97 @@
+# Maintainer: Ayush Bhat <tfeayush@gmail.com>
+#
+# agentty-git — build agentty from the tip of master, FULLY DYNAMICALLY
+# LINKED against the system libraries (openssl, libnghttp2, gcc-libs).
+# This is the counterpart to agentty-bin, which ships the prebuilt static
+# release binary. Users who want to ride HEAD (and get Arch's ABI/security
+# updates for OpenSSL et al. via normal `pacman -Syu`) want this package.
+#
+# Network policy: everything is fetched by makepkg in source=() — the four
+# git submodules are wired to the local clones in prepare(), and the three
+# CMake-FetchContent deps (nlohmann_json / simdjson / mimalloc, pinned by
+# the build system to exact tags) are provided as checksummed tarballs via
+# FETCHCONTENT_SOURCE_DIR_* overrides. build() runs fully offline
+# (FETCHCONTENT_FULLY_DISCONNECTED=ON enforces it).
+
+pkgname=agentty-git
+_pkgname=agentty
+pkgver=0.8.0.r55.g705df197
+pkgrel=1
+pkgdesc="Blazing-fast Claude in your terminal (C++26 TUI agent) — git HEAD, dynamically linked"
+arch=('x86_64' 'aarch64')
+url="https://github.com/1ay1/agentty"
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'openssl' 'libnghttp2')
+makedepends=('git' 'cmake' 'ninja')
+optdepends=('bubblewrap: sandbox bash/diagnostics tool calls'
+            'openssh: for `agentty airgap`')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+# makepkg's default LTOFLAGS (-flto=auto) ICE GCC 16's LTO streamer on this
+# C++26 tree ("tree code 'decltype_type' is not supported in LTO streams").
+# The project's own release pipeline handles LTO where it's known-good; the
+# AUR build stays plain -O3.
+options=('!lto')
+
+# Pinned FetchContent tags — keep in sync with:
+#   cmake/AgenttySubmodules.cmake (nlohmann_json GIT_TAG, simdjson GIT_TAG,
+#   AGENTTY_MIMALLOC_TAG). The build fails loudly if they drift, because the
+#   FETCHCONTENT_SOURCE_DIR override simply supplies whatever is unpacked
+#   here — bump these lines when the pins move.
+_json_tag=v3.11.3
+_simdjson_tag=v3.10.1
+_mimalloc_tag=v3.4.5
+
+source=("$_pkgname::git+https://github.com/1ay1/agentty.git"
+        'git+https://github.com/1ay1/maya.git'
+        'git+https://github.com/1ay1/acp-cpp.git'
+        'git+https://github.com/1ay1/mcp-cpp.git'
+        'git+https://github.com/1ay1/rag-cpp.git'
+        "nlohmann_json-${_json_tag}.tar.gz::https://github.com/nlohmann/json/archive/${_json_tag}.tar.gz"
+        "simdjson-${_simdjson_tag}.tar.gz::https://github.com/simdjson/simdjson/archive/${_simdjson_tag}.tar.gz"
+        "mimalloc-${_mimalloc_tag}.tar.gz::https://github.com/microsoft/mimalloc/archive/${_mimalloc_tag}.tar.gz")
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP'
+            '0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406'
+            '1e8f881cb2c0f626c56cd3665832f1e97b9d4ffc648ad9e1067c134862bba060'
+            '19a43af0645c57d348e729d5b31e23e912582911bb1047f795790834d3416221')
+
+pkgver() {
+    cd "$_pkgname"
+    git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+prepare() {
+    cd "$_pkgname"
+    # Point every submodule at the local mirror makepkg already cloned, so
+    # `submodule update` never touches the network.
+    git submodule init
+    git config submodule.maya.url    "$srcdir/maya"
+    git config submodule.acp-cpp.url "$srcdir/acp-cpp"
+    git config submodule.mcp-cpp.url "$srcdir/mcp-cpp"
+    git config submodule.rag-cpp.url "$srcdir/rag-cpp"
+    git -c protocol.file.allow=always submodule update
+}
+
+build() {
+    cmake -S "$_pkgname" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
+        -DAGENTTY_STANDALONE=OFF \
+        -DAGENTTY_AUTO_PULL_SUBMODULES=OFF \
+        -DAGENTTY_COMPILER_CACHE=OFF \
+        -DAGENTTY_BUILD_TESTS=OFF \
+        -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+        -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$srcdir/json-${_json_tag#v}" \
+        -DFETCHCONTENT_SOURCE_DIR_SIMDJSON="$srcdir/simdjson-${_simdjson_tag#v}" \
+        -DFETCHCONTENT_SOURCE_DIR_MIMALLOC="$srcdir/mimalloc-${_mimalloc_tag#v}"
+    cmake --build build
+}
+
+package() {
+    install -Dm755 build/agentty          "$pkgdir/usr/bin/$_pkgname"
+    install -Dm644 "$_pkgname/LICENSE"    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

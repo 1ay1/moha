@@ -134,7 +134,14 @@ if(AGENTTY_SANITIZE_ALL)
                    "(AGENTTY_SANITIZE_ALL=${AGENTTY_SANITIZE_ALL} — avoids an "
                    "LTO-bytecode/-fno-lto link mismatch in libmaya.a)")
 endif()
-if(AGENTTY_IPO_OK AND (CMAKE_BUILD_TYPE STREQUAL "Release"
+if(DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+    # A packager/user set it explicitly on the command line (e.g. the AUR
+    # agentty-git PKGBUILD passes OFF because GCC 16's LTO streamer ICEs on
+    # C++26 decltype in main.cpp: "tree code 'decltype_type' is not supported
+    # in LTO streams"). Their word is final — don't re-derive it.
+    message(STATUS "agentty: CMAKE_INTERPROCEDURAL_OPTIMIZATION="
+                   "${CMAKE_INTERPROCEDURAL_OPTIMIZATION} (user-set, respected)")
+elseif(AGENTTY_IPO_OK AND (CMAKE_BUILD_TYPE STREQUAL "Release"
                      OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"
                      OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel"))
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
