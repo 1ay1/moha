@@ -51,7 +51,7 @@ set(_AGENTTY_CONSOLIDATED
     panel_sections_render_test
     credentials_test entitlement_test inflate_test
     settings_list_scroll_test visual_walk_test activity_tape_test
-    md_robustness_test)
+    md_robustness_test thread_blob_test)
 foreach(_t ${_AGENTTY_CONSOLIDATED})
     agentty_test(${_t} MODE consolidated)
 endforeach()

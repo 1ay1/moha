@@ -119,6 +119,74 @@ fs::path threads_dir() {
     return p;
 }
 
+// ---- Image blob store ------------------------------------------------
+//
+// Image bytes used to be base64'd INTO the thread JSON. A screenshot is
+// ~1 MB, base64 inflates it to ~1.3 MB, and every one of them is then
+// re-read and re-decoded on every thread load — forever. One real thread
+// here reached 31 MB, of which 10.8 MB was images and only 0.7 MB was
+// actual conversation text; switching to it stalls the UI for well over a
+// second before a single row is drawn.
+//
+// Blobs fix the growth at the source: the bytes are written ONCE to
+// threads/blobs/<hash>, and the message keeps a reference. Identical
+// images (the same screenshot pasted twice, or a retried turn) collapse
+// to one file for free because the name IS the content hash.
+//
+// Old threads keep working: the loader still accepts an inline "data"
+// field, so nothing needs migrating and a downgrade only loses the
+// dedup, not the images.
+fs::path blobs_dir() {
+    auto p = threads_dir() / "blobs";
+    std::error_code ec;
+    fs::create_directories(p, ec);
+    return p;
+}
+
+// FNV-1a over the bytes. Not cryptographic — this names a local cache
+// entry, it doesn't authenticate anything. 64 bits over a few thousand
+// images is a collision probability far below the disk's own error rate,
+// and the length is mixed into the name as a cheap second dimension.
+[[nodiscard]] std::string blob_name(std::string_view bytes) {
+    std::uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : bytes) {
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%016llx-%zx",
+                  static_cast<unsigned long long>(h), bytes.size());
+    return buf;
+}
+
+// Write bytes to the blob store, returning the name to reference them by.
+// Empty on failure so the caller can fall back to inlining rather than
+// silently losing the image.
+[[nodiscard]] std::string put_blob(const std::string& bytes) {
+    if (bytes.empty()) return {};
+    const std::string name = blob_name(bytes);
+    const fs::path out = blobs_dir() / name;
+    std::error_code ec;
+    // Content-addressed: if it's already there it is byte-identical by
+    // construction, so rewriting it would be pure I/O for no change.
+    if (fs::exists(out, ec)) return name;
+    if (!write_json_atomic(out, bytes)) return {};
+    return name;
+}
+
+[[nodiscard]] std::string get_blob(const std::string& name) {
+    if (name.empty()) return {};
+    // Defend the join: a thread file is user-writable, and a crafted
+    // "../../" name must not read outside the blob directory.
+    if (name.find('/') != std::string::npos
+        || name.find('\\') != std::string::npos
+        || name.find("..") != std::string::npos) return {};
+    std::ifstream in(blobs_dir() / name, std::ios::binary);
+    if (!in) return {};
+    return std::string{std::istreambuf_iterator<char>(in),
+                       std::istreambuf_iterator<char>()};
+}
+
 static std::string role_to_string(Role r);
 
 namespace {
@@ -295,22 +363,45 @@ static json message_to_json(const Message& m) {
         t["id"] = tc.id;
         t["name"] = tc.name;
         t["args"] = tc.args;
-        t["output"] = tools::util::to_valid_utf8(tc.output()); // empty unless terminal
+        // Tool OUTPUT is the single largest thing in a long thread — 12 MB
+        // across 5.5k calls in one real thread here, against 0.7 MB of
+        // actual conversation text. Inline, every byte of it is re-parsed
+        // (with JSON string-escape processing) on every load.
+        //
+        // Big outputs go to the blob store instead. Truncating would be
+        // faster still but destroys the user's history; a reference keeps
+        // the bytes verbatim while taking them out of the parse. Small
+        // outputs stay inline — below the threshold a separate file costs
+        // more (an inode, an open, a read) than it saves.
+        constexpr std::size_t kOutputBlobMin = 8u * 1024u;
+        auto out = tools::util::to_valid_utf8(tc.output()); // empty unless terminal
+        if (out.size() >= kOutputBlobMin) {
+            if (auto name = put_blob(out); !name.empty())
+                t["output_blob"] = std::move(name);
+            else
+                t["output"] = std::move(out);
+        } else {
+            t["output"] = std::move(out);
+        }
         t["status"] = std::string{tc.status_name()};
         tcs.push_back(std::move(t));
     }
     j["tool_calls"] = std::move(tcs);
-    // Image attachments on User messages — stored on disk as base64
-    // so a thread reload can be re-sent on a follow-up turn without
-    // having to re-paste the original. Adds ~33% to the message JSON
-    // size; absent for messages that didn't carry images, so non-
-    // image threads are unaffected.
+    // Image attachments on User messages. The BYTES live in the blob
+    // store (threads/blobs/<hash>) and the message keeps a reference, so
+    // a 1 MB screenshot costs ~40 bytes here instead of ~1.3 MB of
+    // base64 that every future thread load must re-read and re-decode.
+    // Falls back to inlining if the blob write fails — a slow thread
+    // beats a lost image.
     if (!m.images.empty()) {
         json imgs = json::array();
         for (const auto& img : m.images) {
             json e;
             e["media_type"] = img.media_type;
-            e["data"]       = util::base64_encode(img.bytes);
+            if (auto name = put_blob(img.bytes); !name.empty())
+                e["blob"] = std::move(name);
+            else
+                e["data"] = util::base64_encode(img.bytes);
             imgs.push_back(std::move(e));
         }
         j["images"] = std::move(imgs);
@@ -521,7 +612,10 @@ static std::expected<Message, DeserializeError> parse_message(const json& j) {
             // use the string tag returned by ToolUse::status_name(). Accept
             // both so existing on-disk threads keep loading.
             std::string status_tag = "pending";
+            // Blob reference (current) or inline (older threads / fallback).
             std::string output = t.value("output", "");
+            if (auto ob = t.value("output_blob", std::string{}); !ob.empty())
+                output = get_blob(ob);
             if (auto it = t.find("status"); it != t.end()) {
                 if (it->is_string()) {
                     status_tag = it->get<std::string>();
@@ -581,7 +675,12 @@ static std::expected<Message, DeserializeError> parse_message(const json& j) {
             ImageContent img;
             img.media_type = e.value("media_type", "image/png");
             auto data_b64 = e.value("data", std::string{});
-            img.bytes = util::base64_decode(data_b64);
+            // Blob reference (current format) or inline base64 (threads
+            // written before the blob store, and the fallback path).
+            if (auto blob = e.value("blob", std::string{}); !blob.empty())
+                img.bytes = get_blob(blob);
+            else
+                img.bytes = util::base64_decode(data_b64);
             // Drop entries that decode to nothing — corrupted base64
             // shouldn't kill the whole thread load.
             if (!img.bytes.empty()) m.images.push_back(std::move(img));
@@ -1241,6 +1340,13 @@ void flush_pending_saves() {
 void delete_thread(const ThreadId& id) {
     std::error_code ec;
     fs::remove(threads_dir() / (id.value + ".json"), ec);
+    // Blobs are deliberately NOT removed here. They are content-addressed
+    // and therefore SHARED: the same screenshot pasted in two threads, or
+    // an identical tool output, is one file referenced from both. Deleting
+    // this thread's blobs would silently blank images in threads that are
+    // still open. Reclaiming them needs a mark-and-sweep across every
+    // thread file, which belongs in a maintenance pass, not in the delete
+    // path — an orphaned blob costs disk, a wrongly-deleted one costs data.
     // Drop the metadata index entry too so the picker list doesn't show
     // a ghost row until the next full walk prunes it. Under the index
     // lock: a concurrent reindex_thread() on the AsyncWriter worker
