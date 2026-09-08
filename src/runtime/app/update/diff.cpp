@@ -111,7 +111,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
                 persist(fc);
             }
             m.d.pending_changes.clear();
-            m.ui.panel.close<pn::DiffReview>();
+            ascend(m);   // decision committed above; Esc lands where you came from
             auto cmd = set_status_toast(m,
                 reverted == 0
                     ? "review closed — all " + std::to_string(kept)
@@ -193,7 +193,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
             for (auto& fc : m.d.pending_changes)
                 for (auto& h : fc.hunks) { h.status = Hunk::Status::Accepted; ++hunks; }
             m.d.pending_changes.clear();
-            m.ui.panel.close<pn::DiffReview>();
+            ascend(m);   // decision committed above; Esc lands where you came from
             auto cmd = set_status_toast(m,
                 "accepted " + std::to_string(hunks)
                 + (hunks == 1 ? " hunk" : " hunks"));
@@ -228,7 +228,7 @@ Step diff_review_update(Model m, msg::DiffReviewMsg dm) {
                 }
             }
             m.d.pending_changes.clear();
-            m.ui.panel.close<pn::DiffReview>();
+            ascend(m);   // decision committed above; Esc lands where you came from
             auto cmd = set_status_toast(m,
                 "reverted " + std::to_string(hunks)
                 + (hunks == 1 ? " hunk" : " hunks")

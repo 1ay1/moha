@@ -277,6 +277,42 @@ int main() {
         std::fprintf(stderr, "jumps: home=%d end=%d ok\n", at_home, at_end);
     }
 
+    // ── The adopt chain: palette → (a command's panel) → Esc must restore
+    // the palette with its typed query intact. ThreadList: opens even with
+    // zero threads (renders its empty state), so the chain always runs. ─
+    {
+        Model m2;
+        m2 = step(std::move(m2), Msg{OpenPalette{}}, "chain: open palette");
+        for (char c : std::string{"threads"})
+            m2 = step(std::move(m2), Msg{PaletteInput{static_cast<char32_t>(c)}},
+                      "chain: type");
+        m2 = step(std::move(m2), Msg{PaletteSelect{}}, "chain: select");
+        if (!m2.ui.panel.is<pn::ThreadList>()) {
+            std::fprintf(stderr, "FAIL: 'threads' did not open the thread list\n");
+            return 1;
+        }
+        m2 = step(std::move(m2), Msg{CloseThreadList{}}, "chain: esc");
+        if (!m2.ui.panel.is<pn::Palette>()) {
+            std::fprintf(stderr, "FAIL: Esc from thread list did not restore the palette\n");
+            return 1;
+        }
+        const auto* p = m2.ui.panel.get<pn::Palette>();
+        if (p->query != "threads") {
+            std::fprintf(stderr, "FAIL: restored palette lost the query ('%s')\n",
+                         p->query.c_str());
+            return 1;
+        }
+        std::fprintf(stderr, "chain: palette restored with query='threads'\n");
+        // And Esc AGAIN closes to the thread — the chain has exactly the
+        // depth the user built, no phantom levels.
+        m2 = step(std::move(m2), Msg{ClosePalette{}}, "chain: esc 2");
+        if (!m2.ui.panel.is<pn::None>()) {
+            std::fprintf(stderr, "FAIL: second Esc did not reach the thread\n");
+            return 1;
+        }
+        std::fprintf(stderr, "chain: second esc closed to thread\n");
+    }
+
     std::fprintf(stderr, "ALL OK\n");
     return 0;
 }

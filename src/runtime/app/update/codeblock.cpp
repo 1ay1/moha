@@ -576,7 +576,10 @@ Step codeblock_update(Model m, msg::CodeBlockMsg cm) {
             return done(std::move(m));
         },
         [&](CloseCodeBlocks) -> Step {
-            m.ui.panel.close<pn::CodeBlocks>(); m.ui.panel.close<pn::CodeBlockResult>();
+            // Result overlay open → both alternatives die and we unwind to
+            // the parent; the list alone → same. ascend() restores whatever
+            // the picker was opened over (palette → ^K state intact).
+            ascend(m);
             return done(std::move(m));
         },
         [&](CodeBlocksMove& e) -> Step {
@@ -660,9 +663,12 @@ Step codeblock_update(Model m, msg::CodeBlockMsg cm) {
             // is the decision beat: attach the captured copy to the
             // composer, copy it clean, or discard. The composer only
             // ever receives output the user explicitly asked for.
-            m.ui.panel = pn::CodeBlockResult{{
+            // descend(), not assignment: the run finishes ASYNC — the user
+            // may have another panel open by now, and the result card must
+            // not destroy it. Esc from the card restores it verbatim.
+            m.ui.panel.descend(pn::CodeBlockResult{{
                 std::move(e.command), std::move(e.output),
-                e.exit_code, e.timed_out}};
+                e.exit_code, e.timed_out}});
             m.ui.code_blocks_scroll.y = 0;
             return done(std::move(m));
         },

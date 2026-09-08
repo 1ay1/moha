@@ -152,7 +152,7 @@ Step checkpoint_update(Model m, msg::CheckpointMsg cm) {
             return {std::move(m), std::move(diffs)};
         },
         [&](CloseCheckpoints) -> Step {
-            m.ui.panel.close<pn::Checkpoints>();
+            ascend(m);   // Esc: back to the palette that opened this, or close
             return done(std::move(m));
         },
         [&](CheckpointsMove& e) -> Step {

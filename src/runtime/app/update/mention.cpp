@@ -36,7 +36,7 @@ Step mention_update(Model m, msg::MentionMsg mm) {
             return done(std::move(m));
         },
         [&](CloseMention) -> Step {
-            m.ui.panel.close<pn::Mention>();
+            ascend(m);   // usually → thread (opened by typing @), or a parent
             return done(std::move(m));
         },
         [&](MentionInput& e) -> Step {

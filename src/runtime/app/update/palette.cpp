@@ -142,7 +142,10 @@ Step palette_update(Model m, msg::PaletteMsg pm) {
             return done(std::move(m));
         },
         [&](ClosePalette) -> Step {
-            m.ui.panel.close<pn::Palette>();
+            // Esc unwinds one level — a palette opened over another panel
+            // (rare but possible via chords) restores it; over the thread,
+            // closes.
+            ascend(m);
             return done(std::move(m));
         },
         [&](PaletteInput& e) -> Step {

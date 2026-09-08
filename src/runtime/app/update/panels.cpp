@@ -201,7 +201,7 @@ Step providers_update(Model m, msg::ProvidersMsg pm) {
             return done(std::move(m));
         },
         [&](CloseProviders) -> Step {
-            m.ui.panel.close<pn::Providers>();
+            ascend(m);   // Esc: back to whatever opened this, or close
             return done(std::move(m));
         },
         [&](ProvidersMove& e) -> Step {
@@ -973,7 +973,6 @@ Step models_update(Model m, msg::ModelsMsg pm) {
             return {std::move(m), maya::Cmd<Msg>::batch(std::move(fetches))};
         },
         [&](CloseModels) -> Step {
-            m.ui.panel.close<pn::Models>();
             m.d.fused_rows.clear();       // release the cache while closed
             if (m.ui.effort_dirty) { persist_settings(m); m.ui.effort_dirty = false; }
             // Slot-assign mode: Esc is BACK, not exit. Pop one level up the
@@ -993,7 +992,11 @@ Step models_update(Model m, msg::ModelsMsg pm) {
                 m.ui.panel = pn::SmartMode{{std::move(m.ui.smart_assign_from)},
                                              std::move(f),
                                              m.ui.smart_assign_advanced};
+                return done(std::move(m));
             }
+            // Normal close: unwind one level (the palette that opened this,
+            // with its query/cursor intact) or to the thread.
+            ascend(m);
             return done(std::move(m));
         },
         [&](ModelsMove e) -> Step {
@@ -1490,7 +1493,7 @@ Step thread_list_update(Model m, msg::ThreadListMsg tm) {
             return {std::move(m), std::move(cmd)};
         },
         [&](CloseThreadList) -> Step {
-            m.ui.panel.close<pn::ThreadList>();
+            ascend(m);   // Esc: back to whatever opened this, or close
             return done(std::move(m));
         },
         [&](ThreadListMove& e) -> Step {

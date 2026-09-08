@@ -89,7 +89,7 @@ Step fork_update(Model m, msg::ForkMsg fm) {
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](CloseFork) -> Step {
-            m.ui.panel.close<pn::Fork>();
+            ascend(m);   // Esc: back to the palette that opened this, or close
             return {std::move(m), Cmd<Msg>::none()};
         },
         [&](ForkMove& e) -> Step {

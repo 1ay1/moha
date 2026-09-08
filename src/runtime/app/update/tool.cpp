@@ -636,13 +636,14 @@ Step tool_update(Model m, msg::ToolMsg tm) {
             return done(std::move(m));
         },
         [&](CloseToolOutput) -> Step {
-            // Esc semantics: body stage → back to the list; list → closed.
+            // Esc semantics: body stage → back to the list; list → unwind
+            // one level (the palette that opened this, or the thread).
             if (auto* o = m.ui.panel.get<pn::ToolOutput>(); o && o->viewing) {
                 o->viewing = false;
                 m.ui.tool_viewer_scroll.y = 0;
                 return done(std::move(m));
             }
-            m.ui.panel.close<pn::ToolOutput>();
+            ascend(m);
             return done(std::move(m));
         },
         [&](ToolOutputMove& e) -> Step {

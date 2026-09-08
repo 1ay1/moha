@@ -34,7 +34,7 @@ Step symbol_update(Model m, msg::SymbolMsg sm) {
             return done(std::move(m));
         },
         [&](CloseSymbol) -> Step {
-            m.ui.panel.close<pn::Symbol>();
+            ascend(m);   // usually → thread (opened by typing #), or a parent
             return done(std::move(m));
         },
         [&](SymbolInput& e) -> Step {
