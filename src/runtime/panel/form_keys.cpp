@@ -95,7 +95,11 @@ std::optional<Action> translate(bool editing, bool choosing, const KeyEvent& ev,
         default: break;
     }
     if (ch && ch->ctrl) {
-        if (ch->c == U's') return Action{Intent::Save};
+        // No ^S: Esc IS the save. Leaving a field commits it (Esc, arrows,
+        // Enter) and Esc at the row level closes the pane — so "write it
+        // and get out" is Esc, or Esc-Esc from inside a field. A second
+        // key for the same act is a second thing to learn and a second
+        // thing to keep in sync.
         if (ch->c == U'x') return Action{Intent::ResetField};
         return std::nullopt;                // ^C and friends stay ambient
     }
@@ -177,7 +181,6 @@ Applied apply(Form& f, Action a) {
             // signals intent; a pane that has no default simply ignores it.
             break;
 
-        case Intent::Save:  out.save  = true; break;
         case Intent::Close:
             // Esc while editing leaves the field — and commits like every
             // other exit (in-place edits mean Esc was never a revert; making

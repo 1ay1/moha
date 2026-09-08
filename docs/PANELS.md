@@ -221,7 +221,6 @@ no per-panel vocabularies.
 | `←→` | adjust a row (toggle, choice, slider) or step files/panes |
 | `Enter` | the row's primary action (edit / toggle / open / accept) |
 | `Esc` | leave the current level — field → pane → parent pane |
-| `^S` | save (form panes) |
 | `^E` `^A` `^D` `^N` `^Y` `^X` | pane verbs: edit, add/attach/accept-all, delete, new, copy/yank, reset/reject-all |
 
 Why: agentty had three dialects at once — vim aliases (`j/k/h/l/q`) in
@@ -249,7 +248,7 @@ when the restatement is correct today — three identical copies of the
 paste guard is how this list was earned. The obligations:
 
 1. **Keys**: `subscribe.cpp` handler is `on_form(f, ev, wrap)` — nothing
-   else. A pane-specific chord (Rag's `a`, SmartMode's ^S-reopen) is a
+   else. A pane-specific chord (Rag's `^E`, SmartMode's ^S-reopen) is a
    guarded prefix, never a re-implementation of any form key.
 2. **Paste**: the reducer's Paste arm is exactly
    `form::paste_into(o->form, e.text)`. The editing/editable/locked guard
@@ -259,12 +258,11 @@ paste guard is how this list was earned. The obligations:
    local `std::get_if<field::…>` spelunking in pane code. A pane needing
    different semantics (rag_form's absent⇒fallback `bool_of`) writes a
    named helper SAYING WHY, next to a comment pointing here.
-4. **Save**: honour `applied.save` (^S from anywhere) AND
-   `applied.left_field` (commit-on-exit — leaving an edited field IS the
-   save) AND an Action row if the pane has one; all three route to the
-   SAME code path. Text rows are entered by TYPING (no Enter-to-edit),
-   so a pane that gates saving behind its own step reintroduces the
-   modality this removed.
+4. **Save**: there is NO save key. Honour `applied.left_field`
+   (commit-on-exit — leaving an edited field writes it) and an Action row
+   if the pane has one; both route to the SAME code path. Text rows are
+   entered by TYPING and left by Esc/arrow/Enter, so a pane that gates
+   saving behind its own step reintroduces the modality this removed.
 5. **Close**: route through the pane's Close msg (which calls
    `panel.ascend()`), never a direct slot mutation — that is what keeps
    Esc's unwind uniform across every pane.

@@ -262,7 +262,7 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
             if (applied.changed) {
                 // The mode row commits immediately — it is a policy switch with
                 // nothing to validate and no probe to invalidate, so making the
-                // user press ^S for it would be ceremony.
+                // user press a save key for it would be ceremony.
                 if (on_mode) {
                     if (auto* o = m.ui.panel.get<pn::Rag>()) {
                         o->cursor = rs::mode_from_form(f->form, o->cursor);
@@ -285,10 +285,11 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
             if (applied.fired)
                 return {std::move(m),
                         Cmd<Msg>::after(std::chrono::milliseconds{0}, Msg{RagEmbedTest{}})};
-            // ^S and field-exit share one save path (commit-on-exit — the
-            // form-layer contract). RagEmbedSave validates first, so a bad
-            // half-config surfaces as the probe's Failed note, not a write.
-            if (applied.save || applied.left_field)
+            // Leaving an edited field IS the save (commit-on-exit — the
+            // form-layer contract; there is no ^S). RagEmbedSave validates
+            // first, so a bad half-config surfaces as the probe's Failed
+            // note rather than a write.
+            if (applied.left_field)
                 return {std::move(m),
                         Cmd<Msg>::after(std::chrono::milliseconds{0}, Msg{RagEmbedSave{}})};
             if (applied.close)

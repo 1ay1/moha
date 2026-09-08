@@ -280,15 +280,15 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
                 // Any other change (url text etc.) is save-owned; fall out.
             }
 
-            // ^S saves from ANYWHERE — and so does LEAVING an edited field
-            // (commit-on-exit: Applied::left_field), with two deliberate
-            // differences: field-exit commits are DETAIL-MODE ONLY (an add
-            // form is under construction — committing a name with no URL
-            // yet would just stamp errors on rows the user hasn't reached),
-            // and they keep the pane OPEN (leaving a field is not leaving
-            // the form). Explicit save (^S / the action row) still closes.
+            // Leaving an edited field IS the save (Applied::left_field) —
+            // there is no ^S. Detail mode only: an add form is still under
+            // construction, so committing a name with no URL yet would
+            // just stamp errors on rows the user hasn't reached; its
+            // explicit "Add plugin" action row does the write. Field-exit
+            // commits keep the pane OPEN (leaving a field is not leaving
+            // the form); the action row closes.
             const bool exit_commit = applied.left_field && !o->server.empty();
-            const bool want_save = applied.save || exit_commit
+            const bool want_save = exit_commit
                 || (applied.fired && row_id == pf::kSave);
 
             if (!applied.fired && !want_save) return done(std::move(m));
@@ -349,7 +349,7 @@ Step plugin_edit_update(Model m, msg::PluginEditMsg pm) {
                     return done(std::move(m));
                 }
                 o->form.dirty = false;   // committed — the footer drops "unsaved"
-                if (exit_commit && !applied.save) {
+                if (exit_commit) {
                     // Field-exit commit: written + applied, pane stays open.
                     // The catalog reload runs so the new value is live
                     // immediately (same as the toggle path).

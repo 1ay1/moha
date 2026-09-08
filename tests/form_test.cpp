@@ -236,9 +236,11 @@ TEST_CASE("form: an action row reports rather than mutating") {
     CHECK_FALSE(f.editing());
 }
 
-TEST_CASE("form: ^S signals save, ^C stays ambient") {
+TEST_CASE("form: no save chord — Esc commits; ^C stays ambient") {
     auto f = demo();
-    CHECK(press(f, chr(U's', /*ctrl=*/true)).save);
+    // ^S is NOT a form key: leaving a field commits it, and Esc leaves.
+    // A second key for the same act is a second thing to keep in sync.
+    CHECK_FALSE(keys::translate(f, chr(U's', /*ctrl=*/true)).has_value());
     // ^C must NOT be claimed — the app quits from anywhere.
     CHECK_FALSE(keys::translate(f, chr(U'c', true)).has_value());
 }

@@ -39,8 +39,7 @@ enum class Intent : std::uint8_t {
     AdjustDown, AdjustUp,      // ←/→ on a Toggle/Choice/Number/Slider
     Activate,                  // Enter
     ResetField,                // ^X
-    Save,                      // ^S
-    Close,                     // Esc (Browsing) — the pane decides what that means
+    Close,                     // Esc — leaves the field (committing it) or closes the pane
     // Browsing, text-like row only: a printable typed while browsing
     // STARTS the edit session and inserts — type-to-edit, no Enter
     // modality. Distinct from Insert so the stale-batch guard on Insert
@@ -89,14 +88,12 @@ struct Applied {
     bool changed  = false;     // a value was mutated
     bool fired    = false;     // an Action row was activated
     bool hand_off = false;     // a Pick row wants its picker opened
-    bool save     = false;     // ^S
     bool close    = false;     // Esc at the outermost level
     // Editing focus ended THIS keystroke (Enter/Esc/arrow out of a text
     // field) AND the field's value changed during that edit session.
-    // Commit-on-exit: panes treat this exactly like `save` — leaving a
-    // field IS the save. Exit without a change stays false, so cursoring
-    // through fields never rewrites config. The two flags share one code
-    // path in every pane (obligation #4 in PANELS.md's recipe).
+    // Commit-on-exit: leaving a field IS the save — there is no separate
+    // save key. Exit without a change stays false, so cursoring through
+    // fields never rewrites config (obligation #4 in PANELS.md).
     bool left_field = false;
 };
 Applied apply(Form& f, Action a);

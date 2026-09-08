@@ -108,11 +108,9 @@ maya::Panel::Config form_config(const agentty::form::Form& f, maya::Color accent
             line = f.note;
         } else {
             std::string grammar;
-            // The grammar describes what the keyboard ACTUALLY does. Saving
-            // is automatic (commit-on-exit), so advertising "^S save"
-            // would teach a step that no longer exists — ^S still works,
-            // it just isn't the contract any more. Editing says "↵ done"
-            // because leaving the field is what writes it.
+            // The grammar describes what the keyboard ACTUALLY does.
+            // There is no save key: leaving a field writes it, and Esc
+            // leaves. Editing says "↵ done" because that IS the write.
             if (f.editing())        grammar = "type · ←→ caret · ↵ done · esc cancel";
             else if (f.choosing())  grammar = "↑↓ pick · ↵ choose · esc keep";
             else                    grammar = "↑↓ rows · type to edit · esc back";
