@@ -112,6 +112,13 @@ struct AgenttyApp {
         // ── Session / phase.
         mix(static_cast<std::uint64_t>(m.s.phase.index()));
         mix_str(m.s.status);
+        // Compaction summary streams into an off-transcript buffer; the
+        // activity tape narrates its bytes live (conversation.cpp →
+        // Config::stream). Size is the right term: every delta grows it,
+        // and the tape's visible window is a pure function of the bytes.
+        // Without this the tape freezes between unrelated repaints — the
+        // same "changed but not hashed" class the walk work closed.
+        mix(m.s.compaction_buffer.size());
         // Status expiry: bucket at 100 ms so the gauge’s rolling
         // counter doesn't force a render every microsecond.
         if (m.s.status_until.time_since_epoch().count() != 0) {

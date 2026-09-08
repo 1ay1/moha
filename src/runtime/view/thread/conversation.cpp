@@ -32,6 +32,7 @@
 #include <maya/widget/permission.hpp>
 #include <maya/widget/turn.hpp>
 
+#include "agentty/runtime/view/helpers.hpp"
 #include "agentty/runtime/view/palette.hpp"
 #include "agentty/runtime/view/thread/activity_indicator.hpp"
 #include "agentty/runtime/view/thread/seam.hpp"
@@ -176,29 +177,95 @@ void build_live_tail(const Model& m, int& running_turn,
                 ind.spinner_glyph = std::string{m.s.spinner.current_frame()};
                 ind.label         = "thinking";
                 ind.words         = activity_indicator_words();
+                // Frame-local backing for a spliced text+pending tail.
+                // Declared at Config scope so the string_view handed to
+                // the widget outlives the build() call below.
+                std::string tape_scratch;
 
                 if (const auto* a = active_ctx(m.s.phase)) {
-                    ind.stream_bytes = a->live_delta_bytes;
+                    // Elapsed since the phase began (matches the settled
+                    // turn header's own clock) + live tok/s once the
+                    // stream has proven a rate worth quoting.
+                    auto now = std::chrono::steady_clock::now();
+                    auto el_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     now - a->started).count();
+                    if (el_ms >= 1000) {
+                        std::string e = format_elapsed_5(
+                            static_cast<float>(el_ms) / 1000.0f);
+                        std::size_t sp = e.find_first_not_of(' ');
+                        if (sp != std::string::npos) e.erase(0, sp);
+                        ind.detail = std::move(e);
+                    }
                     if (a->first_delta_at.time_since_epoch().count() != 0) {
-                        auto now = std::chrono::steady_clock::now();
                         auto ts_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                          now - a->first_delta_at).count();
                         if (ts_ms >= 250) {
                             double sec = static_cast<double>(ts_ms) / 1000.0;
                             double tok = static_cast<double>(a->live_delta_bytes) / 4.0;
-                            ind.stream_rate = static_cast<float>(tok / sec);
+                            int r = static_cast<int>(tok / sec);
+                            if (r > 0) {
+                                if (!ind.detail.empty()) ind.detail += " · ";
+                                ind.detail += std::to_string(r) + " tok/s";
+                            }
                         }
                     }
                 }
 
-                constexpr std::size_t kEntropyTail = 512;
-                const std::string& a_text = head.streaming_text;
-                const std::string& a_pend = head.pending_stream;
-                const std::string& src = !a_pend.empty() ? a_pend : a_text;
-                if (!src.empty()) {
-                    std::size_t n = std::min(kEntropyTail, src.size());
-                    ind.entropy_window = std::string_view{
-                        src.data() + src.size() - n, n};
+                // ── Live tape source ── real bytes, by precedence ──────
+                // The row only exists while the tail is an empty
+                // placeholder (no text, no tools), so the candidate
+                // streams during that window are:
+                //   1. answer text — streaming_text + pending_stream.
+                //      BOTH, concatenated: pending_stream alone drains
+                //      to empty whenever the typewriter catches up,
+                //      which would starve the tape mid-stream; the
+                //      concatenation is the full received-so-far tail.
+                //      (Rarely non-empty here — first bytes flip the
+                //      placeholder within a frame — but the frame they
+                //      land on is exactly the flip frame.)
+                //   2. reasoning — msg.thinking grows delta-by-delta
+                //      during the pure-thinking phase, the long stretch
+                //      where this row is actually on screen. Shown in
+                //      the reasoning block anyway; no leak.
+                //   3. compaction — m.s.compaction_buffer streams
+                //      off-transcript; the tape is the ONLY live view
+                //      of it. (During compaction the transcript tail is
+                //      a fresh placeholder, so the row is visible.)
+                // All sources pass a ≤ 512-byte tail; totals are the
+                // TRUE cumulative sizes so the offset column reads as a
+                // real stream odometer. Empty stream ⇒ the widget's
+                // waiting state (noise + word pool) — the pre-first-
+                // byte contrast is itself the TTFT signal.
+                constexpr std::size_t kTapeTail = 512;
+                auto tape = [&](std::string_view s, std::size_t total) {
+                    ind.stream = s.size() > kTapeTail
+                        ? s.substr(s.size() - kTapeTail) : s;
+                    ind.stream_total = total;
+                };
+                const std::string& a_text = tail.streaming_text;
+                const std::string& a_pend = tail.pending_stream;
+                if (!a_text.empty() || !a_pend.empty()) {
+                    // Two backing strings, one logical stream. View the
+                    // suffix without concatenating: the tail is pend
+                    // alone when pend ≥ window, else it spans both —
+                    // splice into a frame-local scratch only then.
+                    const std::size_t total = a_text.size() + a_pend.size();
+                    if (a_pend.size() >= kTapeTail || a_text.empty()) {
+                        tape(a_pend.empty() ? std::string_view{a_text}
+                                            : std::string_view{a_pend},
+                             total);
+                    } else {
+                        tape_scratch.assign(
+                            a_text, a_text.size() - std::min(
+                                a_text.size(), kTapeTail - a_pend.size()),
+                            std::string::npos);
+                        tape_scratch += a_pend;
+                        tape(tape_scratch, total);
+                    }
+                } else if (!tail.thinking.empty()) {
+                    tape(tail.thinking, tail.thinking.size());
+                } else if (!m.s.compaction_buffer.empty()) {
+                    tape(m.s.compaction_buffer, m.s.compaction_buffer.size());
                 }
 
                 cfg.body.emplace_back(
