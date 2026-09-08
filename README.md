@@ -257,7 +257,8 @@ sudo dnf install https://github.com/1ay1/agentty/releases/latest/download/agentt
 sudo zypper install https://github.com/1ay1/agentty/releases/latest/download/agentty-x86_64.rpm
 
 # Arch (AUR)
-yay -S agentty-bin
+yay -S agentty-bin   # prebuilt static release
+yay -S agentty-git   # build HEAD from source, dynamically linked
 
 # Alpine
 curl -fsSLO https://github.com/1ay1/agentty/releases/latest/download/agentty-x86_64.apk
