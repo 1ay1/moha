@@ -57,23 +57,38 @@ TEST_CASE("wire drops oversized images, keeps in-range ones") {
         img.media_type = "image/png";
         img.bytes = png_with_dims(1600, 900);
         check(wire::wire_image_sendable(img),
-              "1600x900 is under the 2000 px cap → sendable");
+              "1600x900 is well under the cap → sendable");
     }
-    // Oversized: a wide hi-DPI capture (small file, big pixels) is dropped —
-    // this is the exact 48 KB clipboard PNG that 400ed the turn.
+    // A hi-DPI capture MUST reach the model. Anthropic downscales anything
+    // over the model's long-edge tier server-side and answers normally — it
+    // is not an error. The old 2000 px ceiling was the MANY-image rule (>20
+    // blocks in one request) misapplied to every image, so ordinary
+    // screenshots were discarded while the "[image: ...]" marker still went
+    // out: the model was told an image was present and shown nothing.
     {
         ImageContent img;
         img.media_type = "image/png";
-        img.bytes = png_with_dims(3024, 1200);   // longest side 3024 > 2000
-        check(!wire::wire_image_sendable(img),
-              "3024 px wide is over the cap → kept off the wire");
+        img.bytes = png_with_dims(3024, 1200);
+        check(wire::wire_image_sendable(img),
+              "3024 px retina capture is sent, not dropped");
     }
-    // Exactly the cap is allowed; one over is not.
     {
-        ImageContent at{"image/png", png_with_dims(2000, 2000)};
-        ImageContent over{"image/png", png_with_dims(2001, 10)};
-        check(wire::wire_image_sendable(at),   "2000 px is allowed (== cap)");
-        check(!wire::wire_image_sendable(over), "2001 px is rejected");
+        // The exact paste this was found on: a 2168x748 window grab, 168 px
+        // over the old ceiling, silently discarded.
+        ImageContent img{"image/png", png_with_dims(2168, 748)};
+        check(wire::wire_image_sendable(img),
+              "2168x748 window grab is sent");
+    }
+    // The real boundary is the API's hard limit: at it, allowed; past it,
+    // refused (the request would be rejected outright).
+    {
+        ImageContent at{"image/png",
+                        png_with_dims(agentty::util::kMaxWireImageSide,
+                                      agentty::util::kMaxWireImageSide)};
+        ImageContent over{"image/png",
+                          png_with_dims(agentty::util::kMaxWireImageSide + 1, 10)};
+        check(wire::wire_image_sendable(at),    "8000 px is allowed (== cap)");
+        check(!wire::wire_image_sendable(over), "8001 px is rejected");
     }
     // Empty bytes still rejected (unchanged behaviour).
     {

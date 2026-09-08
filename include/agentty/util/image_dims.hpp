@@ -86,12 +86,24 @@ struct ImageDims {
     return {};
 }
 
-// The conservative per-side pixel ceiling for a MANY-image request. Anthropic
-// rejects a whole turn if any image exceeds this; other vision APIs are more
-// lenient, but this cap keeps a request valid across providers. An image whose
-// longest side exceeds it must be kept off the wire (the model can't see a
-// 400ed turn anyway) — better a dropped image + a note than a dead turn.
-inline constexpr unsigned kMaxWireImageSide = 2000;
+// Per-side pixel ceilings, straight from Anthropic's vision docs.
+//
+// The HARD limit is 8000 px: beyond that the API rejects the image. Below it
+// an oversized image is DOWNSCALED server-side (to the model's long-edge tier,
+// 1568 or 2576 px) and answered normally — it is not an error.
+//
+// 2000 px is a different, CONDITIONAL rule: it applies only to a "many-image"
+// request, i.e. more than 20 image/document blocks in one request. Under that
+// threshold a 2168 px screenshot is perfectly valid.
+//
+// Conflating the two cost real user data: every image over 2000 px on a side
+// was silently discarded, which is most modern screenshots (a 2168x748 window
+// grab exceeded it by 168 px), while the prose marker still went out — so the
+// model was told an image was present and shown nothing. Send by default;
+// only apply the stricter ceiling when the request actually is many-image.
+inline constexpr unsigned kMaxWireImageSide      = 8000;
+inline constexpr unsigned kManyImageMaxSide      = 2000;
+inline constexpr std::size_t kManyImageThreshold = 20;
 
 // True iff the image is small enough to send. Unknown dimensions (unparsed
 // header) pass — we don't block on a guess; the provider's own limit is the
