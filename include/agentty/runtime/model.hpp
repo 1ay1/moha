@@ -412,7 +412,6 @@ struct Model {
         bool                tool_viewer_tail = true;
         TodoState           todo;
         ui::login::State    login;            // Closed | Picking | OAuthCode | OAuthExchanging | ApiKeyInput | Failed
-        int                 thread_scroll = 0;
         // Terminal window focus (?1004). Starts true — the terminal
         // that launched agentty has focus. Gates the hardware caret:
         // unfocused ⇒ park + hide (no blinking bar in inactive panes).

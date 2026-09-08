@@ -266,14 +266,6 @@ enum class StopReason : std::uint8_t {
 
 struct StreamFinished { StopReason stop_reason = StopReason::Unspecified; };
 
-// Non-fatal provider advisory, surfaced as a transient status toast while
-// the stream keeps running. The first honest use: Copilot's Auto session
-// SUBSTITUTES a concrete model server-side — the user picked X, the server
-// streams Y. Silently accepting that is exactly the "model switching is not
-// working" experience; a toast ("copilot auto → gpt-4o") makes the
-// substitution visible without interrupting the turn.
-struct StreamNotice { std::string text; };
-
 // Stream-level failure. `message` is human-readable (used for both the
 // status banner and `provider::classify(string)` fallback). `retry_after`
 // is the server's Retry-After hint when present — Anthropic sets it on
@@ -535,7 +527,6 @@ struct PaletteMove { int delta; };
 struct PaletteSelect {};
 
 // ── @file mention picker ────────────────────────────────────────────────
-struct OpenMention {};
 struct CloseMention {};
 struct MentionInput { char32_t ch; };
 struct MentionBackspace {};
@@ -543,7 +534,6 @@ struct MentionMove { int delta; };
 struct MentionSelect {};
 
 // ── #symbol picker (parallel to @file) ────────────────────────────────────
-struct OpenSymbol {};
 struct CloseSymbol {};
 struct SymbolInput { char32_t ch; };
 struct SymbolBackspace {};
@@ -605,7 +595,6 @@ struct ToolOutputStep { int delta; };
 // ── Todo modal ───────────────────────────────────────────────────────────
 struct OpenTodoModal {};
 struct CloseTodoModal {};
-struct UpdateTodos { std::vector<TodoItem> items; };
 
 // ── Smart Mode overlay ───────────────────────────────────────────────────
 // A dedicated config overlay for role-based routing (docs/design/smart-mode.md).
@@ -776,9 +765,6 @@ struct ProactiveContextReady { std::string block; double confidence = -1.0; };
 // only / Off. Selecting commits the mode (persist + live-apply) and closes.
 struct OpenRag {};
 struct CloseRag {};
-struct RagMove   { int delta; };   // move the row cursor
-struct RagAdjust {};               // select the highlighted mode
-struct RagReset  {};               // back to default (On)
 // Reveal/hide the Tier::Advanced rows (^A). The pane rebuilds its form; the
 // flag is view state, not config, so it is not persisted.
 struct RagAdvanced {};
@@ -792,7 +778,6 @@ struct RagAdvanced {};
 // only what is genuinely embeddings-specific. A pane that spelled out
 // Char/Backspace/CursorLeft/… messages would be re-deriving that key map, and
 // two panes doing so is how they drift apart.
-struct RagEmbedOpen  {};                   // enter the embeddings pane
 struct RagEmbedClose {};                   // leave one level (menu/field/pane)
 struct RagEmbedKey   { form::keys::Action action; };
 // Bracketed paste while a Retrieval field is being edited (API keys, hosts,
@@ -811,7 +796,6 @@ struct RagEmbedTestDone {
     std::uint64_t gen = 0;
 };
 struct RagEmbedSave  {};                    // persist + live-apply
-struct RagEmbedRevert{};                    // discard edits, reload from config
 
 // ── Settings pickers (Ctrl+K → Plugins/Commands/Agents/Hooks) ──────
 // One shared list modal, parameterised by the config concern. Opening
@@ -863,7 +847,7 @@ struct RejectAllChanges {};
 
 // ── Meta / session-level ─────────────────────────────────────────────────
 // CompactContext, Tick, Quit, NoOp, ClearStatus, CycleProfile,
-// RestoreCheckpoint, ScrollThread — all events that
+// RestoreCheckpoint — all events that
 // are conceptually "above" any single domain (the session itself, the
 // tick clock, profile mode, etc.).
 
@@ -909,7 +893,6 @@ struct CheckpointDiffLoaded {
     int  insertions     = 0;
     int  deletions      = 0;
 };
-struct ScrollThread { int delta; };
 // Terminal window focus changed (?1004 CSI I/O via maya Sub::on_focus).
 // Gates the hardware caret: an unfocused agentty parks + hides the real
 // cursor instead of leaving a blinking bar in an inactive pane.
@@ -919,13 +902,6 @@ struct TerminalFocus { bool focused = true; };
 // Carries the target message id so the reducer mutates exactly that card
 // (id-addressed mutation + render-key bump).
 struct ToggleRetrievedExpanded { MessageId id; };
-// Ctrl+T on the transcript — fold/unfold the newest assistant turn's reasoning
-// ("Thinking") block. Carries the target message id so the reducer flips
-// exactly that turn's Message::reasoning_expanded and bumps its render key
-// (mirrors ToggleRetrievedExpanded). Provider-agnostic: the block is shown
-// for any turn whose unified reasoning text is non-empty.
-struct ToggleReasoning { MessageId id; };
-
 struct Tick {};
 struct Quit {};
 struct NoOp {};
@@ -985,8 +961,7 @@ using StreamMsg = std::variant<
     StreamThinkingDelta,
     StreamReasoning,
     StreamUsage, StreamFinished, StreamError, StreamHeartbeat,
-    StreamBufferedWait, CancelStream, RetryStream, ProactiveContextReady,
-    StreamNotice>;
+    StreamBufferedWait, CancelStream, RetryStream, ProactiveContextReady>;
 
 using ToolMsg = std::variant<
     ToolExecOutput, ToolExecProgress, ToolTimeoutCheck,
@@ -1028,11 +1003,11 @@ using PaletteMsg = std::variant<
     PaletteBackspace, PaletteMove, PaletteSelect>;
 
 using MentionMsg = std::variant<
-    OpenMention, CloseMention, MentionInput,
+    CloseMention, MentionInput,
     MentionBackspace, MentionMove, MentionSelect>;
 
 using SymbolMsg = std::variant<
-    OpenSymbol, CloseSymbol, SymbolInput,
+    CloseSymbol, SymbolInput,
     SymbolBackspace, SymbolMove, SymbolSelect>;
 
 using CodeBlockMsg = std::variant<
@@ -1046,10 +1021,9 @@ using CheckpointMsg = std::variant<
     CheckpointsSelect, CheckpointDiffLoaded>;
 
 using RagMsg = std::variant<
-    OpenRag, CloseRag, RagMove,
-    RagAdjust, RagReset, RagAdvanced,
-    RagEmbedOpen, RagEmbedClose, RagEmbedKey, RagEmbedPaste,
-    RagEmbedTest, RagEmbedTestDone, RagEmbedSave, RagEmbedRevert>;
+    OpenRag, CloseRag, RagAdvanced,
+    RagEmbedClose, RagEmbedKey, RagEmbedPaste,
+    RagEmbedTest, RagEmbedTestDone, RagEmbedSave>;
 
 using SettingsListMsg = std::variant<
     OpenSettingsList, CloseSettingsList, SettingsListMove,
@@ -1061,7 +1035,7 @@ using ForkMsg = std::variant<
     OpenFork, CloseFork, ForkMove, ForkThread>;
 
 using TodoMsg = std::variant<
-    OpenTodoModal, CloseTodoModal, UpdateTodos>;
+    OpenTodoModal, CloseTodoModal>;
 
 using LoginMsg = std::variant<
     OpenLogin, CloseLogin, LoginBack, SignOut,
@@ -1083,7 +1057,7 @@ using SmartModeMsg = std::variant<
 
 using MetaMsg = std::variant<
     CompactContext, CycleProfile, RestoreCheckpoint, CheckpointRestored,
-    ScrollThread, ToggleRetrievedExpanded,
+    ToggleRetrievedExpanded,
     TerminalFocus,
     Tick, Quit, NoOp, ClearStatus, RedrawScreen,
     UpdateCheckDone, UpdateApplied>;
@@ -1204,8 +1178,8 @@ static_assert(leaf_domain_count<OpenRag>()           == 1,
               "OpenRag must belong to exactly one Msg domain");
 static_assert(leaf_domain_count<ForkThread>()                == 1,
               "ForkThread must belong to exactly one Msg domain");
-static_assert(leaf_domain_count<UpdateTodos>()               == 1,
-              "UpdateTodos must belong to exactly one Msg domain");
+static_assert(leaf_domain_count<OpenTodoModal>()             == 1,
+              "OpenTodoModal must belong to exactly one Msg domain");
 static_assert(leaf_domain_count<LoginSubmit>()               == 1,
               "LoginSubmit must belong to exactly one Msg domain");
 static_assert(leaf_domain_count<AcceptAllChanges>()          == 1,

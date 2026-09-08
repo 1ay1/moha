@@ -251,10 +251,9 @@ Step todo_update(Model m, msg::TodoMsg tm) {
             m.ui.todo.open = pick::Closed{};
             return done(std::move(m));
         },
-        [&](UpdateTodos& e) -> Step {
-            m.ui.todo.items = std::move(e.items);
-            return done(std::move(m));
-        },
+        // (No UpdateTodos arm: the agent's todo writes land via
+        // stream_preview's direct sync — see sync_todos there. A message
+        // nobody sent.)
     }, tm);
 }
 

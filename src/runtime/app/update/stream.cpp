@@ -1669,13 +1669,6 @@ Step stream_update(Model m, msg::StreamMsg sm) {
                 m.s.reasoning_tokens = e.reasoning_output_tokens;
             return done(std::move(m));
         },
-        [&](StreamNotice& e) -> Step {
-            // Non-fatal provider advisory (e.g. Copilot Auto substituted a
-            // concrete model). Toast it; the stream continues untouched.
-            auto toast = set_status_toast(m, std::move(e.text),
-                                          std::chrono::seconds{4});
-            return {std::move(m), std::move(toast)};
-        },
         [&](StreamHeartbeat e) -> Step {
             // No payload or UI effect. Both heartbeat classes refresh the
             // stall clock. Only a real SSE/model heartbeat resets retries;

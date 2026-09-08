@@ -26,15 +26,9 @@ using maya::overload;
 
 Step mention_update(Model m, msg::MentionMsg mm) {
     return std::visit(overload{
-        [&](OpenMention) -> Step {
-            // Capture the workspace listing once on open. Re-walking
-            // disk on every keystroke would dominate frame cost on
-            // larger repos and produce visible lag in the picker.
-            mention::Open o;
-            o.files = list_workspace_files();
-            m.ui.panel = pn::Mention{std::move(o)};
-            return done(std::move(m));
-        },
+        // (No OpenMention arm: the panel opens from the COMPOSER's `@`
+        // handler, which builds pn::Mention directly with the file listing
+        // — see composer.cpp. A message nobody sent sat here for months.)
         [&](CloseMention) -> Step {
             ascend(m);   // usually → thread (opened by typing @), or a parent
             return done(std::move(m));

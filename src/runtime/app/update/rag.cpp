@@ -211,16 +211,6 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
             ascend(m);
             return {std::move(m), Cmd<Msg>::none()};
         },
-        [&](RagMove& e) -> Step {
-            // Legacy entry point. The pane's own keys arrive as RagEmbedKey;
-            // this survives only for callers that synthesise a move.
-            if (auto* f = form_of(m)) form::move(f->form, e.delta);
-            return {std::move(m), Cmd<Msg>::none()};
-        },
-        [&](RagAdjust&) -> Step {
-            if (auto* f = form_of(m)) (void)form::activate(f->form);
-            return {std::move(m), Cmd<Msg>::none()};
-        },
         [&](RagAdvanced) -> Step {
             // Reveal/hide the Tier::Advanced rows. The form is rebuilt because
             // the row SET changes; the cursor is kept where it was so the
@@ -237,25 +227,7 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
             }
             return {std::move(m), Cmd<Msg>::none()};
         },
-        [&](RagReset) -> Step {
-            commit_mode(store::RagMode::On);
-            if (auto* o = m.ui.panel.get<pn::Rag>()) {
-                o->cursor = store::RagMode::On;
-                o->active = store::RagMode::On;
-                o->embed  = make_embed_form(store::RagMode::On, o->advanced);
-            }
-            return {std::move(m), Cmd<Msg>::none()};
-        },
-
         // ── Embeddings rows ─────────────────────────────────────────
-        [&](RagEmbedOpen) -> Step {
-            // Idempotent re-seed. Nothing defers to this any more (the pane is
-            // built on open), but a caller that wants a fresh probe state can
-            // still ask for one.
-            if (auto* o = m.ui.panel.get<pn::Rag>())
-                o->embed = make_embed_form(o->cursor, o->advanced);
-            return {std::move(m), Cmd<Msg>::none()};
-        },
         [&](RagEmbedClose) -> Step {
             // Esc unwinds one level at a time (menu → field → pane); the form
             // layer owns that ordering so every pane behaves identically.
@@ -419,16 +391,6 @@ Step rag_settings_update(Model m, msg::RagMsg rm) {
             return {std::move(m),
                     set_status_toast(m, "Embeddings: " + label + note,
                                      std::chrono::seconds{4})};
-        },
-        [&](RagEmbedRevert) -> Step {
-            if (auto* o = m.ui.panel.get<pn::Rag>()) {
-                auto& f = o->embed;
-                f.cfg   = current_embed_config();
-                f.form  = rs::build_form(f.cfg, o->cursor, deps().load_settings());
-                f.probe = rs::EmbedForm::Idle{};
-                refresh_status(f);
-            }
-            return {std::move(m), Cmd<Msg>::none()};
         },
     }, rm);
 }

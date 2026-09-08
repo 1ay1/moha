@@ -282,10 +282,6 @@ Step meta_update(Model m, msg::MetaMsg mm) {
             return {std::move(m),
                     Cmd<Msg>::batch(Cmd<Msg>::reset_inline(), std::move(toast))};
         },
-        [&](ScrollThread& e) -> Step {
-            m.ui.thread_scroll = std::max(0, m.ui.thread_scroll + e.delta);
-            return done(std::move(m));
-        },
         [&](TerminalFocus& e) -> Step {
             m.ui.terminal_focused = e.focused;
             return done(std::move(m));

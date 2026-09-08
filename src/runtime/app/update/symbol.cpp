@@ -23,16 +23,8 @@ using maya::overload;
 
 Step symbol_update(Model m, msg::SymbolMsg sm) {
     return std::visit(overload{
-        [&](OpenSymbol) -> Step {
-            // First call walks the workspace; cached after that. The
-            // const-ref view is copied into the picker state so that
-            // queries don't keep the global cache pinned (the cache
-            // outlives the picker by design).
-            symbol::Open o;
-            o.entries = list_workspace_symbols();
-            m.ui.panel = pn::Symbol{std::move(o)};
-            return done(std::move(m));
-        },
+        // (No OpenSymbol arm: the panel opens from the COMPOSER's `#`
+        // handler, which builds pn::Symbol directly — see composer.cpp.)
         [&](CloseSymbol) -> Step {
             ascend(m);   // usually → thread (opened by typing #), or a parent
             return done(std::move(m));
