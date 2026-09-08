@@ -251,10 +251,12 @@ content instead of inventing a magic number.
 7. If it needs revalidation after Esc-restore, add a branch in
    `ascend()` (meta.cpp). Free text needs nothing; live-list cursors
    need a clamp.
-8. Every VISIBLE facet of the panel's state must feed `visual_hash`
-   (program.hpp) — forms get it via `mix_form()`; anything else must be
-   mixed by hand or the frame gate will eat its repaints. See "Known
-   design debt" below.
+8. Visible state feeds the frame gate AUTOMATICALLY: `visual_hash` walks
+   the panel slot structurally (`visual::mix_any`, visual.hpp). Only if
+   your state type has bases + members, private members, or a SECRET
+   field do you add a `visual_parts` list beside it
+   (panel/visual_parts.hpp) — and `parts_cover_all` fails the build if
+   the list misses a member.
 
 Steps 2 and 5 are the remaining hand-maintained arms. The next design step,
 if the count ever grows: derive variant, `Kind`, and both dispatch switches
@@ -263,28 +265,39 @@ arm impossible rather than a warning. Not done yet — at ~16 panels the
 exhaustive switches are honest work, and the registry's template cost to
 the 1.7 s edit loop is unmeasured.
 
-## Known design debt: visual_hash is a hand-maintained mirror
+## The frame gate: a structural walk, not a hand-written mirror
 
-`visual_hash(Model)` (program.hpp) must enumerate every model facet the
-view renders; the frame gate skips "visually identical" frames by this
-hash. That is a PARALLEL DESCRIPTION of the view's dependency set with no
-mechanism keeping the two equal — the same twin-chains disease `top()`
-cures for key routing, alive at the render gate. It has produced a whole
-bug class (state changes, view would differ, hash doesn't move, repaint
-skipped): login inputs, both forms, the rag probe verdict, the result
-card's scroll — each found by hand, each fixed by hand.
+`visual_hash` (program.hpp) gates repaints. It USED to hand-enumerate
+every model facet the view renders — a parallel description of the view's
+dependency set that produced a whole bug class when facets were forgotten
+(login inputs, both forms, the rag probe verdict, the result-card scroll).
 
-Mitigations in place: `mix_form()` digests any form-backed pane whole;
-`form::value_digest()` fingerprints field values length-only (no secret
-bytes near the hash); the visual-hash coverage test pins known facets.
-These centralize, but the contract is still "remember to teach the hash".
+Retired. `visual::mix_any` (runtime/visual.hpp) DERIVES the hash from the
+state types: scalars, strings, variants, optionals and ranges walk
+automatically; plain aggregates decompose member-by-member (P1061
+structured-binding packs), so a member added tomorrow is hashed tomorrow.
+A type the walk cannot decompose — bases + members, private state, or a
+field holding a SECRET — must declare `visual_parts(t)` beside its
+definition (panel/visual_parts.hpp): one entry per base/member, each
+walked, projected (lengths), or `visual::exempt`ed with a written reason.
+`static_assert(parts_cover_all<T>)` fails the build if the list misses a
+member, so exemption is the explicit reviewable act and coverage is the
+default — the inversion that makes the old bug class unrepresentable.
 
-The real fix, when it earns a day: derive the mix STRUCTURALLY from the
-panel state types (pfr-style aggregate walk; C++26 reflection when
-available), with an explicit opt-OUT marker for genuinely non-visual
-fields — inverting the default so forgetting is impossible and exemption
-is the visible, reviewable act. Until then: adding visible panel state
-MEANS updating visual_hash, and the add-a-panel checklist says so.
+Secrets: `field::Secret` and `EmbedConfig::api_key` digest LENGTH-only via
+their parts lists; login's key/code buffers likewise. `visual_walk_test`
+pins it: a same-length credential overwrite is hash-invisible, a length
+change is visible, and no non-secret facet can be mutated without moving
+the hash. The parent `From` snapshot is exempt (not rendered while its
+child is open) — also pinned.
+
+Cost: ~540 ns to walk the heaviest panel (rag, 22-field form) —
+measured, ≌0.002% of a 30fps frame.
+
+Hand-mixed remnants, on purpose: panel-ADJACENT state living outside the
+slot value (fused catalogs/rows, reducer-driven ScrollState offsets, the
+plugins snapshot, thread/composer/status state). Same rule applies when
+touching those: the walk cannot see what is not in the state types.
 
 ---
 

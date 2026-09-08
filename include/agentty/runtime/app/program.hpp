@@ -16,6 +16,8 @@
 #include "agentty/runtime/view/composer.hpp"        // composer_uses_hardware_caret
 #include "agentty/runtime/model.hpp"
 #include "agentty/runtime/msg.hpp"
+#include "agentty/runtime/panel/visual_parts.hpp"   // the structural hash walk
+#include "agentty/runtime/visual.hpp"
 #include "agentty/runtime/view/view.hpp"
 
 namespace agentty::app {
@@ -160,194 +162,52 @@ struct AgenttyApp {
         // open overlay.
         mix(static_cast<std::uint64_t>(m.ui.panel.raw().index()));
 
-        // ── ONE digest for any form-backed pane (SmartMode, Rag) ──────
-        // The login-paste bug generalized: a form's VISIBLE state is much
-        // more than its cursor. Typing mutates a field's value; Enter flips
-        // Browsing→Editing (caret appears, footer hint swaps); a dropdown
-        // owns a highlight; edits flip `dirty` (the unsaved note) and
-        // rewrite `note`. Every one of those was hash-invisible — typing
-        // into a Rag Text field, pasting into it, or moving inside a
-        // dropdown repainted only when something unrelated advanced the
-        // hash. Mix them all here, once, for every form.
+        // ── The panel slot: ONE structural walk ──────────────────────
+        // Every alternative's every visible facet, DERIVED from the state
+        // types by visual::mix_any (visual.hpp): scalars, strings,
+        // variants, optionals and ranges walk automatically; a type the
+        // walk can't decompose (bases+members, or one holding a SECRET)
+        // must declare visual_parts beside its definition, with
+        // parts_cover_all proving every member was accounted for
+        // (panel/visual_parts.hpp). Adding a member to any panel state is
+        // therefore hashed BY DEFAULT — the bug class where a facet was
+        // forgotten here (login inputs, both forms, the probe verdict, the
+        // result-card scroll…) is unrepresentable, not just fixed.
         //
-        // Values are digested as LENGTHS (Secret stays count-only — no
-        // secret bytes near the hash; a same-length overwrite is the only
-        // blind spot, unreachable from single edits which also move the
-        // caret we mix).
-        auto mix_form = [&](const agentty::form::Form& f) {
-            mix(static_cast<std::uint64_t>(f.cursor));
-            mix(static_cast<std::uint64_t>(f.fields.size()));
-            mix(static_cast<std::uint64_t>(f.focus.index()));   // B/E/C mode
-            mix(f.dirty ? 1ULL : 0ULL);
-            mix_str(f.note);
-            if (const auto* d = f.dropdown()) {
-                mix(static_cast<std::uint64_t>(d->highlighted));
-                mix(static_cast<std::uint64_t>(d->scroll));
-            }
-            if (const auto* row = f.focused()) {
-                mix_str(row->id);
-                mix_str(row->error);
-                // Value digest: a length-only fingerprint per kind covers
-                // typing, backspace, paste, toggle and cycle; caret_chars
-                // covers caret motion. No value BYTES enter the hash.
-                mix(static_cast<std::uint64_t>(
-                    agentty::form::value_digest(row->value)));
-                mix(static_cast<std::uint64_t>(
-                    agentty::form::caret_chars(row->value, f.editing())));
-            }
-        };
-        if (auto* pp = m.ui.panel.get<pn::Providers>()) {
-            mix(static_cast<std::uint64_t>(pp->index));
-            mix_str(pp->query);
-            mix_str(pp->confirm_remove);   // two-press ^D arm state
-        }
-        if (auto* tl = m.ui.panel.get<pn::ThreadList>()) {
-            mix(static_cast<std::uint64_t>(tl->index));
-            mix_str(tl->confirm_remove);   // two-press delete arm state
-        }
-        if (auto* sm = m.ui.panel.get<pn::SmartMode>())
-            mix_form(sm->form);
-        if (auto* fp = m.ui.panel.get<pn::Models>()) {
-            mix(static_cast<std::uint64_t>(fp->index));
-            mix_str(fp->query);   // live search buffer
-            // Slot-assign mode retitles the picker, rewrites the footer
-            // hints and scopes the row list to the active provider, so it
-            // is part of the visible state — not hashing it would freeze
-            // stale chrome when Smart Mode descends into the picker.
-            // 0 = no assignment in flight, else the role + 1. The `+ 1`
-            // used to exist to lift a -1 sentinel out of negative range;
-            // now it just keeps "absent" distinct from role 0.
-            mix(fp->assign_slot
-                    ? static_cast<std::uint64_t>(*fp->assign_slot) + 1
-                    : 0u);
-        }
-        // The fused list also changes as async provider catalogs resolve
-        // (each FusedCatalogLoaded grows/updates provider_catalogs), so mix a
-        // coarse fingerprint of the merged catalogs' sizes + states.
+        // Secrets: field::Secret and EmbedConfig::api_key are digested as
+        // LENGTHS via their parts lists — credential bytes never reach the
+        // hash (visual_hash_walk_test pins it).
+        visual::mix_any(mix, m.ui.panel.raw());
+
+        // Panel-adjacent state that lives OUTSIDE the slot value but feeds
+        // the same views (hand-mixed because it is not part of any panel
+        // state type — the walk cannot see it from the slot):
+        //   • fused catalogs + row cache (models panel's async data)
         for (const auto& c : m.d.provider_catalogs) {
             mix_str(c.provider_id);
             mix(static_cast<std::uint64_t>(c.models.size()));
             mix(static_cast<std::uint64_t>(c.state));
         }
-        // The fused row cache itself: fold its size + each row's favorite /
-        // active bit so a ^F favourite-toggle (which mutates rows without
-        // touching catalogs or the query) still re-renders. Only populated
-        // while the picker is open, so this is bounded and cheap.
         mix(static_cast<std::uint64_t>(m.d.fused_rows.size()));
         for (const auto& r : m.d.fused_rows)
             mix(static_cast<std::uint64_t>((r.model.favorite ? 1u : 0u)
                                          | (r.active ? 2u : 0u)));
-        if (auto* c = m.ui.panel.get<pn::DiffReview>()) {
-            mix(static_cast<std::uint64_t>(c->file_index));
-            mix(static_cast<std::uint64_t>(c->hunk_index));
-            // Hunk-body scroll (^D/^U) changes which diff rows are visible;
-            // without this mix the frame gate would skip the repaint and the
-            // scroll would be invisible until the next unrelated event.
-            mix(static_cast<std::uint64_t>(c->body_scroll));
-            // Armed two-press ^X swaps the footer for a warning row.
-            mix(c->confirm_reject_all ? 1ULL : 0ULL);
-        }
-        if (auto* o = m.ui.panel.get<pn::Palette>()) {
-            mix_str(o->query);
-            mix(static_cast<std::uint64_t>(o->index));
-        }
-        if (auto* o = m.ui.panel.get<pn::Mention>()) {
-            mix_str(o->query);
-            mix(static_cast<std::uint64_t>(o->index));
-        }
-        if (auto* o = m.ui.panel.get<pn::Symbol>()) {
-            mix_str(o->query);
-            mix(static_cast<std::uint64_t>(o->index));
-        }
-        mix(static_cast<std::uint64_t>(m.ui.todo.open.index()));
-        mix(static_cast<std::uint64_t>(m.ui.login.index()));
-        // The login INPUT states carry a live buffer + cursor. index() alone
-        // gated typing and — worse — PASTE away as "visually identical": the
-        // buffer filled, the hash didn't move, and the field showed nothing
-        // until an unrelated event repainted. Mix length + cursor (not the
-        // bytes — the hash needs change-detection, not content).
-        std::visit(maya::overload{
-            [&](const ui::login::OAuthCode& s) {
-                mix(static_cast<std::uint64_t>(s.code_input.size()));
-                mix(static_cast<std::uint64_t>(s.cursor));
-            },
-            [&](const ui::login::ApiKeyInput& s) {
-                mix(static_cast<std::uint64_t>(s.key_input.size()));
-                mix(static_cast<std::uint64_t>(s.cursor));
-            },
-            [&](const ui::login::CustomHostInput& s) {
-                mix(static_cast<std::uint64_t>(s.host_input.size()));
-                mix(static_cast<std::uint64_t>(s.cursor));
-            },
-            [&](const ui::login::AccountList& s) {
-                mix(static_cast<std::uint64_t>(s.cursor));
-                mix_str(s.confirm_remove);
-            },
-            [](const auto&) {},
-        }, m.ui.login);
-
-        // Tool-output viewer: open/closed + list cursor + list↔body stage
-        // + body scroll offset. The body stage scrolls by mutating ONLY
-        // m.ui.tool_viewer_scroll.y (the view windows rows around it —
-        // no widget writeback), so the scroll offset MUST feed the hash
-        // or every ↑/↓/PgDn in the body is gated away until the caret
-        // parity flips ~265 ms later — the "viewer movement is laggy"
-        // symptom, same class as the picker-cursor bug above.
-        if (auto* o = m.ui.panel.get<pn::ToolOutput>()) {
-            mix(static_cast<std::uint64_t>(o->index));
-            mix(o->viewing ? 1ULL : 0ULL);
+        //   • body-scroll offsets driven by reducers through ScrollStates
+        //     (the view windows rows around .y; no widget writeback)
+        if (m.ui.panel.is<pn::ToolOutput>()) {
             mix(static_cast<std::uint64_t>(m.ui.tool_viewer_scroll.y));
-            // Live row (row 0) tail-follow toggle: flipping it force-scrolls
-            // the body to the newest output, a view-affecting change with no
-            // other backing field, so it MUST advance the hash. The running
-            // tool's growing progress_text already advances the hash via its
-            // live-tail render_key, so streamed output repaints on its own
-            // and the tailing body follows.
             mix(m.ui.tool_viewer_tail ? 1ULL : 0ULL);
         }
-        // Code-block picker (and its Result card): same contract.
-        if (auto* o = m.ui.panel.get<pn::CodeBlocks>())
-            mix(static_cast<std::uint64_t>(o->index));
-        // The Result card scrolls by mutating ONLY code_blocks_scroll.y (the
-        // reducer clamps against the paint-written-back max_y; no widget
-        // writeback on the way down) — identical mechanics to the tool
-        // viewer's body stage above, and it had the identical bug: ↑/↓ on a
-        // long capture was gated away until caret parity flipped ~265 ms
-        // later. The offset must feed the hash while the card is open.
         if (m.ui.panel.is<pn::CodeBlockResult>())
             mix(static_cast<std::uint64_t>(m.ui.code_blocks_scroll.y));
 
-        // Checkpoint picker: open/closed + cursor + each entry's async
-        // diff-load state (Loading→Ready flips the visible "N files · +A −D"
-        // stat, so it MUST advance the hash or the row's diffstat wouldn't
-        // repaint when its background load lands). Same selection-driven
-        // repaint contract as the other pickers above.
-        if (auto* o = m.ui.panel.get<pn::Checkpoints>()) {
-            mix(static_cast<std::uint64_t>(o->index));
-            for (const auto& e : o->entries)
-                mix(static_cast<std::uint64_t>(e.diff_state) * 131
-                    + static_cast<std::uint64_t>(e.files_changed));
-        }
-
-        // Settings list (Ctrl+K → Plugins / Commands / Agents / Hooks):
-        // open/closed + cursor + inline add-mode buffer/cursor + the
-        // reload nonce. Same selection-driven repaint contract as every
-        // picker above — WITHOUT this, ALL of them were gated away: the
-        // row cursor moved but didn't repaint until the caret parity
-        // flipped ~265 ms later (the "press it 5 times, registers once"
-        // symptom), typing in the add-prompt didn't echo, and — the
-        // reported bug — a background plugin reload finishing (nonce++)
-        // never repainted, so a freshly-added server sat on "connecting…"
-        // forever. The nonce is the ONLY backing for the reload-done
-        // repaint (the connected state lives in the external MCP pool,
-        // not the Model), so it MUST feed the hash.
-        if (auto* o = m.ui.panel.get<pn::SettingsList>()) {
-            mix(static_cast<std::uint64_t>(o->index));
-            mix(static_cast<std::uint64_t>(o->concern));
-            mix(o->input_active ? 1ULL : 0ULL);
-            mix_str(o->input);
-            mix(static_cast<std::uint64_t>(o->cursor));
-        }
+        mix(static_cast<std::uint64_t>(m.ui.todo.open.index()));
+        // Login: its own variant outside the slot; same walk, same
+        // guarantees (the input states' buffers digest via the string arm —
+        // length + content-fingerprint; OAuth codes are short-lived and the
+        // gate needs to see edits, unlike Secret fields which stay
+        // length-only by their parts list).
+        visual::mix_any(mix, m.ui.login);
         // Plugins snapshot (owned in the Model). The panel is a pure
         // projection of m.ui.plugins, so its connection state must feed the
         // hash directly — no nonce. A cheap structural digest: loading flag,
@@ -377,21 +237,9 @@ struct AgenttyApp {
         // flips ~265 ms later — the "selector doesn't move sometimes"
         // symptom. These three were entirely absent from the hash.
         //   • Smart Mode config overlay (Ctrl+S) — a OneAxis like the pickers.
-        //   • RAG picker (Ctrl+K → RAG) — 3 rows; active marks the persisted mode.
-        if (auto* o = m.ui.panel.get<pn::Rag>()) {
-            mix(static_cast<std::uint64_t>(o->cursor));
-            mix(static_cast<std::uint64_t>(o->active));
-            // The pane IS a form (host, port, API key…) + an async probe
-            // whose verdict paints the Action row and footer. Both were
-            // hash-invisible: typing/pasting into a field, entering edit
-            // mode, or the probe flipping Testing→Ok repainted only when
-            // something else moved the hash.
-            mix_form(o->embed.form);
-            mix(static_cast<std::uint64_t>(o->embed.probe.index()));
-        }
-        //   • Fork picker (Ctrl+K → Fork thread) — 3 RAG-mode rows.
-        if (auto* o = m.ui.panel.get<pn::Fork>())
-            mix(static_cast<std::uint64_t>(o->choice));
+        // (Rag — form, probe verdict, cursor — and Fork are fully covered
+        // by the structural walk above; EmbedForm's probe variant and the
+        // form ride in via their types' default decomposition/parts.)
 
         // Time-driven animation buckets. Each bucket flip forces a
         // render via hash advance. The bucket size is the FLOOR on

@@ -294,32 +294,7 @@ void adjust(FieldValue& v, int dir) {
     }, v);
 }
 
-// ── Form-level operations ────────────────────────────────────────
-
-std::size_t value_digest(const FieldValue& v) noexcept {
-    return std::visit([](const auto& f) -> std::size_t {
-        using T = std::decay_t<decltype(f)>;
-        if constexpr (std::is_same_v<T, field::Text>
-                   || std::is_same_v<T, field::Path>)
-            return f.value.size();
-        else if constexpr (std::is_same_v<T, field::Secret>)
-            return f.value.size();          // still a LENGTH — never bytes
-        else if constexpr (std::is_same_v<T, field::Toggle>)
-            return f.on ? 1u : 0u;
-        else if constexpr (std::is_same_v<T, field::Choice>)
-            return static_cast<std::size_t>(f.index) + 1;
-        else if constexpr (std::is_same_v<T, field::Number>)
-            return static_cast<std::size_t>(f.value);
-        else if constexpr (std::is_same_v<T, field::Slider>)
-            return static_cast<std::size_t>(f.value * 10000.0);
-        else if constexpr (std::is_same_v<T, field::Pick>)
-            return f.label.size();
-        else if constexpr (std::is_same_v<T, field::Action>)
-            return f.status.size() * 8 + static_cast<std::size_t>(f.tone);
-        else
-            return 0;
-    }, v);
-}
+// ── Form-level operations ────────────────────────────────
 
 void move(Form& f, int delta) {
     if (f.choosing()) return;          // the dropdown owns the highlight

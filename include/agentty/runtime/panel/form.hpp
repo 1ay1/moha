@@ -398,12 +398,6 @@ struct Options {
 // bytes). npos when the field is not being edited.
 [[nodiscard]] std::size_t caret_chars(const FieldValue& v, bool editing) noexcept;
 
-// A LENGTH-ONLY fingerprint of a field's rendered value, for the frame
-// hash: enough to detect typing/backspace/paste/toggle/cycle on any kind
-// without putting value BYTES (in particular a Secret's) anywhere near a
-// hash. Not a display function — see display() for what the user sees.
-[[nodiscard]] std::size_t value_digest(const FieldValue& v) noexcept;
-
 // ── Editing (pure mutations) ─────────────────────────────────────────────
 // Each is a no-op on a kind it doesn't apply to, so call sites never switch
 // on the alternative. All of them clamp; none can leave a field invalid.
