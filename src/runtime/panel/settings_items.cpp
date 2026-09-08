@@ -115,21 +115,36 @@ std::vector<Item> plugins(const agentty::mcp::PluginModel& model, bool loading) 
         i.untrusted   = s.untrusted;
         const std::string scope_tag =
             (s.origin == agentty::mcp::Origin::User) ? "" : (i.scope_label + " · ");
+        // Passthrough servers execute nothing locally — they forward a
+        // proxy-advertised call's args to a URL. Badge the row so the
+        // difference from a spawned/MCP server is visible at a glance.
+        const std::string kind_tag = s.passthrough ? "⇄ passthrough · " : "";
         // A tool is EFFECTIVELY inactive unless its plugin is enabled AND
         // connected — a disabled or still-connecting plugin can run nothing,
         // so its whole subtree renders dimmed (but keeps individual state).
         const bool subtree_inactive = s.disabled || !s.connected;
         if (s.disabled) {
-            i.secondary = scope_tag + "disabled · " + std::to_string(s.tools.size())
+            i.secondary = scope_tag + kind_tag + "disabled · "
+                        + std::to_string(s.tools.size())
                         + (s.tools.size() == 1 ? " tool" : " tools")
                         + " — Enter to enable";
             i.status    = Item::Status::Neutral;   // off on purpose — not an error
         } else if (!s.error.empty()) {
-            i.secondary = scope_tag + s.error;
+            i.secondary = scope_tag + kind_tag + s.error;
             i.status    = Item::Status::Bad;
         } else if (!s.connected) {
-            i.secondary = scope_tag + "connecting…";
+            i.secondary = scope_tag + kind_tag + "connecting…";
             i.status    = Item::Status::Pending;
+        } else if (s.passthrough) {
+            // "active", not "connected" — nothing handshakes; the tools
+            // dispatch to the URL on demand. Show WHERE calls go: that URL
+            // is the entire trust story of this entry.
+            i.secondary = scope_tag + kind_tag
+                        + std::to_string(s.enabled_count()) + " of "
+                        + std::to_string(s.tools.size())
+                        + (s.tools.size() == 1 ? " tool" : " tools")
+                        + " → " + s.url;
+            i.status    = Item::Status::Ok;
         } else {
             i.secondary = scope_tag + std::to_string(s.enabled_count()) + " of " +
                           std::to_string(s.tools.size()) + " tools active";
@@ -326,6 +341,7 @@ AddResult add_plugin_from_line(const std::string& line) {
     }
     if (pos.size() < 2)
         return {false, "usage: <name> <command> [args…]  ·  <name> --http <url>  ·  "
+                       "<name> --passthrough <url> <tool>[,<tool>…]  ·  "
                        "<name> --python file.py / --uvx pkg / --npx pkg  "
                        "[--project]"};
     const std::string name = pos[0];
@@ -366,6 +382,30 @@ AddResult add_plugin_from_line(const std::string& line) {
             return {false, "url must start with http:// or https://"};
         spec.url  = rest[0];
         spec.type = (recipe == "--sse") ? "sse" : "http";
+    } else if (recipe == "--passthrough") {
+        // Foreign tools a proxy/gateway advertises to the model (e.g.
+        // LiteLLM + headroom injecting `headroom_retrieve`): register them
+        // for DISPATCH — agentty POSTs the call's args to <url> and returns
+        // the body — without advertising them (the proxy owns the schema).
+        if (rest.size() < 2)
+            return {false, "--passthrough needs <url> <tool>[,<tool>…]"};
+        if (rest[0].rfind("http://", 0) != 0 && rest[0].rfind("https://", 0) != 0)
+            return {false, "url must start with http:// or https://"};
+        spec.url  = rest[0];
+        spec.type = "passthrough";
+        // Tools: remaining tokens, each possibly comma-separated.
+        for (std::size_t r = 1; r < rest.size(); ++r) {
+            std::string_view sv{rest[r]};
+            while (!sv.empty()) {
+                const auto comma = sv.find(',');
+                std::string_view tn = sv.substr(0, comma);
+                if (!tn.empty()) spec.passthrough.emplace_back(tn);
+                if (comma == std::string_view::npos) break;
+                sv.remove_prefix(comma + 1);
+            }
+        }
+        if (spec.passthrough.empty())
+            return {false, "--passthrough needs at least one tool name"};
     } else {
         spec.command = recipe;
         spec.args = std::move(rest);

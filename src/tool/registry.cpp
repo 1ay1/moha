@@ -206,6 +206,21 @@ const std::vector<ToolDef>& registry() { return wire_tools(); }
     return name;
 }
 
+std::string unknown_tool_error(std::string_view name) {
+    std::string msg = "unknown tool: " + std::string{name}
+        + ". This tool is not part of agentty's toolset — if a proxy or "
+          "gateway advertised it, call it through that channel, not here. "
+          "Available tools:";
+    for (const auto& td : wire_tools()) {
+        msg += ' ';
+        msg += td.name.value;
+        msg += ',';
+    }
+    if (msg.back() == ',') msg.pop_back();
+    msg += '.';
+    return msg;
+}
+
 const ToolDef* find(std::string_view name) {
     auto& cache = wire_cache();
     std::shared_ptr<const Snapshot> snapshot;
@@ -266,6 +281,10 @@ std::vector<const ToolDef*> select_wire_tools(
     }
 
     for (const auto& tool : catalog) {
+        // Dispatch-only tools (passthrough fulfilling a proxy-advertised
+        // schema) never enter the wire list — the proxy already injected
+        // their schema into the request; ours would collide with it.
+        if (!tool.advertise) continue;
         if (tool.origin == ToolOrigin::Native || tool.always_expose) {
             selected.push_back(&tool);
             continue;

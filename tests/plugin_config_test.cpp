@@ -496,6 +496,37 @@ void per_server_trust(const fs::path& dir) {
     std::println("PASS\n");
 }
 
+// A passthrough server writes {type:"passthrough", url, passthrough:[names]}
+// — no command, no spawn. The declared tools register for DISPATCH (a proxy
+// advertised their schemas to the model; agentty forwards args to the url).
+void passthrough_server_add(const fs::path& dir) {
+    std::println("--- passthrough_server_add ---");
+    const fs::path cfg = dir / "pt" / "mcp.json";
+    plug::ServerSpec pt;
+    pt.name = "headroom";
+    pt.url  = "http://127.0.0.1:8787/v1/retrieve";
+    pt.type = "passthrough";
+    pt.passthrough = {"headroom_retrieve"};
+    check(plug::add_server(cfg, pt, false) == plug::EditResult::Ok,
+          "passthrough add succeeds");
+    json e = read_json(cfg)["mcpServers"]["headroom"];
+    check(e["type"] == "passthrough", "type is passthrough");
+    check(e["url"] == "http://127.0.0.1:8787/v1/retrieve", "url stored");
+    check(e["passthrough"].is_array() && e["passthrough"].size() == 1
+              && e["passthrough"][0] == "headroom_retrieve",
+          "declared tool names stored");
+    check(!e.contains("command"), "no command key on a passthrough server");
+
+    // Round-trip safety: a later add of an unrelated server must preserve
+    // the passthrough block byte-for-byte.
+    plug::ServerSpec other;
+    other.name = "today"; other.command = "python3";
+    check(plug::add_server(cfg, other, false) == plug::EditResult::Ok,
+          "sibling add ok");
+    json again = read_json(cfg)["mcpServers"]["headroom"];
+    check(again == e, "passthrough entry survives sibling edits");
+}
+
 TEST_CASE("plugin config") {
     agtest::ScopedEnvSandbox _env_guard;
     const fs::path sandbox =
@@ -514,6 +545,7 @@ TEST_CASE("plugin config") {
     tool_enable_disable(sandbox);
     server_enable_disable(sandbox);
     http_server_add(sandbox);
+    passthrough_server_add(sandbox);
     scope_edits_are_isolated(sandbox);
     project_trust_gate(sandbox);
     per_server_trust(sandbox);

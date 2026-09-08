@@ -90,6 +90,7 @@ inline auto visual_parts(const ServerState& s) {
                            visual::ref(s.url), s.connected, s.disabled,
                            visual::ref(s.error), s.origin,
                            visual::ref(s.config_dir), s.untrusted,
+                           s.passthrough,
                            visual::ref(s.tools));
 }
 static_assert(visual::parts_cover_all<ServerState>);

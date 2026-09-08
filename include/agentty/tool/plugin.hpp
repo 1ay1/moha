@@ -38,7 +38,11 @@ struct ServerSpec {
     std::string              command;
     std::vector<std::string> args;
     std::string              url;   // HTTP/SSE transport (no command)
-    std::string              type;  // "http" | "sse" | "" (default http for url)
+    std::string              type;  // "http" | "sse" | "passthrough" | "" (default http for url)
+    // type == "passthrough": foreign tool names to register for dispatch
+    // (a proxy in front of the model endpoint advertises their schemas;
+    // agentty executes by POSTing args to `url`).
+    std::vector<std::string> passthrough;
 };
 
 enum class EditResult : std::uint8_t {

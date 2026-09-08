@@ -84,7 +84,7 @@ using ExecResult = std::expected<ToolOutput, ToolError>;
 
 // ── Tool definition ──────────────────────────────────────────────────────
 
-enum class ToolOrigin : std::uint8_t { Native, Mcp };
+enum class ToolOrigin : std::uint8_t { Native, Mcp, Passthrough };
 enum class OutputTruncation : std::uint8_t { Head, Tail, HeadTail };
 
 struct ToolDef {
@@ -104,6 +104,16 @@ struct ToolDef {
     OutputTruncation output_truncation = OutputTruncation::HeadTail;
     std::chrono::milliseconds timeout{60'000};
     bool always_expose = false; // native, pinned, or MCP catalog discovery
+
+    // Advertise vs dispatch — two different sets, officially. `advertise =
+    // false` keeps the tool OUT of the wire request's tools array while
+    // dispatch (find/execute) still resolves it. The consumer is
+    // passthrough tools fulfilling a PROXY-advertised schema (LiteLLM +
+    // headroom injects `headroom_retrieve` into our request in its
+    // pre-call hook): the proxy owns advertisement, agentty owns
+    // execution — advertising it ourselves would double the schema. Every
+    // other tool keeps the default and nothing changes.
+    bool advertise = true;
 
     // Anthropic's fine-grained tool streaming flag (GA on Claude 4.6, gated by
     // beta `fine-grained-tool-streaming-2025-05-14` on older models). When set,
@@ -137,6 +147,15 @@ struct ToolDef {
 // (e.g. the settings picker reading the catalog to list plugin tools).
 [[nodiscard]] std::vector<ToolDef> wire_tools_snapshot();
 [[nodiscard]] const ToolDef* find(std::string_view name);
+
+// Actionable "unknown tool" diagnostic. A bare "unknown tool: X" strands
+// the model — observed in the field when a LiteLLM-style proxy in front of
+// the wire advertised ITS OWN tools (e.g. `headroom_retrieve`) alongside
+// ours: the model called one, got an unhelpful error, and retried. Naming
+// the real catalog turns the failure into a one-shot correction ("that
+// tool isn't mine; here's what is"). Defined in registry.cpp beside the
+// snapshot it enumerates.
+[[nodiscard]] std::string unknown_tool_error(std::string_view name);
 
 // The tool set to advertise on the wire for THIS turn. Equals registry()
 // plus any MCP tools that appeared after startup via a `tools/list_changed`

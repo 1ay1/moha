@@ -530,16 +530,19 @@ std::string catalog_block() {
     m << "\n\n<skills>\n"
       << "On-demand skills are available. Each is a focused instruction "
          "doc you can load IN FULL with the `skill` tool when its task "
-         "comes up \u2014 don't guess the contents, load it. Skills may "
+         "comes up — don't guess the contents, load it. Skills may "
          "bundle resource files (scripts/, references/, assets/); the "
-         "activation result lists them \u2014 `read` the specific file "
+         "activation result lists them — `read` the specific file "
          "when the instructions reference it, resolving relative paths "
-         "against the skill directory the result names. Listed: name "
-         "\u2014 description.\n";
+         "against the skill's directory shown below. NEVER guess a skill "
+         "path — skills live in several roots (.agentty/, .agents/, "
+         ".claude/, project and user) and only the listed directory is "
+         "readable. Listed: name — description (directory).\n";
     for (const auto& s : skills) {
         if (s.user_only) continue;
         m << "- " << s.name;
-        if (!s.description.empty()) m << " \u2014 " << s.description;
+        if (!s.description.empty()) m << " — " << s.description;
+        if (!s.dir.empty()) m << " (" << s.dir.string() << ")";
         m << "\n";
     }
     m << "</skills>";

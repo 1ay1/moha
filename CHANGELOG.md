@@ -4,6 +4,15 @@ All notable changes to agentty. Versions follow [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Passthrough tools — proxy-injected tools now have an executor.** Running agentty behind a gateway that injects its own tool schemas (LiteLLM + headroom's `headroom_retrieve`, enterprise middleware)? Declare them in `mcp.json` as a `type: "passthrough"` server (`url` + tool names) — or press `a` in the Plugins pane: `headroom --passthrough <url> <tool>` — and agentty fulfils each call by POSTing its arguments to your URL. Dispatch-only by default (the proxy owns the wire schema; `"advertise": true` makes it a full first-class tool), network-gated under the Ask/Minimal permission profiles, trust-gated in project configs, and rendered in the Plugins pane with a `⇄` badge showing exactly where calls go.
+
+### Fixed
+- **`spawn failed: Function not implemented` on the static Linux binary.** The `posix_spawn` chdir guard keyed on a glibc version macro that musl deliberately doesn't define — so every shell call with a `cd` failed on the Alpine-built release while the same command without one worked. Affects all static-release Linux users.
+- **Todo-tool call loops with weak models.** An empty todo list returned an empty tool result, which some models read as "call was dropped" and retried identically for whole turns. The result now states the list's contents explicitly.
+- **Unknown-tool errors are actionable.** `unknown tool: X` now names agentty's real catalog and points a proxy-advertised call back at its channel, so a model self-corrects in one step instead of retrying.
+- **Skill path guessing.** The prompt's skills catalog now prints each skill's real directory (skills resolve across `.agentty/`, `.agents/`, `.claude/` roots — models guessed the wrong sibling), and a refused read lists the actual readable skill roots.
+
 ### Changed
 - **The activity tape shows only real data now.** The hex-dump row under a working turn used to be decoration — a countdown offset and noise bytes with canned words scrolling by. It now has three honest modes: while waiting on the model it *reads* — a head scans the actual bytes of your prompt (offset = its true position); once output streams it *writes* — the newest bytes of the model's own answer with a true byte-count odometer, moving only when data arrives; and with nothing in flight it shows static pinned at `0x000000`. The words you glimpse in the gutter are the words the model is reading or writing at that instant — nothing is fabricated.
 - **`AGENTTY_NO_TAPE=1`** replaces the byte-level tape with a quiet muted `thinking…` row (same slot, same elapsed / tok-s numbers, zero animation) for anyone who finds the narration too busy.

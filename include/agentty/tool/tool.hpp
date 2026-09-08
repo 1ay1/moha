@@ -167,7 +167,7 @@ struct DynamicDispatch {
     [[nodiscard]] static ExecResult execute_with(const tools::ToolDef* td,
                                                  std::string_view name,
                                                  const nlohmann::json& args) noexcept {
-        if (!td) return std::unexpected(ToolError::not_found("unknown tool: " + std::string{name}));
+        if (!td) return std::unexpected(ToolError::not_found(tools::unknown_tool_error(name)));
         static const nlohmann::json kEmpty = nlohmann::json::object();
         const nlohmann::json& safe_args = args.is_object() ? args : kEmpty;
         ExecResult result;
@@ -197,7 +197,7 @@ struct DynamicDispatch {
     [[nodiscard]] static ExecResult execute(std::string_view name,
                                             const nlohmann::json& args) noexcept {
         const auto* td = tools::find(name);
-        if (!td) return std::unexpected(ToolError::not_found("unknown tool: " + std::string{name}));
+        if (!td) return std::unexpected(ToolError::not_found(tools::unknown_tool_error(name)));
         // Avoid copying `args` on the hot path: tools receive an empty object
         // only when the model emitted a non-object (rare). Use a process-
         // lifetime empty json so the reference stays valid either way.

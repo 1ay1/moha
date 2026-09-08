@@ -234,7 +234,11 @@ EditResult add_server(const fs::path& path, const ServerSpec& spec,
     if (servers.contains(spec.name) && !force)
         return EditResult::AlreadyExists;
     json entry;
-    if (!spec.url.empty()) {
+    if (spec.type == "passthrough") {
+        // Passthrough: url + declared tool names. No command, no spawn.
+        entry = {{"type", "passthrough"}, {"url", spec.url},
+                 {"passthrough", spec.passthrough}};
+    } else if (!spec.url.empty()) {
         // HTTP/SSE server: a `url` transport, no local command. `type`
         // defaults to "http" but honours an explicit spec.type ("sse").
         entry = {{"type", spec.type.empty() ? "http" : spec.type},

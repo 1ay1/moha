@@ -49,6 +49,7 @@ struct ServerState {
     Origin      origin = Origin::User;   // which scope this entry came from
     std::string config_dir;      // the .agentty dir holding this entry's mcp.json
     bool        untrusted = false;   // project config not vouched for — won't connect
+    bool        passthrough = false; // type:"passthrough" — dispatch-only foreign tools
     std::vector<ToolState> tools;
 
     [[nodiscard]] std::size_t enabled_count() const noexcept {

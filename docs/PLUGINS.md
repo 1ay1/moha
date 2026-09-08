@@ -50,6 +50,50 @@ child):
 }
 ```
 
+### Passthrough tools (proxy-advertised)
+
+Running agentty behind a compressing/augmenting proxy (LiteLLM + headroom,
+an enterprise gateway) that **injects its own tool schemas** into your
+requests? The model will call those tools, but a proxy cannot execute a
+tool — only the client can. Declare them as a `passthrough` server and
+agentty fulfils each call by POSTing its arguments to your URL and
+returning the response body as the tool result:
+
+```json
+{
+  "mcpServers": {
+    "headroom": {
+      "type": "passthrough",
+      "url": "http://localhost:8787/v1/retrieve",
+      "passthrough": [
+        { "name": "headroom_retrieve",
+          "description": "Fetch original bytes for a compressed marker" }
+      ]
+    }
+  }
+}
+```
+
+Inline add: press `a` in the Plugins pane (or `agentty plugin add`) with
+`headroom --passthrough http://localhost:8787/v1/retrieve headroom_retrieve`.
+
+Semantics worth knowing:
+
+- **Dispatch-only by default.** The proxy already advertised the schema in
+  your request; agentty registering it again would collide. `"advertise":
+  true` on an entry flips it to a full first-class tool (agentty puts the
+  schema on the wire too) — for plain HTTP tool services that aren't
+  proxies.
+- **"Allowing" one is a real decision**: passthrough tools carry the
+  network effect, so under the Ask/Minimal profiles the standard permission
+  prompt fires before a call's arguments leave the machine for the
+  configured URL.
+- **Project configs are trust-gated** exactly like stdio servers — a cloned
+  repo must not silently route tool arguments to its own URL.
+- Entries may be bare strings (`"passthrough": ["tool_a", "tool_b"]`) when
+  no description is needed. Toggle/remove/disable behave like every other
+  plugin row.
+
 > **Trust gate**: the project-local config only connects when
 > `AGENTTY_MCP_ALLOW_PROJECT=1` is set. A cloned repo must not be able to
 > run code on your machine just because you opened it. Your user-global

@@ -30,6 +30,7 @@
 #include "agentty/mcp/client.hpp"
 #include "agentty/mcp/http_server.hpp"
 #include "agentty/scope/scope.hpp"
+#include "agentty/io/http.hpp"
 #include "agentty/tool/plugin.hpp"
 #include "agentty/tool/util/fs_helpers.hpp"
 #include "agentty/tool/util/utf8.hpp"
@@ -209,11 +210,20 @@ inline constexpr char kMcpApprovalsLeaf[] = "mcp_approvals.json";
 struct ConfigServer {
     std::string command;
     std::string url;             // HTTP/SSE transport (no command)
-    std::string type;            // "stdio" | "http" | "sse" | "" (inferred)
+    std::string type;            // "stdio" | "http" | "sse" | "passthrough" | "" (inferred)
     std::vector<std::string> args;   // stdio command args (part of spawn identity)
     std::unordered_set<std::string> exclude;
     bool disabled = false;
     scope::Source source;        // WHERE this entry was read from (provenance)
+    // type == "passthrough": user-declared foreign tools (a proxy/gateway
+    // in front of the model endpoint advertised them; we execute by POSTing
+    // args to `url`). Each entry: name [+ description] [+ advertise].
+    struct PassthroughTool {
+        std::string name;
+        std::string description;
+        bool advertise = false;  // default: proxy owns the schema
+    };
+    std::vector<PassthroughTool> passthrough;
 };
 // Read a boolean flag from a JSON object WITHOUT throwing on a malformed
 // value. A hand-edited non-bool (e.g. `"disabled": "true"`) would make
@@ -272,6 +282,27 @@ void read_one_config(const fs::path& file, const scope::Source& src,
             if (tj.contains("exclude") && tj["exclude"].is_array())
                 for (const auto& v : tj["exclude"])
                     if (v.is_string()) cs.exclude.insert(v.get<std::string>());
+        }
+        // type:"passthrough" — declared foreign tools. Entries may be bare
+        // strings (name only) or objects {name, description?, advertise?}.
+        // Malformed entries are skipped, never fatal (same fail-open
+        // posture as `disabled` above).
+        if (e.contains("passthrough") && e["passthrough"].is_array()) {
+            for (const auto& pt : e["passthrough"]) {
+                ConfigServer::PassthroughTool t;
+                if (pt.is_string()) {
+                    t.name = pt.get<std::string>();
+                } else if (pt.is_object()) {
+                    t.name        = pt.value("name", std::string{});
+                    t.description = pt.value("description", std::string{});
+                    if (auto ad = pt.find("advertise");
+                        ad != pt.end() && ad->is_boolean())
+                        t.advertise = ad->get<bool>();
+                }
+                if (!t.name.empty()) cs.passthrough.push_back(std::move(t));
+            }
+            if (cs.type.empty() && !cs.passthrough.empty())
+                cs.type = "passthrough";
         }
         out.emplace(it.key(), std::move(cs));
     }
@@ -890,6 +921,126 @@ tools::ToolDef make_call_tool(PoolHandle pool) {
 
 // Build the full ToolDef vector for a pool: every server tool + the generic
 // resource/prompt access tools (only when the union exposes any).
+// ── Passthrough tools ────────────────────────────────────────────
+// A `type:"passthrough"` server declares tools some OTHER party advertises
+// to the model (canonical case: a LiteLLM+headroom proxy injecting
+// `headroom_retrieve` into our requests in its pre-call hook). agentty
+// executes them by POSTing the args JSON to the entry's url; the response
+// body is the tool result. No process, no MCP handshake — synthesized
+// straight from config at projection time, so add/toggle/remove behave
+// exactly like MCP tool toggles (config edit + cache invalidation).
+//
+// "Allowing" one of these has a concrete meaning: Effect::Net, so under
+// Ask/Minimal profiles the standard permission prompt asks before the
+// call's arguments leave the machine for the configured URL. That — not a
+// blanket bypass — is the honest consent question.
+std::vector<tools::ToolDef> passthrough_tools() {
+    // Minimal absolute-URL parse (scheme/host/port/path) — passthrough
+    // endpoints are plain http(s)://host[:port]/path, same shape the MCP
+    // HTTP transport accepts. Local so this TU doesn't depend on
+    // http_server.cpp internals.
+    struct PtUrl { bool ok=false, tls=true; std::string host;
+                   std::uint16_t port=443; std::string path="/"; };
+    auto parse_pt_url = [](const std::string& url) -> PtUrl {
+        PtUrl u;
+        std::string_view s{url};
+        if (s.starts_with("https://"))     { u.tls = true;  u.port = 443; s.remove_prefix(8); }
+        else if (s.starts_with("http://")) { u.tls = false; u.port = 80;  s.remove_prefix(7); }
+        else return u;
+        const auto slash = s.find('/');
+        std::string_view hostport = s.substr(0, slash);
+        if (slash != std::string_view::npos) u.path = std::string{s.substr(slash)};
+        if (const auto colon = hostport.rfind(':');
+            colon != std::string_view::npos) {
+            const auto pstr = hostport.substr(colon + 1);
+            unsigned long p = 0;
+            for (char c : pstr) {
+                if (c < '0' || c > '9') { p = 0; break; }
+                p = p * 10 + static_cast<unsigned long>(c - '0');
+            }
+            if (p == 0 || p > 65535) return u;
+            u.port = static_cast<std::uint16_t>(p);
+            hostport = hostport.substr(0, colon);
+        }
+        if (hostport.empty()) return u;
+        u.host = std::string{hostport};
+        u.ok = true;
+        return u;
+    };
+    std::vector<tools::ToolDef> out;
+    for (const auto& [sname, cs] : read_config_servers()) {
+        if (cs.disabled || cs.passthrough.empty()) continue;
+        if (cs.type != "passthrough") continue;
+        // Project-scope entries are trust-gated like stdio servers: the
+        // call EXFILTRATES tool arguments to a URL the repo chose — worth
+        // a vouch even though nothing spawns. User/explicit configs are
+        // user-placed and trusted by construction.
+        if (cs.source.locus == scope::Locus::Project
+            && !project_config_trusted(cs.source.base / "mcp.json"))
+            continue;
+        const std::string url = cs.url;
+        if (url.empty()) continue;
+        for (const auto& pt : cs.passthrough) {
+            if (cs.exclude.contains(pt.name)) continue;   // toggled off
+            tools::ToolDef def;
+            def.name        = ToolName{pt.name};
+            def.origin      = tools::ToolOrigin::Passthrough;
+            def.origin_id   = sname;
+            def.advertise   = pt.advertise;
+            // Same trust boundary as MCP descriptions: scrub + cap.
+            std::string desc = tools::util::to_valid_utf8(
+                tools::util::strip_terminal_controls(pt.description));
+            if (desc.size() > 1024) { desc.resize(1024); desc += "…"; }
+            def.description = "[passthrough " + sname + "] "
+                + (desc.empty() ? ("Forwarded to " + url) : desc);
+            def.input_schema = {{"type", "object"}};
+            def.effects  = tools::EffectSet{tools::Effect::Net};
+            def.scheduling_effects = def.effects;
+            def.max_output_chars   = 30'000;
+            def.execute = [url, name = pt.name, parse_pt_url](const json& args)
+                -> tools::ExecResult {
+                const PtUrl u = parse_pt_url(url);
+                if (!u.ok)
+                    return std::unexpected(tools::ToolError::invalid_args(
+                        "passthrough url is malformed: " + url));
+                http::Request req;
+                req.method    = http::HttpMethod::Post;
+                req.host      = u.host;
+                req.port      = u.port;
+                req.path      = u.path;
+                req.plaintext = !u.tls;
+                req.body      = args.is_null() ? "{}" : args.dump();
+                req.headers.push_back({"content-type", "application/json"});
+                req.headers.push_back({"accept", "application/json"});
+                auto res = http::default_client().send(req);
+                if (!res)
+                    return std::unexpected(tools::ToolError::subprocess(
+                        "passthrough '" + name + "' → " + url + " failed: "
+                        + res.error().detail
+                        + ". The upstream service may be down or the cached "
+                          "entry may have expired — proceed without it if "
+                          "possible."));
+                if (res->status < 200 || res->status >= 300)
+                    return std::unexpected(tools::ToolError::subprocess(
+                        "passthrough '" + name + "' → " + url + " returned HTTP "
+                        + std::to_string(res->status)
+                        + (res->body.empty() ? std::string{}
+                                             : (": " + tools::util::to_valid_utf8(
+                                                   res->body.substr(0, 512))))
+                        + ". Proceed without this data if possible; do not "
+                          "retry with the same arguments."));
+                std::string text = tools::util::to_valid_utf8(
+                    tools::util::strip_terminal_controls(res->body));
+                return tools::ToolOutput{
+                    text.empty() ? "(empty response)" : std::move(text),
+                    std::nullopt};
+            };
+            out.push_back(std::move(def));
+        }
+    }
+    return out;
+}
+
 std::vector<tools::ToolDef> project_tools(PoolHandle pool) {
     std::vector<tools::ToolDef> out;
     bool any_resources = false, any_prompts = false;
@@ -991,6 +1142,10 @@ std::vector<tools::ToolDef> project_tools(PoolHandle pool) {
             kToolBudget > native ? kToolBudget - native : 0;
         if (out.size() > room) out.resize(room);
     }
+    // Passthrough tools ride OUTSIDE the budget trim: they are few,
+    // user-declared one at a time, and mostly advertise=false (zero wire
+    // cost — the proxy already put the schema on the wire).
+    for (auto& pt : passthrough_tools()) out.push_back(std::move(pt));
     return out;
 }
 
@@ -1372,6 +1527,7 @@ PluginModel plugin_model() {
         ss.name    = name;
         ss.command = cs.command;
         ss.url     = cs.url;
+        ss.passthrough = (cs.type == "passthrough");
         // Provenance from the scope::Source this entry was read from, mapped
         // to the value-header Origin so the picker can badge scope and a
         // reducer can route an edit to cs.source.base (the right mcp.json).
@@ -1387,7 +1543,36 @@ PluginModel plugin_model() {
         // A server turned off on purpose is NOT an error and never connected,
         // so it carries no error and no live tools — disabled wins over any
         // stale connect-error entry from a previous session.
-        if (!ss.disabled) {
+        if (!ss.disabled && cs.type == "passthrough") {
+            // (ss.passthrough set above — also true when disabled, so the
+            // row keeps its ⇄ badge while toggled off.)
+            // Passthrough: no process, no handshake — "connected" means
+            // "declared + reachable config". Tools come from the config
+            // declarations, not a live pool. Project-scope entries are
+            // trust-gated (args exfiltrate to the URL).
+            if (cs.url.empty()) {
+                ss.error = "passthrough needs a \"url\" in mcp.json";
+            } else if (cs.source.locus == scope::Locus::Project
+                       && !project_all_trusted
+                       && !approvals.approved(
+                              tools::plugin::server_spec_hash(
+                                  cs.command, cs.url, cs.args))) {
+                ss.untrusted = true;
+                ss.error = "untrusted project config — approve to enable";
+            } else {
+                ss.connected = true;
+            }
+            for (const auto& pt : cs.passthrough) {
+                ToolState ts;
+                ts.name        = pt.name;
+                ts.description = pt.description.empty()
+                    ? ("forwarded to " + cs.url
+                       + (pt.advertise ? "" : " · proxy-advertised"))
+                    : pt.description;
+                ts.enabled     = !cs.exclude.contains(pt.name);
+                ss.tools.push_back(std::move(ts));
+            }
+        } else if (!ss.disabled) {
             // A server with a `url` is HTTP/SSE and legitimately has no
             // `command` — only a stdio server (no url) missing its command
             // can never connect. This is the fix for the false "no command"
@@ -1414,7 +1599,10 @@ PluginModel plugin_model() {
 
         // Tools: authoritative from the LIVE advertised set (so a disabled
         // tool never vanishes); enabled derived from config exclude.
-        if (lit != live.end()) {
+        // (Passthrough already filled ss.tools from its declarations above.)
+        if (cs.type == "passthrough") {
+            // no live pool, no s_seen — declarations were the whole truth
+        } else if (lit != live.end()) {
             for (const auto& lt : lit->second) {
                 ToolState ts;
                 ts.name        = lt.bare;
@@ -1442,6 +1630,9 @@ PluginModel plugin_model() {
         }
         // A disabled tool the server no longer advertises (e.g. excluded so
         // hard the server dropped it) — fold in from config so it shows.
+        // (Skip for passthrough: its declarations are complete by
+        // construction, and every excluded name is already rendered.)
+        if (cs.type != "passthrough")
         for (const auto& ex : cs.exclude) {
             if (ex.empty()) continue;   // a stray "" exclude → don't add a blank row
             bool present = false;
@@ -1461,7 +1652,11 @@ PluginModel plugin_model() {
         // falsely flagging real enabled tools on OTHER servers as
         // over-budget. (project_tools iterates the live pool, which never
         // includes these, so this keeps the budget math in sync with reality.)
-        if (ss.connected && !ss.disabled)
+        // Passthrough tools are dispatch-only (advertise=false — the proxy
+        // owns the wire schema), so they never consume wire budget; skip the
+        // count entirely. The rare advertise=true one rides outside the
+        // budget by design (see project_tools).
+        if (cs.type != "passthrough" && ss.connected && !ss.disabled)
             enabled_mcp += ss.enabled_count();
         model.servers.push_back(std::move(ss));
     }
