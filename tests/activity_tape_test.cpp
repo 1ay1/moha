@@ -163,6 +163,20 @@ TEST_CASE("activity tape: READ scans the real context, head advances") {
     }
 }
 
+// NOTE: there is no "WRITE glides between bursts" test, because WRITE does
+// not glide — its motion is arrival-driven, so a bursty SSE wire makes the
+// tape hold still between deltas and then advance a phrase at once. See the
+// long comment on write_head in activity_indicator.hpp for the two
+// clock-driven smoothing attempts that were measured and reverted (one only
+// worked when the session clock started near zero; the other removed the
+// freezes by making the window REWIND, which is worse). Fixing it properly
+// needs per-frame anchor state in the widget.
+//
+// A test was written here first and PASSED against the unfixed widget: it
+// compared whole rendered rows, and the drift/hot-tail channels mutate every
+// frame by design, so no two rows are ever byte-equal. Any future test of
+// this must compare the ASCII gutter minus its last two columns.
+
 TEST_CASE("activity tape: STATIC is pinned at zero and modes differ") {
     FrozenClock fc{100000};
 
