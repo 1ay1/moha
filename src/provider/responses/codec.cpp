@@ -87,6 +87,13 @@ json build_input(const provider::Request& req) {
         for (const auto& tc : m.tool_calls)
             if (tc.is_terminal()) ++total_tool_results;
     int seen_tool_results = 0;
+
+    // Per-side image ceiling for THIS request (loose by default, tightened
+    // once the request crosses the provider's many-image threshold). Computed
+    // over the whole message list because the limit counts blocks in the
+    // request, not per turn.
+    const unsigned max_side =
+        util::wire_max_side(wire::wire_image_count(req.messages));
     const auto superseded = wire::superseded_read_ids(req.messages);
     for (const auto& m : req.messages) {
         if (m.role == Role::System) continue;   // folded into `instructions`
@@ -101,7 +108,7 @@ json build_input(const provider::Request& req) {
                 content.push_back({
                     {"type", "input_text"}, {"text", scrub_utf8(text)},
                 });
-            for (const auto* imgp : wire::wire_message_images(m)) {
+            for (const auto* imgp : wire::wire_message_images(m, max_side)) {
                 const auto& img = *imgp;
                 content.push_back({
                     {"type", "input_image"},
@@ -176,7 +183,7 @@ json build_input(const provider::Request& req) {
                 // of content parts — the text followed by input_image parts —
                 // instead of a plain string. Same SSOT selector as every other
                 // dialect; only the JSON shape here is OpenAI-specific.
-                auto imgs = wire::wire_tool_result_images(tc);
+                auto imgs = wire::wire_tool_result_images(tc, max_side);
                 if (imgs.empty()) {
                     input.push_back({
                         {"type", "function_call_output"},

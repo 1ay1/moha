@@ -105,3 +105,64 @@ TEST_CASE("wire drops oversized images, keeps in-range ones") {
               "unreadable dims → allowed (provider is the backstop)");
     }
 }
+
+// ── The MANY-IMAGE ceiling ──────────────────────────────────────────────────
+//
+// The 2000 px cap is real, but conditional: it applies only once a request
+// carries many image blocks. Both constants existed with no call site at all
+// for a while — the loose cap shipped unconditionally and a 20-image request
+// would have been 400'd by the provider with no local trace. These lock the
+// rule to the two things that can silently drift: the threshold arithmetic,
+// and the fact that the count spans BOTH sources of image blocks.
+TEST_CASE("wire image cap tightens on a many-image request") {
+    using agentty::util::kManyImageMaxSide;
+    using agentty::util::kManyImageThreshold;
+    using agentty::util::kMaxWireImageSide;
+    using agentty::util::wire_max_side;
+
+    // The threshold boundary itself — off-by-one here silently disables the
+    // rule for the exact request size it exists to protect.
+    check(wire_max_side(0) == kMaxWireImageSide, "no images → loose cap");
+    check(wire_max_side(kManyImageThreshold - 1) == kMaxWireImageSide,
+          "just under the threshold → still the loose cap");
+    check(wire_max_side(kManyImageThreshold) == kManyImageMaxSide,
+          "at the threshold → the strict 2000 px cap");
+    check(wire_max_side(kManyImageThreshold + 5) == kManyImageMaxSide,
+          "well past the threshold → strict cap");
+
+    // The SAME image is sendable alone and dropped in a many-image request.
+    // This is the whole point of making the cap a parameter: sendability is
+    // not a property of the picture, it's a property of the request.
+    {
+        ImageContent img{"image/png", png_with_dims(2168, 748)};
+        check(wire::wire_image_sendable(img, kMaxWireImageSide),
+              "2168 px screenshot ships in an ordinary request");
+        check(!wire::wire_image_sendable(img, kManyImageMaxSide),
+              "the same screenshot is dropped once the request is many-image");
+    }
+
+    // The count spans user images AND tool_result images. A session that
+    // READS twenty screenshots hits the provider's limit exactly like one
+    // that pastes twenty, so counting only user turns would miss it.
+    {
+        std::vector<agentty::Message> msgs;
+        agentty::Message user;
+        user.role = agentty::Role::User;
+        user.images.push_back({"image/png", png_with_dims(64, 64)});
+        user.images.push_back({"image/png", ""});   // empty: never counted
+        msgs.push_back(std::move(user));
+        check(wire::wire_image_count(msgs) == 1,
+              "empty bytes don't count toward the many-image threshold");
+
+        agentty::Message asst;
+        asst.role = agentty::Role::Assistant;
+        agentty::ToolUse tc;
+        tc.status = agentty::ToolUse::Done{
+            .images = {{"image/png", png_with_dims(64, 64)},
+                       {"image/png", png_with_dims(64, 64)}}};
+        asst.tool_calls.push_back(std::move(tc));
+        msgs.push_back(std::move(asst));
+        check(wire::wire_image_count(msgs) == 3,
+              "tool_result images count toward the threshold too");
+    }
+}

@@ -103,7 +103,8 @@ namespace agentty::provider::wire {
 // bad image can't kill an otherwise-valid turn. A 48 KB screenshot can still be
 // 3000+ px wide, so file size is no proxy; image_dimensions() reads the real
 // pixels from the header bytes.
-[[nodiscard]] inline bool wire_image_sendable(const ImageContent& img) noexcept {
+[[nodiscard]] inline bool wire_image_sendable(
+    const ImageContent& img, unsigned max_side = util::kMaxWireImageSide) noexcept {
     // Dropping an image here is INVISIBLE by construction: the prose marker
     // ("[image: <paste>]") still goes out, so the model is told an image is
     // present and shown nothing, and the user sees a turn that silently
@@ -114,42 +115,65 @@ namespace agentty::provider::wire {
                 "reason=empty_bytes media_type={}", wire_media_type(img));
         return false;
     }
-    if (!util::image_within_wire_limits(img.bytes)) {
+    if (!util::image_within_wire_limits(img.bytes, max_side)) {
         const auto d = util::image_dimensions(img.bytes);
         AGT_LOG(Wire, Warn, "wire.image_dropped",
                 "reason=oversize dims={}x{} max_side={} bytes={}",
-                d.w, d.h, util::kMaxWireImageSide, img.bytes.size());
+                d.w, d.h, max_side, img.bytes.size());
         return false;
     }
     return true;
 }
 
+// The number of image blocks a whole conversation would put on the wire, in
+// CANDIDATE terms (non-empty bytes, before the size gate). This is the input
+// to util::wire_max_side, so every dialect derives its per-request ceiling the
+// same way instead of each inventing a count. Both sources of image blocks are
+// included — user-turn images AND tool_result images — because the provider's
+// many-image limit counts BLOCKS in the request, not just the ones the user
+// pasted. A session that reads twenty screenshots via a tool hits the same
+// ceiling as one that pastes twenty.
+[[nodiscard]] inline std::size_t
+wire_image_count(const std::vector<Message>& msgs) noexcept {
+    std::size_t n = 0;
+    for (const auto& m : msgs) {
+        if (m.role == Role::User)
+            for (const auto& img : m.images)
+                if (!img.bytes.empty()) ++n;
+        for (const auto& tc : m.tool_calls)
+            for (const auto& img : tc.done_images())
+                if (!img.bytes.empty()) ++n;
+    }
+    return n;
+}
+
 // The images a USER message contributes to the wire (skipping empties).
 [[nodiscard]] inline std::vector<const ImageContent*>
-wire_message_images(const Message& m) {
+wire_message_images(const Message& m, unsigned max_side = util::kMaxWireImageSide) {
     std::vector<const ImageContent*> out;
     if (m.role != Role::User) return out;
     for (const auto& img : m.images)
-        if (wire_image_sendable(img)) out.push_back(&img);
+        if (wire_image_sendable(img, max_side)) out.push_back(&img);
     return out;
 }
 
 // The images a COMPLETED tool contributes to its tool_result (skipping
 // empties). Non-empty only when a tool surfaced a picture (read on an image).
 [[nodiscard]] inline std::vector<const ImageContent*>
-wire_tool_result_images(const ToolUse& tc) {
+wire_tool_result_images(const ToolUse& tc, unsigned max_side = util::kMaxWireImageSide) {
     std::vector<const ImageContent*> out;
     for (const auto& img : tc.done_images())
-        if (wire_image_sendable(img)) out.push_back(&img);
+        if (wire_image_sendable(img, max_side)) out.push_back(&img);
     return out;
 }
 
 // True iff the message has at least one sendable USER image — the message-
 // emission gate every dialect used to open-code as a `has_images` loop.
-[[nodiscard]] inline bool has_wire_message_image(const Message& m) noexcept {
+[[nodiscard]] inline bool has_wire_message_image(
+    const Message& m, unsigned max_side = util::kMaxWireImageSide) noexcept {
     if (m.role != Role::User) return false;
     for (const auto& img : m.images)
-        if (wire_image_sendable(img)) return true;
+        if (wire_image_sendable(img, max_side)) return true;
     return false;
 }
 

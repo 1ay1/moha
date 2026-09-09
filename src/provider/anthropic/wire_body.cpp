@@ -70,11 +70,12 @@ namespace {
     return wire::is_assistant_with_results(m);
 }
 
-// True iff the message carries at least one image with non-empty bytes.
-// Delegates to the shared SSOT (wire::has_wire_message_image) so the
-// empty-bytes skip + role gate live in ONE place across all dialects.
-[[nodiscard]] inline bool has_wire_image(const Message& m) noexcept {
-    return wire::has_wire_message_image(m);
+// True iff the message carries at least one sendable image. Delegates to the
+// shared SSOT (wire::has_wire_message_image) so the empty-bytes skip, the size
+// ceiling and the role gate live in ONE place across all dialects. `max_side`
+// is the request-wide ceiling (see wire::wire_image_count).
+[[nodiscard]] inline bool has_wire_image(const Message& m, unsigned max_side) noexcept {
+    return wire::has_wire_message_image(m, max_side);
 }
 
 void json_write_escaped_string(std::string& out, std::string_view s) {
@@ -219,7 +220,7 @@ void write_tool_use_block(std::string& out, const ToolUse& tc, CachePin pin) {
 // result in the thread and grows toward the oldest.
 void write_tool_result_block(std::string& out, const ToolUse& tc,
                              CachePin pin, int recency_rank,
-                             bool superseded) {
+                             bool superseded, unsigned max_side) {
     out.push_back('{');
     bool first = true;
     json_write_field(out, "type", "tool_result", first);
@@ -275,11 +276,10 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
             out.push_back('}');
             block_first = false;
         }
-        for (const auto& img : tc.done_images()) {
-            if (img.bytes.empty()) continue;
+        for (const auto* imgp : wire::wire_tool_result_images(tc, max_side)) {
             if (!block_first) out.push_back(',');
             block_first = false;
-            write_image_block(out, img, CachePin::NotPinned);
+            write_image_block(out, *imgp, CachePin::NotPinned);
         }
         out.push_back(']');
     } else {
@@ -306,6 +306,13 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
     // churns the prompt cache.
     const auto superseded = wire::superseded_read_ids(t);
 
+    // The many-image ceiling is a property of the REQUEST, not of any single
+    // picture, so it is computed once here over the whole thread and passed
+    // down to every gate. Counting per-message instead would let a 20-image
+    // session apply the loose cap to each turn individually and still ship a
+    // request the provider rejects.
+    const unsigned max_side = util::wire_max_side(wire::wire_image_count(t.messages));
+
     // First pass: figure out where the cache breakpoints land. cli.js
     // pins BOTH the last and second-to-last *emitted* messages' last
     // content blocks (rolling cache reuse — turn N's last becomes turn
@@ -320,7 +327,7 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
     // assigned as we emit below.
     int total_tool_results = 0;
     for (const auto& m : t.messages) {
-        const bool has_images = (m.role == Role::User && has_wire_image(m));
+        const bool has_images = (m.role == Role::User && has_wire_image(m, max_side));
         if (!m.text.empty()
          || has_images
          || (m.role == Role::Assistant && !m.tool_calls.empty())) {
@@ -419,7 +426,7 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
     for (const auto& m : t.messages) {
         // ── Primary message (text + tool_use blocks if Assistant) ──
         const bool has_text   = !m.text.empty();
-        const bool has_images = (m.role == Role::User && has_wire_image(m));
+        const bool has_images = (m.role == Role::User && has_wire_image(m, max_side));
         const bool has_tools  = (m.role == Role::Assistant && !m.tool_calls.empty());
         // Replay captured thinking block(s) on assistant turns that also
         // carry real content (text or tool_use). Anthropic requires the
@@ -458,10 +465,18 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
             // empty ImageContent (e.g. a draft attachment whose bytes
             // were already drained) would serialize an empty base64
             // "data" field and 400 the whole request.
-            int wire_images = 0;
-            if (has_images)
-                for (const auto& img : m.images)
-                    if (!img.bytes.empty()) ++wire_images;
+            // Count the images that will ACTUALLY be emitted, using the very
+            // gate the emission loop below uses. These two must agree exactly:
+            // `blocks` decides which block is last, and the last block is
+            // where the cache breakpoint gets pinned. If the count includes an
+            // image the emitter drops (oversize), `block_emitted` never reaches
+            // `blocks`, no block is pinned, and the request silently loses its
+            // cache breakpoint. Previously this counted non-empty bytes while
+            // the emitter applied the size ceiling too — they could diverge.
+            const int wire_images =
+                has_images
+                    ? static_cast<int>(wire::wire_message_images(m, max_side).size())
+                    : 0;
             int blocks = (has_thinking ? signed_blocks : 0)
                        + wire_images
                        + (has_text ? 1 : 0)
@@ -501,8 +516,8 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
                     write_thinking(m.thinking, m.thinking_signature);
             }
             if (has_images) {
-                for (const auto& img : m.images) {
-                    if (img.bytes.empty()) continue;
+                for (const auto* imgp : wire::wire_message_images(m, max_side)) {
+                    const auto& img = *imgp;
                     if (block_emitted++ > 0) out.push_back(',');
                     const bool last_block = (block_emitted == blocks);
                     write_image_block(out, img, pin_if_last(do_pin, last_block));
@@ -554,7 +569,7 @@ void write_tool_result_block(std::string& out, const ToolUse& tc,
                 ++tool_results_emitted;
                 const bool is_superseded = superseded.count(tc.id.value) != 0;
                 write_tool_result_block(out, tc, pin_if_last(do_pin, last_block),
-                                        recency_rank, is_superseded);
+                                        recency_rank, is_superseded, max_side);
             }
             out.append("]}");
         }

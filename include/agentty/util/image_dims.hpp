@@ -105,13 +105,28 @@ inline constexpr unsigned kMaxWireImageSide      = 8000;
 inline constexpr unsigned kManyImageMaxSide      = 2000;
 inline constexpr std::size_t kManyImageThreshold = 20;
 
-// True iff the image is small enough to send. Unknown dimensions (unparsed
-// header) pass — we don't block on a guess; the provider's own limit is the
-// backstop for the rare format we can't read.
-[[nodiscard]] inline bool image_within_wire_limits(std::string_view bytes) noexcept {
+// The per-side ceiling that applies to a request carrying `image_count` image
+// blocks. Anthropic documents the 2000 px limit as conditional on the request
+// being many-image, so the cap CANNOT be decided from one image in isolation —
+// it is a property of the whole request. Callers count first, then gate.
+//
+// The count is of CANDIDATE images (non-empty bytes), deliberately not of
+// sendable ones: if the threshold were computed from the post-gate set, the
+// cap would depend on the gate whose input it is, and 20 oversize images could
+// shrink themselves back under the limit by being dropped. Counting candidates
+// keeps the rule monotone and the verdict stable.
+[[nodiscard]] inline constexpr unsigned wire_max_side(std::size_t image_count) noexcept {
+    return image_count >= kManyImageThreshold ? kManyImageMaxSide : kMaxWireImageSide;
+}
+
+// True iff the image is small enough to send under `max_side`. Unknown
+// dimensions (unparsed header) pass — we don't block on a guess; the
+// provider's own limit is the backstop for the rare format we can't read.
+[[nodiscard]] inline bool image_within_wire_limits(
+    std::string_view bytes, unsigned max_side = kMaxWireImageSide) noexcept {
     const ImageDims d = image_dimensions(bytes);
     if (!d.known()) return true;
-    return d.longest() <= kMaxWireImageSide;
+    return d.longest() <= max_side;
 }
 
 } // namespace agentty::util

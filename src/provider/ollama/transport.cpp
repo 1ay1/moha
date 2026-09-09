@@ -1206,10 +1206,14 @@ json build_messages(const std::vector<Message>& msgs, bool json_protocol) {
             total_tool_results += static_cast<int>(m.tool_calls.size());
     int tool_results_emitted = 0;
     const auto superseded = wire::superseded_read_ids(msgs);
+    // Per-side image ceiling for THIS request (see wire::wire_image_count):
+    // the many-image rule counts blocks across the whole request, so the cap
+    // is derived once here rather than per message.
+    const unsigned max_side = util::wire_max_side(wire::wire_image_count(msgs));
     for (const auto& m : msgs) {
         const bool has_text  = !m.text.empty();
         const bool has_tools = is_assistant_with_results(m);
-        const bool has_images = wire::has_wire_message_image(m);
+        const bool has_images = wire::has_wire_message_image(m, max_side);
 
         // ── JSON-protocol round-trip: assistant tool call rendered as the
         //    model's own {tool_name,tool_args} object, result as a user turn.
@@ -1255,7 +1259,7 @@ json build_messages(const std::vector<Message>& msgs, bool json_protocol) {
             msg["content"] = scrub_utf8(wire_text);
             if (has_images) {
                 json imgs = json::array();
-                for (const auto* imgp : wire::wire_message_images(m))
+                for (const auto* imgp : wire::wire_message_images(m, max_side))
                     imgs.push_back(agentty::util::base64_encode(imgp->bytes));
                 if (!imgs.empty()) msg["images"] = std::move(imgs);
             }
@@ -1299,7 +1303,7 @@ json build_messages(const std::vector<Message>& msgs, bool json_protocol) {
                 // selector as the other dialects; the base64 array shape is
                 // ollama-specific.
                 json tool_imgs = json::array();
-                for (const auto* imgp : wire::wire_tool_result_images(tc))
+                for (const auto* imgp : wire::wire_tool_result_images(tc, max_side))
                     tool_imgs.push_back(agentty::util::base64_encode(imgp->bytes));
                 if (!tool_imgs.empty()) tool_msg["images"] = std::move(tool_imgs);
                 arr.push_back(std::move(tool_msg));
