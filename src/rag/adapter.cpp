@@ -37,6 +37,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
