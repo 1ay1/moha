@@ -122,12 +122,16 @@ TEST_CASE("activity tape: READ scans the real context, head advances") {
     maya::ActivityIndicator::Config cfg;
     cfg.context = prompt;
 
-    // Freeze at a time whose read head (t / 140ms-per-byte, mod len=59)
-    // sits just past "extremely" (bytes 37–45): head = 46, so the trailing
-    // window [head-cols+1, head] contains the whole word.
-    // t = (46 + 59k)*140, k=100 → 832440.
+    // Freeze at a time whose read head sits just past "extremely"
+    // (bytes 37-45): head = 46, so the trailing window
+    // [head-cols+1, head] contains the whole word.
+    //
+    // The head PING-PONGS rather than wrapping modulo the length: it walks
+    // 0 -> len-1 -> 0 over a (2*len - 2) cycle, so the scan never
+    // teleports from the last byte back to the first. With len = 59 the
+    // cycle is 116 steps of 140 ms; head = 46 at t = 46*140 = 6440.
     {
-        FrozenClock fc{832440};
+        FrozenClock fc{6440};
         const std::string row = render_row(cfg);
         // The gutter shows a REAL window of the prompt around the head.
         CHECK(row.find("extremely") != std::string::npos);
@@ -137,11 +141,25 @@ TEST_CASE("activity tape: READ scans the real context, head advances") {
 
     // Advance the clock by exactly 10 read steps: the head must move 10
     // bytes forward (input-side liveness — this is what makes READ a scan,
-    // not a still).
+    // not a still). 46 + 10 = 56, still on the outbound leg (< 59).
     {
-        FrozenClock fc{832440 + 10 * 140};
+        FrozenClock fc{6440 + 10 * 140};
         const std::string row = render_row(cfg);
         CHECK(row.find("0x000038") != std::string::npos);   // 56 = 0x38
+    }
+
+    // The scan REVERSES at the end instead of snapping back to 0. That
+    // discontinuity — last byte, then suddenly byte 0 with a window of
+    // unrelated text — is what read as the indicator "resetting".
+    //
+    // len = 59, cycle = 116. At step 59 the ping-pong is one byte into the
+    // return leg: head = 116 - 59 = 57 (0x39). The old modulo scan would
+    // have given head = 0 here.
+    {
+        FrozenClock fc{59 * 140};
+        const std::string row = render_row(cfg);
+        CHECK(row.find("0x000039") != std::string::npos);   // 57, walking back
+        CHECK(row.find("0x000000") == std::string::npos);   // NOT a reset to 0
     }
 }
 
